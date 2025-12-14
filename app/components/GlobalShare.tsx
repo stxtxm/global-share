@@ -585,9 +585,10 @@ export default function GlobalShare() {
       return;
     }
 
-    // Vérifier que le peer est toujours présent
-    if (!peers[senderId]) {
-      cancelTransfer('L\'expéditeur s\'est déconnecté');
+    // Vérifier que la connexion est toujours présente (ne pas dépendre du state React `peers` ici)
+    // Le state peut être obsolète dans les callbacks d'événements, ce qui annule le transfert à tort.
+    if (!peersRef.current[senderId]) {
+      console.warn('Received chunk from unknown peer (possibly stale UI state):', senderId);
       return;
     }
 
