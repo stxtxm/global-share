@@ -73,6 +73,7 @@ export default function GlobalShare() {
   const [transfer, setTransfer] = useState<TransferInfo | null>(null);
   const [showActionSheet, setShowActionSheet] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -85,6 +86,7 @@ export default function GlobalShare() {
   const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const connectDeadlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const connectErrorShownRef = useRef(false);
 
   // Fonction pour annuler un transfert en cours
   const cancelTransfer = useCallback((reason: string) => {
@@ -133,6 +135,168 @@ export default function GlobalShare() {
       socketRef.current.emit('join-room', { roomId, name: myName });
     }
   }, [cancelTransfer, myName, roomId]);
+
+  const joinRoom = useCallback((roomOverride?: string) => {
+    const effectiveRoomId = (roomOverride ?? roomId).trim();
+    if (!effectiveRoomId || !myName) return;
+
+    // Si une ancienne connexion existe, la nettoyer avant de se reconnecter
+    if (socketRef.current) {
+      try {
+        socketRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      socketRef.current = null;
+    }
+    Object.keys(peersRef.current).forEach((id) => {
+      try {
+        peersRef.current[id]?.destroy();
+      } catch {
+        // ignore
+      }
+      delete peersRef.current[id];
+    });
+    setPeers({});
+
+    setStep('room');
+    setConnectionStatus('connecting');
+    setConnectErrorMessage(null);
+    connectErrorShownRef.current = false;
+
+    const socket = io(getSocketUrl(), {
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: Infinity,
+      timeout: 10000
+    });
+    socketRef.current = socket;
+
+    const failConnect = (message: string) => {
+      console.error(message);
+      if (connectDeadlineTimeoutRef.current) {
+        clearTimeout(connectDeadlineTimeoutRef.current);
+        connectDeadlineTimeoutRef.current = null;
+      }
+      try {
+        socket.disconnect();
+      } catch {
+        // ignore
+      }
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
+      setConnectionStatus('disconnected');
+
+      // Afficher une modale persistante, une seule fois
+      if (!connectErrorShownRef.current) {
+        connectErrorShownRef.current = true;
+        setConnectErrorMessage(message);
+      }
+    };
+
+    // Laisser Render le temps de démarrer: garder le loader et réessayer jusqu'à 1min30.
+    // Au bout de 1min30 sans connexion, on abandonne.
+    const connectStartedAt = Date.now();
+    if (connectDeadlineTimeoutRef.current) {
+      clearTimeout(connectDeadlineTimeoutRef.current);
+    }
+    connectDeadlineTimeoutRef.current = setTimeout(() => {
+      failConnect('Impossible de se connecter au serveur après 1min30.');
+    }, 90 * 1000);
+
+    socket.on('connect', () => {
+      console.log('Connected to server');
+      if (connectDeadlineTimeoutRef.current) {
+        clearTimeout(connectDeadlineTimeoutRef.current);
+        connectDeadlineTimeoutRef.current = null;
+      }
+      setConnectionStatus('connected');
+      socket.emit('join-room', { roomId: effectiveRoomId, name: myName });
+      setStep('room');
+    });
+
+    socket.io.on('reconnect_attempt', () => {
+      setConnectionStatus('connecting');
+    });
+
+    socket.io.on('reconnect_error', () => {
+      setConnectionStatus('connecting');
+    });
+
+    socket.on('connect_error', () => {
+      const elapsed = Date.now() - connectStartedAt;
+
+      // Pendant la fenêtre de retry (jusqu'au timeout global), on laisse Socket.IO retenter.
+      if (elapsed < 90 * 1000) {
+        return;
+      }
+    });
+
+    socket.on('reconnect', () => {
+      console.log('Reconnected! Rejoining room...');
+      if (!transfer || transfer.type !== 'send') {
+        resyncRoom('socket_reconnect');
+      }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Disconnected:', reason);
+      setConnectionStatus('disconnected');
+      
+      // Annuler les transferts en cours en cas de déconnexion
+      setTransfer(prev => {
+        if (prev) {
+          cancelTransfer('Connexion perdue avec le serveur');
+        }
+        return prev;
+      });
+      
+      if (reason === 'io server disconnect') {
+        socket.connect();
+      }
+    });
+
+    socket.on('room-users', (users: Array<{ id: string; name: string }>) => {
+      users.forEach(u => addPeer(u.id, u.name, true));
+    });
+
+    socket.on('user-joined', ({ id, name }: { id: string; name: string }) => {
+      addPeer(id, name, false);
+    });
+
+    socket.on('user-left', (id: string) => {
+      // Si un transfert est en cours avec ce peer, l'annuler
+      setTransfer(prev => {
+        if (prev && prev.peerId === id) {
+          const peerName = peers[id]?.name || 'L\'appareil';
+          cancelTransfer(`${peerName} s'est déconnecté pendant le transfert`);
+        }
+        return prev;
+      });
+      removePeer(id);
+    });
+
+    socket.on('offer', (data: { caller: string; sdp: unknown }) => {
+      const p = peersRef.current[data.caller];
+      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
+    });
+
+    socket.on('answer', (data: { caller: string; sdp: unknown }) => {
+      const p = peersRef.current[data.caller];
+      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
+    });
+
+    socket.on('ice-candidate', (data: { caller: string; candidate: unknown }) => {
+      const p = peersRef.current[data.caller];
+      if (p) p.signal(data.candidate as { type?: string; candidate?: unknown });
+    });
+
+    socket.on('relay-data', ({ from, data, meta }: { from: string; data: unknown; meta: { type: string; name?: string; size?: number; mime?: string } | null }) => {
+      handleReceivedData(from, data, meta);
+    });
+  }, [roomId, myName, transfer, resyncRoom, cancelTransfer, peers]);
 
   useEffect(() => {
     const requestWakeLock = async () => {
@@ -228,6 +392,9 @@ export default function GlobalShare() {
       const roomParam = params.get('room');
       if (roomParam) {
         setRoomId(roomParam);
+        setStep('room');
+        // Auto-rejoin après refresh
+        joinRoom(roomParam);
       }
     }
 
@@ -295,172 +462,7 @@ export default function GlobalShare() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
     };
-  }, [step, cancelTransfer, resyncRoom, transfer]);
-
-  const joinRoom = () => {
-    if (!roomId || !myName) return;
-
-    // Si une ancienne connexion existe, la nettoyer avant de se reconnecter
-    if (socketRef.current) {
-      try {
-        socketRef.current.disconnect();
-      } catch {
-        // ignore
-      }
-      socketRef.current = null;
-    }
-    Object.keys(peersRef.current).forEach((id) => {
-      try {
-        peersRef.current[id]?.destroy();
-      } catch {
-        // ignore
-      }
-      delete peersRef.current[id];
-    });
-    setPeers({});
-    
-    setStep('room');
-    setConnectionStatus('connecting');
-
-    const socket = io(getSocketUrl(), {
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
-      timeout: 10000
-    });
-    socketRef.current = socket;
-
-    const failConnect = (message: string) => {
-      console.error(message);
-      if (connectDeadlineTimeoutRef.current) {
-        clearTimeout(connectDeadlineTimeoutRef.current);
-        connectDeadlineTimeoutRef.current = null;
-      }
-      try {
-        socket.disconnect();
-      } catch {
-        // ignore
-      }
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-      }
-      setConnectionStatus('disconnected');
-      setStep('welcome');
-      alert(message);
-    };
-
-    // Laisser Render le temps de démarrer: garder le loader et réessayer jusqu'à 2 minutes.
-    // Au bout de 2 minutes sans connexion, on abandonne.
-    const connectStartedAt = Date.now();
-    if (connectDeadlineTimeoutRef.current) {
-      clearTimeout(connectDeadlineTimeoutRef.current);
-    }
-    connectDeadlineTimeoutRef.current = setTimeout(() => {
-      failConnect('Impossible de se connecter au serveur après 2 minutes. Réessayez.');
-    }, 2 * 60 * 1000);
-
-    socket.on('connect', () => {
-      console.log('Connected to server');
-      if (connectDeadlineTimeoutRef.current) {
-        clearTimeout(connectDeadlineTimeoutRef.current);
-        connectDeadlineTimeoutRef.current = null;
-      }
-      setConnectionStatus('connected');
-      socket.emit('join-room', { roomId, name: myName });
-      setStep('room');
-    });
-
-    socket.io.on('reconnect_attempt', () => {
-      setConnectionStatus('connecting');
-    });
-
-    socket.io.on('reconnect_error', () => {
-      setConnectionStatus('connecting');
-    });
-
-    socket.on('connect_error', () => {
-      const elapsed = Date.now() - connectStartedAt;
-
-      // Pendant au moins 2 minutes, on continue de laisser Socket.IO retenter.
-      if (elapsed < 2 * 60 * 1000) {
-        return;
-      }
-
-      // Après 2 minutes, on continue quand même à retenter (jusqu'au timeout global),
-      // mais on force une relance explicite au cas où.
-      try {
-        if (!socket.connected) {
-          socket.connect();
-        }
-      } catch {
-        // ignore
-      }
-    });
-
-    socket.on('reconnect', () => {
-      console.log('Reconnected! Rejoining room...');
-      if (!transfer || transfer.type !== 'send') {
-        resyncRoom('socket_reconnect');
-      }
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('Disconnected:', reason);
-      setConnectionStatus('disconnected');
-      
-      // Annuler les transferts en cours en cas de déconnexion
-      setTransfer(prev => {
-        if (prev) {
-          cancelTransfer('Connexion perdue avec le serveur');
-        }
-        return prev;
-      });
-      
-      if (reason === 'io server disconnect') {
-        socket.connect();
-      }
-    });
-
-    socket.on('room-users', (users: Array<{ id: string; name: string }>) => {
-      users.forEach(u => addPeer(u.id, u.name, true));
-    });
-
-    socket.on('user-joined', ({ id, name }: { id: string; name: string }) => {
-      addPeer(id, name, false);
-    });
-
-    socket.on('user-left', (id: string) => {
-      // Si un transfert est en cours avec ce peer, l'annuler
-      setTransfer(prev => {
-        if (prev && prev.peerId === id) {
-          const peerName = peers[id]?.name || 'L\'appareil';
-          cancelTransfer(`${peerName} s'est déconnecté pendant le transfert`);
-        }
-        return prev;
-      });
-      removePeer(id);
-    });
-
-    socket.on('offer', (data: { caller: string; sdp: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
-    });
-
-    socket.on('answer', (data: { caller: string; sdp: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
-    });
-
-    socket.on('ice-candidate', (data: { caller: string; candidate: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.candidate as { type?: string; candidate?: unknown });
-    });
-
-    socket.on('relay-data', ({ from, data, meta }: { from: string; data: unknown; meta: { type: string; name?: string; size?: number; mime?: string } | null }) => {
-      handleReceivedData(from, data, meta);
-    });
-  };
+  }, [step, cancelTransfer, resyncRoom, transfer, joinRoom]);
 
   const addPeer = (id: string, name: string, initiator: boolean) => {
     if (peersRef.current[id]) return;
@@ -913,7 +915,7 @@ export default function GlobalShare() {
             />
           </div>
 
-          <button className="btn-primary" onClick={joinRoom}>Rejoindre</button>
+          <button className="btn-primary" onClick={() => joinRoom()}>Rejoindre</button>
           <button
             style={{ background: 'transparent', border: 'none', color: 'var(--secondary)', marginTop: '20px', cursor: 'pointer' }}
             onClick={() => setRoomId(generateRoomId())}
@@ -947,6 +949,26 @@ export default function GlobalShare() {
           <ion-icon name="copy-outline"></ion-icon>
         </div>
       </header>
+
+      {connectErrorMessage && (
+        <div className="gs-modal-overlay">
+          <div className="gs-modal">
+            <div className="gs-modal-title">Connexion impossible</div>
+            <div className="gs-modal-body">{connectErrorMessage}</div>
+            <div className="gs-modal-actions">
+              <button
+                className="gs-modal-btn"
+                onClick={() => {
+                  setConnectErrorMessage(null);
+                  exitRoom();
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {connectionStatus !== 'connected' && (
         <div className="connecting-overlay">
