@@ -84,6 +84,7 @@ export default function GlobalShare() {
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const connectDeadlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fonction pour annuler un transfert en cours
   const cancelTransfer = useCallback((reason: string) => {
@@ -298,6 +299,25 @@ export default function GlobalShare() {
 
   const joinRoom = () => {
     if (!roomId || !myName) return;
+
+    // Si une ancienne connexion existe, la nettoyer avant de se reconnecter
+    if (socketRef.current) {
+      try {
+        socketRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      socketRef.current = null;
+    }
+    Object.keys(peersRef.current).forEach((id) => {
+      try {
+        peersRef.current[id]?.destroy();
+      } catch {
+        // ignore
+      }
+      delete peersRef.current[id];
+    });
+    setPeers({});
     
     setStep('connecting');
     setConnectionStatus('connecting');
@@ -306,15 +326,68 @@ export default function GlobalShare() {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity
+      reconnectionAttempts: Infinity,
+      timeout: 10000
     });
     socketRef.current = socket;
 
+    const failConnect = (message: string) => {
+      console.error(message);
+      if (connectDeadlineTimeoutRef.current) {
+        clearTimeout(connectDeadlineTimeoutRef.current);
+        connectDeadlineTimeoutRef.current = null;
+      }
+      try {
+        socket.disconnect();
+      } catch {
+        // ignore
+      }
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
+      setConnectionStatus('disconnected');
+      setStep('welcome');
+      alert(message);
+    };
+
+    // Laisser Render le temps de démarrer: garder le loader et réessayer jusqu'à 2 minutes.
+    // Au bout de 2 minutes sans connexion, on abandonne.
+    const connectStartedAt = Date.now();
+    if (connectDeadlineTimeoutRef.current) {
+      clearTimeout(connectDeadlineTimeoutRef.current);
+    }
+    connectDeadlineTimeoutRef.current = setTimeout(() => {
+      failConnect('Impossible de se connecter au serveur après 2 minutes. Réessayez.');
+    }, 2 * 60 * 1000);
+
     socket.on('connect', () => {
       console.log('Connected to server');
+      if (connectDeadlineTimeoutRef.current) {
+        clearTimeout(connectDeadlineTimeoutRef.current);
+        connectDeadlineTimeoutRef.current = null;
+      }
       setConnectionStatus('connected');
       socket.emit('join-room', { roomId, name: myName });
       setStep('room');
+    });
+
+    socket.on('connect_error', () => {
+      const elapsed = Date.now() - connectStartedAt;
+
+      // Pendant au moins 2 minutes, on continue de laisser Socket.IO retenter.
+      if (elapsed < 2 * 60 * 1000) {
+        return;
+      }
+
+      // Après 2 minutes, on continue quand même à retenter (jusqu'au timeout global),
+      // mais on force une relance explicite au cas où.
+      try {
+        if (!socket.connected) {
+          socket.connect();
+        }
+      } catch {
+        // ignore
+      }
     });
 
     socket.on('reconnect', () => {
@@ -795,7 +868,7 @@ export default function GlobalShare() {
 
   if (step === 'connecting') {
     return (
-      <div className="container">
+      <div className="app-wrapper">
         <div className="connecting-overlay">
           <div className="spinner"></div>
           <p>Connexion au salon {roomId}...</p>
