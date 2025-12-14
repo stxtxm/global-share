@@ -8,6 +8,9 @@ import './GlobalShare.css';
 // Helpers
 const generateRoomId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
 const detectDevice = () => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return "Device";
+  }
   const ua = navigator.userAgent;
   if (/android/i.test(ua)) return "Android";
   if (/iphone|ipad/i.test(ua)) return "iOS";
@@ -47,7 +50,7 @@ export default function GlobalShare() {
   // State
   const [step, setStep] = useState<'welcome' | 'room'>('welcome');
   const [roomId, setRoomId] = useState('');
-  const [myName, setMyName] = useState(detectDevice());
+  const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [transfer, setTransfer] = useState<TransferInfo | null>(null);
   const [showActionSheet, setShowActionSheet] = useState(false);
@@ -473,7 +476,7 @@ export default function GlobalShare() {
       <div className="app-wrapper">
         <header>
           <div className="brand">
-            {/* @ts-ignore - ion-icon is a custom element */}
+            {/* @ts-expect-error - ion-icon is a custom element */}
             <ion-icon name="planet"></ion-icon> GlobalShare
           </div>
         </header>
@@ -511,11 +514,11 @@ export default function GlobalShare() {
     <div className="app-wrapper">
       <header>
         <div className="brand">
-          {/* @ts-ignore - ion-icon is a custom element */}
+          {/* @ts-expect-error - ion-icon is a custom element */}
           <ion-icon name="planet"></ion-icon> GlobalShare
         </div>
         <div className="room-badge" onClick={() => {
-          if (typeof window !== 'undefined') {
+          if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && navigator.clipboard) {
             navigator.clipboard.writeText(window.location.origin + '/?room=' + roomId);
             alert('Lien copié !');
           }
@@ -540,7 +543,7 @@ export default function GlobalShare() {
                 }
                 selectedPeerId.current = id;
 
-                const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+                const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
                 if (isMobile) {
                   setShowActionSheet(true);
                 } else {
@@ -550,7 +553,7 @@ export default function GlobalShare() {
             >
               <div className="peer-info">
                 <div className="avatar">
-                  {/* @ts-ignore - ion-icon is a custom element */}
+                  {/* @ts-expect-error - ion-icon is a custom element */}
                   <ion-icon name="person"></ion-icon>
                 </div>
                 <div className="peer-details">
@@ -563,7 +566,7 @@ export default function GlobalShare() {
                 </div>
               </div>
               <div className="action-icon">
-                {/* @ts-ignore - ion-icon is a custom element */}
+                {/* @ts-expect-error - ion-icon is a custom element */}
                 <ion-icon name={peers[id].status === 'connected' ? 'send' : 'hourglass-outline'}></ion-icon>
               </div>
             </div>
@@ -592,14 +595,14 @@ export default function GlobalShare() {
               cameraInputRef.current?.click();
               setShowActionSheet(false);
             }}>
-              {/* @ts-ignore - ion-icon is a custom element */}
+              {/* @ts-expect-error - ion-icon is a custom element */}
               <ion-icon name="camera"></ion-icon> Prendre une photo
             </button>
             <button className="action-sheet-btn" onClick={() => {
               fileInputRef.current?.click();
               setShowActionSheet(false);
             }}>
-              {/* @ts-ignore - ion-icon is a custom element */}
+              {/* @ts-expect-error - ion-icon is a custom element */}
               <ion-icon name="folder-open"></ion-icon> Choisir un fichier
             </button>
             <button className="action-sheet-btn cancel" onClick={() => setShowActionSheet(false)}>
