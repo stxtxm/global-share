@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import './GlobalShare.css';
@@ -62,6 +62,8 @@ export default function GlobalShare() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const selectedPeerId = useRef<string | null>(null);
   const incomingRef = useRef<{ buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null }>({ buffer: [], size: 0, meta: null });
+  const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
+  const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Request notification permission
   useEffect(() => {
@@ -85,6 +87,30 @@ export default function GlobalShare() {
       }
     }
   };
+
+  // Fonction pour annuler un transfert en cours
+  const cancelTransfer = useCallback((reason: string) => {
+    console.error('Transfer cancelled:', reason);
+    
+    // Nettoyer les refs de transfert
+    transferAbortRef.current = { abort: true, targetId: null };
+    incomingRef.current = { buffer: [], size: 0, meta: null };
+    
+    // Annuler le timeout
+    if (transferTimeoutRef.current) {
+      clearTimeout(transferTimeoutRef.current);
+      transferTimeoutRef.current = null;
+    }
+    
+    // Afficher l'erreur à l'utilisateur et réinitialiser l'état
+    setTransfer(prev => {
+      if (prev) {
+        const transferName = prev.name || 'le fichier';
+        showNotification('❌ Transfert annulé', `${transferName}: ${reason}`);
+      }
+      return null;
+    });
+  }, []);
 
   useEffect(() => {
     // Determine room from URL ?room=XXXX
@@ -110,7 +136,27 @@ export default function GlobalShare() {
           const peer = peersRef.current[id];
           if (peer && !peer.connected) {
             console.log('Peer disconnected, removing:', id);
-            removePeer(id);
+            // Vérifier si un transfert est en cours avec ce peer
+            setTransfer(prev => {
+              if (prev && prev.peerId === id) {
+                setPeers(currentPeers => {
+                  const peerName = currentPeers[id]?.name || 'L\'appareil';
+                  cancelTransfer(`${peerName} s'est déconnecté`);
+                  return currentPeers;
+                });
+              }
+              return prev;
+            });
+            // Nettoyer le peer
+            if (peersRef.current[id]) {
+              peersRef.current[id].destroy();
+              delete peersRef.current[id];
+            }
+            setPeers(prev => {
+              const next = { ...prev };
+              delete next[id];
+              return next;
+            });
           }
         });
       }
@@ -132,7 +178,7 @@ export default function GlobalShare() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
     };
-  }, [step]);
+  }, [step, cancelTransfer]);
 
   const joinRoom = () => {
     if (!roomId || !myName) return;
@@ -158,6 +204,15 @@ export default function GlobalShare() {
 
     socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
+      
+      // Annuler les transferts en cours en cas de déconnexion
+      setTransfer(prev => {
+        if (prev) {
+          cancelTransfer('Connexion perdue avec le serveur');
+        }
+        return prev;
+      });
+      
       if (reason === 'io server disconnect') {
         socket.connect();
       }
@@ -172,6 +227,14 @@ export default function GlobalShare() {
     });
 
     socket.on('user-left', (id: string) => {
+      // Si un transfert est en cours avec ce peer, l'annuler
+      setTransfer(prev => {
+        if (prev && prev.peerId === id) {
+          const peerName = peers[id]?.name || 'L\'appareil';
+          cancelTransfer(`${peerName} s'est déconnecté pendant le transfert`);
+        }
+        return prev;
+      });
       removePeer(id);
     });
 
@@ -239,8 +302,25 @@ export default function GlobalShare() {
         const parsed = JSON.parse(data.toString()) as { type: string; name?: string; size?: number; mime?: string };
         if (parsed.type === 'meta' && parsed.name && parsed.size) {
           console.log(`Receiving file: ${parsed.name} (${parsed.size} bytes)`);
+          
+          // Réinitialiser l'état d'abort
+          transferAbortRef.current = { abort: false, targetId: id };
+          
           incomingRef.current = { buffer: [], size: 0, meta: { name: parsed.name, size: parsed.size, mime: parsed.mime } };
-          setTransfer({ type: 'receive', name: parsed.name, progress: 0 });
+          setTransfer({ type: 'receive', name: parsed.name, progress: 0, peerId: id });
+
+          // Timeout de sécurité pour la réception P2P
+          if (transferTimeoutRef.current) {
+            clearTimeout(transferTimeoutRef.current);
+          }
+          transferTimeoutRef.current = setTimeout(() => {
+            setTransfer(prev => {
+              if (prev && prev.type === 'receive' && prev.peerId === id) {
+                cancelTransfer('Timeout : le transfert a pris trop de temps');
+              }
+              return prev;
+            });
+          }, 10 * 60 * 1000); // 10 minutes
 
           const peerName = peers[id]?.name || 'Un appareil';
           showNotification(
@@ -259,8 +339,7 @@ export default function GlobalShare() {
             );
           } else {
             console.error(`File incomplete! Expected ${incomingRef.current.meta?.size}, got ${incomingRef.current.size}`);
-            alert(`Erreur: fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
-            setTransfer(null);
+            cancelTransfer(`Fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
           }
           incomingRef.current = { buffer: [], size: 0, meta: null };
         }
@@ -269,21 +348,51 @@ export default function GlobalShare() {
       }
     });
 
-    p.on('error', () => {
-      console.error('Peer error with', id);
+    p.on('error', (err: Error) => {
+      console.error('Peer error with', id, err);
       clearTimeout(connectionTimeout);
+      
+      // Si un transfert est en cours avec ce peer, l'annuler ou basculer vers relay
+      setTransfer(prev => {
+        if (prev && prev.peerId === id && prev.type === 'send') {
+          // Basculer vers relay au lieu d'annuler
+          console.log('P2P error during send, switching to relay');
+        } else if (prev && prev.peerId === id) {
+          const peerName = peers[id]?.name || 'L\'appareil';
+          cancelTransfer(`Erreur P2P avec ${peerName}`);
+        }
+        return prev;
+      });
+      
       updatePeerStatus(id, 'connected', 'relay');
     });
 
     p.on('close', () => {
       console.log('Peer connection closed', id);
       clearTimeout(connectionTimeout);
+      
+      // Si un transfert est en cours avec ce peer, l'annuler
+      setTransfer(prev => {
+        if (prev && prev.peerId === id) {
+          const peerName = peers[id]?.name || 'L\'appareil';
+          cancelTransfer(`Connexion P2P perdue avec ${peerName}`);
+        }
+        return prev;
+      });
     });
 
     peersRef.current[id] = p;
   };
 
   const removePeer = (id: string) => {
+    // Si un transfert est en cours avec ce peer, l'annuler
+    setTransfer(prev => {
+      if (prev && prev.peerId === id) {
+        cancelTransfer('L\'appareil s\'est déconnecté');
+      }
+      return prev;
+    });
+    
     if (peersRef.current[id]) {
       peersRef.current[id].destroy();
       delete peersRef.current[id];
@@ -318,12 +427,38 @@ export default function GlobalShare() {
   };
 
   const startSending = (targetId: string, file: File) => {
-    const peerObj = peersRef.current[targetId];
+    // Vérifier que le peer est toujours connecté
     const peerInfo = peers[targetId];
+    if (!peerInfo || peerInfo.status !== 'connected') {
+      alert('L\'appareil n\'est plus connecté');
+      return;
+    }
+
+    // Vérifier que le socket est connecté
+    if (!socketRef.current?.connected) {
+      alert('Connexion au serveur perdue. Veuillez attendre la reconnexion.');
+      return;
+    }
+
+    const peerObj = peersRef.current[targetId];
     const useP2P = peerObj && peerObj.connected && peerInfo.method === 'p2p';
 
     console.log(`Sending "${file.name}" (${file.size} bytes) via ${useP2P ? 'P2P' : 'Relay'}`);
-    setTransfer({ type: 'send', name: file.name, progress: 0 });
+    
+    // Réinitialiser l'état d'abort
+    transferAbortRef.current = { abort: false, targetId };
+    
+    setTransfer({ type: 'send', name: file.name, progress: 0, peerId: targetId });
+
+    // Timeout de sécurité : annuler après 10 minutes d'inactivité
+    if (transferTimeoutRef.current) {
+      clearTimeout(transferTimeoutRef.current);
+    }
+    transferTimeoutRef.current = setTimeout(() => {
+      if (transfer && transfer.peerId === targetId) {
+        cancelTransfer('Timeout : le transfert a pris trop de temps');
+      }
+    }, 10 * 60 * 1000); // 10 minutes
 
     const meta = { type: 'meta', name: file.name, size: file.size, mime: file.type };
 
@@ -344,19 +479,55 @@ export default function GlobalShare() {
 
     reader.onload = (e) => {
       if (!e.target?.result) return;
+      
+      // Vérifier si le transfert a été annulé
+      if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== targetId) {
+        console.log('Transfer aborted, stopping file read');
+        return;
+      }
+
+      // Vérifier que le peer est toujours connecté
+      const currentPeer = peers[targetId];
+      if (!currentPeer || currentPeer.status !== 'connected') {
+        cancelTransfer('L\'appareil s\'est déconnecté pendant l\'envoi');
+        return;
+      }
+
+      // Vérifier que le socket est toujours connecté
+      if (!socketRef.current?.connected) {
+        cancelTransfer('Connexion au serveur perdue');
+        return;
+      }
+
       const chunk = new Uint8Array(e.target.result as ArrayBuffer);
       chunksSent++;
 
       const sendChunk = () => {
-        if (useP2P) {
+        // Double vérification avant l'envoi
+        if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== targetId) {
+          return;
+        }
+
+        if (useP2P && peerObj && peerObj.connected) {
           try {
             peerObj.send(chunk);
-          } catch {
-            console.error('P2P chunk send failed');
-            socketRef.current?.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+          } catch (err) {
+            console.error('P2P chunk send failed', err);
+            // Fallback vers relay si P2P échoue
+            if (socketRef.current?.connected) {
+              socketRef.current.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+            } else {
+              cancelTransfer('Connexion P2P et relay perdues');
+              return;
+            }
           }
         } else {
-          socketRef.current?.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+          if (socketRef.current?.connected) {
+            socketRef.current.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+          } else {
+            cancelTransfer('Connexion au serveur perdue');
+            return;
+          }
         }
 
         offset += chunk.byteLength;
@@ -364,18 +535,39 @@ export default function GlobalShare() {
         setTransfer(prev => prev ? { ...prev, progress } : null);
 
         if (offset < file.size) {
+          // Vérifier avant de continuer
+          if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== targetId) {
+            return;
+          }
           readSlice(offset);
         } else {
+          // Transfert terminé avec succès
           console.log(`Transfer complete: ${chunksSent} chunks, ${offset} bytes`);
-          if (useP2P) {
+          
+          // Nettoyer le timeout
+          if (transferTimeoutRef.current) {
+            clearTimeout(transferTimeoutRef.current);
+            transferTimeoutRef.current = null;
+          }
+          
+          // Envoyer EOF
+          if (useP2P && peerObj && peerObj.connected) {
             try {
               peerObj.send(JSON.stringify({ type: 'eof' }));
             } catch {
-              socketRef.current?.emit('relay-data', { target: targetId, data: null, meta: { type: 'eof' } });
+              if (socketRef.current?.connected) {
+                socketRef.current.emit('relay-data', { target: targetId, data: null, meta: { type: 'eof' } });
+              }
             }
           } else {
-            socketRef.current?.emit('relay-data', { target: targetId, data: null, meta: { type: 'eof' } });
+            if (socketRef.current?.connected) {
+              socketRef.current.emit('relay-data', { target: targetId, data: null, meta: { type: 'eof' } });
+            }
           }
+          
+          // Réinitialiser l'abort
+          transferAbortRef.current = { abort: false, targetId: null };
+          
           setTimeout(() => setTransfer(null), 1500);
         }
       };
@@ -396,8 +588,7 @@ export default function GlobalShare() {
 
     reader.onerror = () => {
       console.error('File read error');
-      alert('Erreur lors de la lecture du fichier');
-      setTransfer(null);
+      cancelTransfer('Erreur lors de la lecture du fichier');
     };
 
     const readSlice = (o: number) => {
@@ -408,8 +599,19 @@ export default function GlobalShare() {
   };
 
   const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array) => {
+    // Vérifier si le transfert a été annulé
+    if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== senderId) {
+      return;
+    }
+
     if (!incomingRef.current.meta) {
       console.warn('Received chunk without metadata');
+      return;
+    }
+
+    // Vérifier que le peer est toujours présent
+    if (!peers[senderId]) {
+      cancelTransfer('L\'expéditeur s\'est déconnecté');
       return;
     }
 
@@ -425,8 +627,22 @@ export default function GlobalShare() {
   const handleReceivedData = (senderId: string, data: unknown, meta: { type: string; name?: string; size?: number; mime?: string } | null) => {
     if (meta && meta.type === 'meta' && meta.name && meta.size) {
       console.log(`Receiving file via relay: ${meta.name} (${meta.size} bytes)`);
+      
+      // Réinitialiser l'état d'abort
+      transferAbortRef.current = { abort: false, targetId: senderId };
+      
       incomingRef.current = { buffer: [], size: 0, meta: { name: meta.name, size: meta.size, mime: meta.mime } };
-      setTransfer({ type: 'receive', name: meta.name, progress: 0 });
+      setTransfer({ type: 'receive', name: meta.name, progress: 0, peerId: senderId });
+
+      // Timeout de sécurité pour la réception
+      if (transferTimeoutRef.current) {
+        clearTimeout(transferTimeoutRef.current);
+      }
+      transferTimeoutRef.current = setTimeout(() => {
+        if (transfer && transfer.type === 'receive' && transfer.peerId === senderId) {
+          cancelTransfer('Timeout : le transfert a pris trop de temps');
+        }
+      }, 10 * 60 * 1000); // 10 minutes
 
       const peerName = peers[senderId]?.name || 'Un appareil';
       showNotification(
@@ -438,8 +654,19 @@ export default function GlobalShare() {
 
     if (meta && meta.type === 'eof') {
       console.log(`EOF received (relay). Total: ${incomingRef.current.size} bytes`);
+      
+      // Nettoyer le timeout
+      if (transferTimeoutRef.current) {
+        clearTimeout(transferTimeoutRef.current);
+        transferTimeoutRef.current = null;
+      }
+      
       if (incomingRef.current.meta && incomingRef.current.size === incomingRef.current.meta.size) {
         saveFile(new Blob(incomingRef.current.buffer as BlobPart[]), incomingRef.current.meta.name);
+        
+        // Réinitialiser l'abort
+        transferAbortRef.current = { abort: false, targetId: null };
+        
         setTimeout(() => setTransfer(null), 1500);
 
         showNotification(
@@ -448,8 +675,7 @@ export default function GlobalShare() {
         );
       } else {
         console.error(`File incomplete! Expected ${incomingRef.current.meta?.size}, got ${incomingRef.current.size}`);
-        alert(`Erreur: fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
-        setTransfer(null);
+        cancelTransfer(`Fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
       }
       incomingRef.current = { buffer: [], size: 0, meta: null };
       return;
@@ -523,7 +749,7 @@ export default function GlobalShare() {
             alert('Lien copié !');
           }
         }}>
-          Salon: {roomId} {/* @ts-ignore - ion-icon is a custom element */}
+          Salon: {roomId} {/* @ts-expect-error - ion-icon is a custom element */}
           <ion-icon name="copy-outline"></ion-icon>
         </div>
       </header>
