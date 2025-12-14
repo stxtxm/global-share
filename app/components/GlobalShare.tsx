@@ -48,12 +48,13 @@ type SimplePeerInstance = any;
 
 export default function GlobalShare() {
   // State
-  const [step, setStep] = useState<'welcome' | 'room'>('welcome');
+  const [step, setStep] = useState<'welcome' | 'room' | 'connecting'>('welcome');
   const [roomId, setRoomId] = useState('');
   const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [transfer, setTransfer] = useState<TransferInfo | null>(null);
   const [showActionSheet, setShowActionSheet] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -182,6 +183,9 @@ export default function GlobalShare() {
 
   const joinRoom = () => {
     if (!roomId || !myName) return;
+    
+    setStep('connecting');
+    setConnectionStatus('connecting');
 
     const socket = io(getSocketUrl(), {
       reconnection: true,
@@ -193,6 +197,7 @@ export default function GlobalShare() {
 
     socket.on('connect', () => {
       console.log('Connected to server');
+      setConnectionStatus('connected');
       socket.emit('join-room', { roomId, name: myName });
       setStep('room');
     });
@@ -204,6 +209,7 @@ export default function GlobalShare() {
 
     socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
+      setConnectionStatus('disconnected');
       
       // Annuler les transferts en cours en cas de déconnexion
       setTransfer(prev => {
@@ -696,6 +702,17 @@ export default function GlobalShare() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  if (step === 'connecting') {
+    return (
+      <div className="container">
+        <div className="connecting-overlay">
+          <div className="spinner"></div>
+          <p>Connexion au salon {roomId}...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (step === 'welcome') {
     return (
