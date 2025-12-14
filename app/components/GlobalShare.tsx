@@ -42,6 +42,23 @@ interface TransferInfo {
   peerId?: string;
 }
 
+interface IncomingFile {
+  buffer: Uint8Array[];
+  size: number;
+  meta: {
+    name: string;
+    size: number;
+    mime?: string;
+  } | null;
+}
+
+interface PeerData {
+  type: string;
+  name?: string;
+  size?: number;
+  mime?: string;
+}
+
 // Type for SimplePeer instance
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SimplePeerInstance = any;
@@ -62,7 +79,7 @@ export default function GlobalShare() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const selectedPeerId = useRef<string | null>(null);
-  const incomingRef = useRef<{ buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null }>({ buffer: [], size: 0, meta: null });
+  const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -553,7 +570,11 @@ export default function GlobalShare() {
     readSlice(0);
   };
 
-  const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array) => {
+  const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array | number[]) => {
+    // Convertir le chunk en Uint8Array si c'est un tableau de nombres
+    const chunkArray = chunk instanceof Uint8Array ? chunk : 
+                     chunk instanceof Buffer ? chunk : 
+                     new Uint8Array(chunk);
     // Vérifier si le transfert a été annulé
     if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== senderId) {
       return;
@@ -579,7 +600,8 @@ export default function GlobalShare() {
     setTransfer(prev => prev ? { ...prev, progress: percent } : null);
   };
 
-  const handleReceivedData = (senderId: string, data: unknown, meta: { type: string; name?: string; size?: number; mime?: string } | null) => {
+  const handleReceivedData = (senderId: string, data: unknown, meta: PeerData | null) => {
+    if (!meta) return;
     if (meta && meta.type === 'meta' && meta.name && meta.size) {
       console.log(`Receiving file via relay: ${meta.name} (${meta.size} bytes)`);
       
@@ -592,7 +614,8 @@ export default function GlobalShare() {
       // Pas de timeout pour la réception des fichiers volumineux
       console.log('Prêt à recevoir un fichier volumineux en mode relay sans limite de temps');
 
-      const peerName = peers[senderId]?.name || 'Un appareil';
+        const peerName = peers[senderId]?.name || 'Un appareil';
+    console.log(`Prêt à recevoir de ${peerName}`);
     }
 
     if (meta && meta.type === 'eof') {
