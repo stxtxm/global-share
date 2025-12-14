@@ -66,7 +66,7 @@ type SimplePeerInstance = any;
 
 export default function GlobalShare() {
   // State
-  const [step, setStep] = useState<'welcome' | 'room' | 'connecting'>('welcome');
+  const [step, setStep] = useState<'welcome' | 'room'>('welcome');
   const [roomId, setRoomId] = useState('');
   const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
@@ -319,7 +319,7 @@ export default function GlobalShare() {
     });
     setPeers({});
     
-    setStep('connecting');
+    setStep('room');
     setConnectionStatus('connecting');
 
     const socket = io(getSocketUrl(), {
@@ -369,6 +369,14 @@ export default function GlobalShare() {
       setConnectionStatus('connected');
       socket.emit('join-room', { roomId, name: myName });
       setStep('room');
+    });
+
+    socket.io.on('reconnect_attempt', () => {
+      setConnectionStatus('connecting');
+    });
+
+    socket.io.on('reconnect_error', () => {
+      setConnectionStatus('connecting');
     });
 
     socket.on('connect_error', () => {
@@ -866,17 +874,6 @@ export default function GlobalShare() {
     URL.revokeObjectURL(url);
   };
 
-  if (step === 'connecting') {
-    return (
-      <div className="app-wrapper">
-        <div className="connecting-overlay">
-          <div className="spinner"></div>
-          <p>Connexion au salon {roomId}...</p>
-        </div>
-      </div>
-    );
-  }
-
   if (step === 'welcome') {
     return (
       <div className="app-wrapper">
@@ -950,6 +947,13 @@ export default function GlobalShare() {
           <ion-icon name="copy-outline"></ion-icon>
         </div>
       </header>
+
+      {connectionStatus !== 'connected' && (
+        <div className="connecting-overlay">
+          <div className="spinner"></div>
+          <p>Connexion en cours...</p>
+        </div>
+      )}
 
       <main>
         <div className="peer-list">
