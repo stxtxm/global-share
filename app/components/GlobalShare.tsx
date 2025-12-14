@@ -601,7 +601,6 @@ export default function GlobalShare() {
   };
 
   const handleReceivedData = (senderId: string, data: unknown, meta: PeerData | null) => {
-    if (!meta) return;
     if (meta && meta.type === 'meta' && meta.name && meta.size) {
       console.log(`Receiving file via relay: ${meta.name} (${meta.size} bytes)`);
       
@@ -644,7 +643,7 @@ export default function GlobalShare() {
     }
 
     if (data) {
-      handleReceivedChunk(senderId, data as Buffer | Uint8Array);
+      handleReceivedChunk(senderId, data as Buffer | Uint8Array | number[]);
     }
   };
 
