@@ -83,6 +83,7 @@ export default function GlobalShare() {
   const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   // Fonction pour annuler un transfert en cours
   const cancelTransfer = useCallback((reason: string) => {
@@ -103,6 +104,79 @@ export default function GlobalShare() {
       setTransfer(null);
     }, 1000);
   }, []);
+
+  const resyncRoom = useCallback((reason: string) => {
+    console.log('Resync room:', reason);
+
+    // Annuler un éventuel transfert (évite des états bloqués après verrouillage)
+    setTransfer(prev => {
+      if (prev) {
+        cancelTransfer('Reconnexion en cours');
+      }
+      return prev;
+    });
+
+    // Détruire toutes les connexions P2P (souvent cassées après background)
+    Object.keys(peersRef.current).forEach((id) => {
+      try {
+        peersRef.current[id]?.destroy();
+      } catch {
+        // ignore
+      }
+      delete peersRef.current[id];
+    });
+    setPeers({});
+
+    // Redemander l'état du salon au serveur
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('join-room', { roomId, name: myName });
+    }
+  }, [cancelTransfer, myName, roomId]);
+
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      if (typeof navigator === 'undefined') return;
+      const wakeLock = (navigator as any).wakeLock;
+      if (!wakeLock?.request) return;
+      if (document.visibilityState !== 'visible') return;
+
+      try {
+        wakeLockRef.current = await wakeLock.request('screen');
+      } catch {
+        wakeLockRef.current = null;
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      try {
+        await wakeLockRef.current?.release();
+      } catch {
+        // ignore
+      } finally {
+        wakeLockRef.current = null;
+      }
+    };
+
+    if (transfer?.type === 'send') {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibility = () => {
+      if (transfer?.type !== 'send') return;
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (transfer?.type !== 'send') return;
+      releaseWakeLock();
+    };
+  }, [transfer?.type]);
 
   const exitRoom = useCallback(() => {
     // Annuler un éventuel transfert
@@ -164,6 +238,10 @@ export default function GlobalShare() {
         if (!socketRef.current.connected) {
           console.log('Socket disconnected, reconnecting...');
           socketRef.current.connect();
+        } else {
+          if (!transfer || transfer.type !== 'send') {
+            resyncRoom('visibilitychange');
+          }
         }
 
         Object.keys(peersRef.current).forEach(id => {
@@ -203,6 +281,10 @@ export default function GlobalShare() {
       console.log('Network back online');
       if (socketRef.current && !socketRef.current.connected && step === 'room') {
         socketRef.current.connect();
+      } else if (socketRef.current?.connected && step === 'room') {
+        if (!transfer || transfer.type !== 'send') {
+          resyncRoom('online');
+        }
       }
     };
 
@@ -212,7 +294,7 @@ export default function GlobalShare() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
     };
-  }, [step, cancelTransfer]);
+  }, [step, cancelTransfer, resyncRoom, transfer]);
 
   const joinRoom = () => {
     if (!roomId || !myName) return;
@@ -237,7 +319,9 @@ export default function GlobalShare() {
 
     socket.on('reconnect', () => {
       console.log('Reconnected! Rejoining room...');
-      socket.emit('join-room', { roomId, name: myName });
+      if (!transfer || transfer.type !== 'send') {
+        resyncRoom('socket_reconnect');
+      }
     });
 
     socket.on('disconnect', (reason) => {
@@ -607,6 +691,13 @@ export default function GlobalShare() {
     };
 
     const readSlice = (o: number) => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        setTimeout(() => {
+          if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== targetId) return;
+          readSlice(o);
+        }, 500);
+        return;
+      }
       const slice = file.slice(o, o + CHUNK_SIZE);
       reader.readAsArrayBuffer(slice);
     };
@@ -767,7 +858,12 @@ export default function GlobalShare() {
   return (
     <div className="app-wrapper">
       <header>
-        <div className="brand" onClick={exitRoom} role="button" tabIndex={0}>
+        <div
+          className="brand"
+          onClick={exitRoom}
+          role="button"
+          tabIndex={0}
+        >
           {/* @ts-expect-error - ion-icon is a custom element */}
           <ion-icon name="planet"></ion-icon> GlobalShare
         </div>

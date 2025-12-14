@@ -74,6 +74,19 @@ header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  cursor: pointer;
+  text-decoration: none;
+  user-select: none;
+}
+
+.brand:hover {
+  filter: brightness(1.1);
+}
+
+.brand:focus-visible {
+  outline: 2px solid var(--secondary);
+  outline-offset: 4px;
+  border-radius: 8px;
 }
 
 .room-badge {
