@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import './GlobalShare.css';
@@ -102,6 +103,48 @@ export default function GlobalShare() {
       setTransfer(null);
     }, 1000);
   }, []);
+
+  const exitRoom = useCallback(() => {
+    // Annuler un éventuel transfert
+    if (transfer) {
+      cancelTransfer('Sortie du salon');
+    }
+
+    // Détruire tous les peers
+    Object.keys(peersRef.current).forEach((id) => {
+      try {
+        peersRef.current[id]?.destroy();
+      } catch {
+        // ignore
+      }
+      delete peersRef.current[id];
+    });
+    setPeers({});
+
+    // Déconnecter le socket
+    if (socketRef.current) {
+      try {
+        socketRef.current.disconnect();
+      } catch {
+        // ignore
+      }
+      socketRef.current = null;
+    }
+
+    // Nettoyer URL (?room=...)
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.pathname);
+    }
+
+    // Reset UI
+    setTransfer(null);
+    setShowActionSheet(false);
+    setConnectionStatus('disconnected');
+    setRoomId('');
+    setStep('welcome');
+  }, [cancelTransfer, transfer]);
 
   useEffect(() => {
     // Determine room from URL ?room=XXXX
@@ -674,10 +717,10 @@ export default function GlobalShare() {
     return (
       <div className="app-wrapper">
         <header>
-          <div className="brand">
+          <Link href="/" className="brand">
             {/* @ts-expect-error - ion-icon is a custom element */}
             <ion-icon name="planet"></ion-icon> GlobalShare
-          </div>
+          </Link>
         </header>
         <main className="welcome-screen">
           <h1>Rejoindre un Salon</h1>
@@ -685,7 +728,10 @@ export default function GlobalShare() {
 
           <div className="input-group">
             <label>Votre Nom</label>
-            <input value={myName} onChange={e => setMyName(e.target.value)} />
+            <input
+              value={myName}
+              onChange={e => setMyName(e.target.value)}
+            />
           </div>
 
           <div className="input-group">
@@ -694,6 +740,15 @@ export default function GlobalShare() {
               value={roomId}
               onChange={e => setRoomId(e.target.value.toUpperCase())}
               placeholder="Ex: A1B2C3"
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return;
+                if (!roomId.trim()) {
+                  e.preventDefault();
+                  alert('Veuillez entrer un code de salon.');
+                  return;
+                }
+                joinRoom();
+              }}
             />
           </div>
 
@@ -712,7 +767,7 @@ export default function GlobalShare() {
   return (
     <div className="app-wrapper">
       <header>
-        <div className="brand">
+        <div className="brand" onClick={exitRoom} role="button" tabIndex={0}>
           {/* @ts-expect-error - ion-icon is a custom element */}
           <ion-icon name="planet"></ion-icon> GlobalShare
         </div>
