@@ -80,13 +80,10 @@ export default function GlobalShare() {
       transferTimeoutRef.current = null;
     }
     
-    // Afficher l'erreur à l'utilisateur et réinitialiser l'état
-    setTransfer(prev => {
-      if (prev) {
-        // Notification de transfert annulé supprimée
-      }
-      return null;
-    });
+    // Réinitialiser l'état après un court délai
+    setTimeout(() => {
+      setTransfer(null);
+    }, 1000);
   }, []);
 
   useEffect(() => {
@@ -291,18 +288,8 @@ export default function GlobalShare() {
           incomingRef.current = { buffer: [], size: 0, meta: { name: parsed.name, size: parsed.size, mime: parsed.mime } };
           setTransfer({ type: 'receive', name: parsed.name, progress: 0, peerId: id });
 
-          // Timeout de sécurité pour la réception P2P
-          if (transferTimeoutRef.current) {
-            clearTimeout(transferTimeoutRef.current);
-          }
-          transferTimeoutRef.current = setTimeout(() => {
-            setTransfer(prev => {
-              if (prev && prev.type === 'receive' && prev.peerId === id) {
-                cancelTransfer('Timeout : le transfert a pris trop de temps');
-              }
-              return prev;
-            });
-          }, 10 * 60 * 1000); // 10 minutes
+          // Pas de timeout pour la réception des fichiers volumineux
+          console.log('Prêt à recevoir un fichier volumineux sans limite de temps');
 
           const peerName = peers[id]?.name || 'Un appareil';
         } else if (parsed.type === 'eof') {
@@ -326,18 +313,17 @@ export default function GlobalShare() {
       console.error('Peer error with', id, err);
       clearTimeout(connectionTimeout);
       
-      // Si un transfert est en cours avec ce peer, l'annuler ou basculer vers relay
+      // Si un transfert est en cours, basculer vers relay
       setTransfer(prev => {
-        if (prev && prev.peerId === id && prev.type === 'send') {
-          // Basculer vers relay au lieu d'annuler
-          console.log('P2P error during send, switching to relay');
-        } else if (prev && prev.peerId === id) {
-          const peerName = peers[id]?.name || 'L\'appareil';
-          cancelTransfer(`Erreur P2P avec ${peerName}`);
+        if (prev && prev.peerId === id && socketRef.current?.connected) {
+          console.log('P2P error, falling back to relay');
+          // Réinitialiser le transfert pour permettre une nouvelle tentative
+          return { ...prev, progress: 0 };
         }
         return prev;
       });
       
+      // Basculer en mode relay
       updatePeerStatus(id, 'connected', 'relay');
     });
 
@@ -404,35 +390,30 @@ export default function GlobalShare() {
     // Vérifier que le peer est toujours connecté
     const peerInfo = peers[targetId];
     if (!peerInfo || peerInfo.status !== 'connected') {
-      alert('L\'appareil n\'est plus connecté');
+      cancelTransfer('L\'appareil n\'est plus connecté');
       return;
     }
 
     // Vérifier que le socket est connecté
     if (!socketRef.current?.connected) {
-      alert('Connexion au serveur perdue. Veuillez attendre la reconnexion.');
+      cancelTransfer('Connexion au serveur perdue');
       return;
     }
+    
+    // Réinitialiser l'état d'abort
+    transferAbortRef.current = { abort: false, targetId };
 
     const peerObj = peersRef.current[targetId];
     const useP2P = peerObj && peerObj.connected && peerInfo.method === 'p2p';
 
     console.log(`Sending "${file.name}" (${file.size} bytes) via ${useP2P ? 'P2P' : 'Relay'}`);
     
-    // Réinitialiser l'état d'abort
+    // Pas de timeout pour permettre les transferts de longue durée
     transferAbortRef.current = { abort: false, targetId };
     
     setTransfer({ type: 'send', name: file.name, progress: 0, peerId: targetId });
-
-    // Timeout de sécurité : annuler après 10 minutes d'inactivité
-    if (transferTimeoutRef.current) {
-      clearTimeout(transferTimeoutRef.current);
-    }
-    transferTimeoutRef.current = setTimeout(() => {
-      if (transfer && transfer.peerId === targetId) {
-        cancelTransfer('Timeout : le transfert a pris trop de temps');
-      }
-    }, 10 * 60 * 1000); // 10 minutes
+    
+    console.log('Début du transfert sans timeout pour les fichiers volumineux');
 
     const meta = { type: 'meta', name: file.name, size: file.size, mime: file.type };
 
@@ -608,15 +589,8 @@ export default function GlobalShare() {
       incomingRef.current = { buffer: [], size: 0, meta: { name: meta.name, size: meta.size, mime: meta.mime } };
       setTransfer({ type: 'receive', name: meta.name, progress: 0, peerId: senderId });
 
-      // Timeout de sécurité pour la réception
-      if (transferTimeoutRef.current) {
-        clearTimeout(transferTimeoutRef.current);
-      }
-      transferTimeoutRef.current = setTimeout(() => {
-        if (transfer && transfer.type === 'receive' && transfer.peerId === senderId) {
-          cancelTransfer('Timeout : le transfert a pris trop de temps');
-        }
-      }, 10 * 60 * 1000); // 10 minutes
+      // Pas de timeout pour la réception des fichiers volumineux
+      console.log('Prêt à recevoir un fichier volumineux en mode relay sans limite de temps');
 
       const peerName = peers[senderId]?.name || 'Un appareil';
     }
