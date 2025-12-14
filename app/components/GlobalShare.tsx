@@ -83,7 +83,6 @@ export default function GlobalShare() {
   const selectedPeerId = useRef<string | null>(null);
   const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
-  const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const connectDeadlineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const connectErrorShownRef = useRef(false);
@@ -95,12 +94,6 @@ export default function GlobalShare() {
     // Nettoyer les refs de transfert
     transferAbortRef.current = { abort: true, targetId: null };
     incomingRef.current = { buffer: [], size: 0, meta: null };
-    
-    // Annuler le timeout
-    if (transferTimeoutRef.current) {
-      clearTimeout(transferTimeoutRef.current);
-      transferTimeoutRef.current = null;
-    }
     
     // Réinitialiser l'état après un court délai
     setTimeout(() => {
@@ -136,7 +129,7 @@ export default function GlobalShare() {
     }
   }, [cancelTransfer, myName, roomId]);
 
-  const joinRoom = useCallback((roomOverride?: string) => {
+  const joinRoom = (roomOverride?: string) => {
     const effectiveRoomId = (roomOverride ?? roomId).trim();
     if (!effectiveRoomId || !myName) return;
 
@@ -198,7 +191,6 @@ export default function GlobalShare() {
 
     // Laisser Render le temps de démarrer: garder le loader et réessayer jusqu'à 1min30.
     // Au bout de 1min30 sans connexion, on abandonne.
-    const connectStartedAt = Date.now();
     if (connectDeadlineTimeoutRef.current) {
       clearTimeout(connectDeadlineTimeoutRef.current);
     }
@@ -223,15 +215,6 @@ export default function GlobalShare() {
 
     socket.io.on('reconnect_error', () => {
       setConnectionStatus('connecting');
-    });
-
-    socket.on('connect_error', () => {
-      const elapsed = Date.now() - connectStartedAt;
-
-      // Pendant la fenêtre de retry (jusqu'au timeout global), on laisse Socket.IO retenter.
-      if (elapsed < 90 * 1000) {
-        return;
-      }
     });
 
     socket.on('reconnect', () => {
@@ -296,12 +279,12 @@ export default function GlobalShare() {
     socket.on('relay-data', ({ from, data, meta }: { from: string; data: unknown; meta: { type: string; name?: string; size?: number; mime?: string } | null }) => {
       handleReceivedData(from, data, meta);
     });
-  }, [roomId, myName, transfer, resyncRoom, cancelTransfer, peers]);
+  };
 
   useEffect(() => {
     const requestWakeLock = async () => {
       if (typeof navigator === 'undefined') return;
-      const wakeLock = (navigator as any).wakeLock;
+      const wakeLock = (navigator as unknown as { wakeLock?: { request?: (type: 'screen') => Promise<WakeLockSentinel> } }).wakeLock;
       if (!wakeLock?.request) return;
       if (document.visibilityState !== 'visible') return;
 
@@ -392,9 +375,6 @@ export default function GlobalShare() {
       const roomParam = params.get('room');
       if (roomParam) {
         setRoomId(roomParam);
-        setStep('room');
-        // Auto-rejoin après refresh
-        joinRoom(roomParam);
       }
     }
 
@@ -462,7 +442,7 @@ export default function GlobalShare() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
     };
-  }, [step, cancelTransfer, resyncRoom, transfer, joinRoom]);
+  }, [step, cancelTransfer, resyncRoom, transfer]);
 
   const addPeer = (id: string, name: string, initiator: boolean) => {
     if (peersRef.current[id]) return;
@@ -517,8 +497,6 @@ export default function GlobalShare() {
 
           // Pas de timeout pour la réception des fichiers volumineux
           console.log('Prêt à recevoir un fichier volumineux sans limite de temps');
-
-          const peerName = peers[id]?.name || 'Un appareil';
         } else if (parsed.type === 'eof') {
           console.log(`EOF received. Total: ${incomingRef.current.size} bytes`);
           if (incomingRef.current.meta && incomingRef.current.size === incomingRef.current.meta.size) {
@@ -726,12 +704,6 @@ export default function GlobalShare() {
           // Transfert terminé avec succès
           console.log(`Transfer complete: ${chunksSent} chunks, ${offset} bytes`);
           
-          // Nettoyer le timeout
-          if (transferTimeoutRef.current) {
-            clearTimeout(transferTimeoutRef.current);
-            transferTimeoutRef.current = null;
-          }
-          
           // Envoyer EOF
           if (useP2P && peerObj && peerObj.connected) {
             try {
@@ -788,10 +760,6 @@ export default function GlobalShare() {
   };
 
   const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array | number[]) => {
-    // Convertir le chunk en Uint8Array si c'est un tableau de nombres
-    const chunkArray = chunk instanceof Uint8Array ? chunk : 
-                     chunk instanceof Buffer ? chunk : 
-                     new Uint8Array(chunk);
     // Vérifier si le transfert a été annulé
     if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== senderId) {
       return;
@@ -831,31 +799,23 @@ export default function GlobalShare() {
       // Pas de timeout pour la réception des fichiers volumineux
       console.log('Prêt à recevoir un fichier volumineux en mode relay sans limite de temps');
 
-        const peerName = peers[senderId]?.name || 'Un appareil';
-    console.log(`Prêt à recevoir de ${peerName}`);
+      const peerName = peers[senderId]?.name || 'Un appareil';
+      console.log(`Prêt à recevoir de ${peerName}`);
+      return;
     }
 
     if (meta && meta.type === 'eof') {
       console.log(`EOF received (relay). Total: ${incomingRef.current.size} bytes`);
       
-      // Nettoyer le timeout
-      if (transferTimeoutRef.current) {
-        clearTimeout(transferTimeoutRef.current);
-        transferTimeoutRef.current = null;
-      }
-      
       if (incomingRef.current.meta && incomingRef.current.size === incomingRef.current.meta.size) {
         saveFile(new Blob(incomingRef.current.buffer as BlobPart[]), incomingRef.current.meta.name);
-        
-        // Réinitialiser l'abort
-        transferAbortRef.current = { abort: false, targetId: null };
-        
         setTimeout(() => setTransfer(null), 1500);
-
+        transferAbortRef.current = { abort: false, targetId: null };
       } else {
         console.error(`File incomplete! Expected ${incomingRef.current.meta?.size}, got ${incomingRef.current.size}`);
         cancelTransfer(`Fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
       }
+
       incomingRef.current = { buffer: [], size: 0, meta: null };
       return;
     }
