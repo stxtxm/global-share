@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: globalshare-socket
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ALLOWED_ORIGINS
+        value: https://stxtxm.github.io
+    rootDir: socket-server
+
