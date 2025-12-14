@@ -1,8 +1,8 @@
 # GlobalShare - Next.js
 
-Application Next.js pour le partage de fichiers P2P.
+Application Next.js pour le partage de fichiers P2P, déployée sur GitHub Pages.
 
-## 🚀 Déploiement sur Vercel
+## 🚀 Déploiement sur GitHub Pages
 
 ### 1. Préparer le serveur Socket.io
 
@@ -12,47 +12,31 @@ D'abord, déployez le serveur Socket.io sur Railway ou Render (gratuit) :
 - Suivez les instructions dans `socket-server/README.md`
 - Notez l'URL de votre serveur Socket.io (ex: `https://votre-app.railway.app`)
 
-### 2. Déployer sur Vercel
+### 2. Activer GitHub Pages
 
-1. **Installez Vercel CLI** (si pas déjà fait) :
-   ```bash
-   npm i -g vercel
-   ```
+1. **Activez GitHub Pages** :
+   - Allez sur https://github.com/stxtxm/global-share/settings/pages
+   - Sous "Source", sélectionnez **"GitHub Actions"**
+   - Sauvegardez
 
-2. **Connectez-vous à Vercel** :
-   ```bash
-   vercel login
-   ```
+2. **Configurez la variable d'environnement** (optionnel) :
+   - Allez sur https://github.com/stxtxm/global-share/settings/secrets/actions
+   - Cliquez sur "New repository secret"
+   - Nom : `NEXT_PUBLIC_SOCKET_URL`
+   - Valeur : L'URL de votre serveur Socket.io
+   - Cliquez sur "Add secret"
 
-3. **Déployez l'application** :
-   ```bash
-   cd nextjs-app
-   vercel
-   ```
+3. **Déclenchez le déploiement** :
+   - Faites un push sur la branche `main` OU
+   - Allez dans l'onglet "Actions" et exécutez le workflow manuellement
 
-4. **Ajoutez la variable d'environnement** :
-   - Allez sur [Vercel Dashboard](https://vercel.com/dashboard)
-   - Sélectionnez votre projet
-   - Allez dans Settings > Environment Variables
-   - Ajoutez : `NEXT_PUBLIC_SOCKET_URL` = URL de votre serveur Socket.io
+### 3. Votre site sera disponible à :
 
-5. **Redéployez** :
-   ```bash
-   vercel --prod
-   ```
-
-### Alternative : Déploiement via GitHub
-
-1. Poussez votre code sur GitHub
-2. Allez sur [Vercel](https://vercel.com)
-3. Importez votre repository
-4. Vercel détectera automatiquement Next.js
-5. Ajoutez la variable d'environnement `NEXT_PUBLIC_SOCKET_URL`
-6. Déployez !
+**https://stxtxm.github.io/global-share**
 
 ## 📝 Variables d'environnement
 
-- `NEXT_PUBLIC_SOCKET_URL` : URL de votre serveur Socket.io (obligatoire)
+- `NEXT_PUBLIC_SOCKET_URL` : URL de votre serveur Socket.io (optionnel, par défaut: `http://localhost:3001`)
 
 ## 🛠️ Développement local
 
@@ -66,6 +50,12 @@ npm run dev
 
 Assurez-vous que votre serveur Socket.io est en cours d'exécution et que `NEXT_PUBLIC_SOCKET_URL` est défini dans un fichier `.env.local`.
 
+## 📚 Documentation complète
+
+- **Déploiement GitHub Pages** : Voir [GITHUB_PAGES_DEPLOY.md](./GITHUB_PAGES_DEPLOY.md)
+- **Déploiement GitHub** : Voir [GITHUB_DEPLOY.md](./GITHUB_DEPLOY.md)
+- **Serveur Socket.io** : Voir [socket-server/README.md](./socket-server/README.md)
+
 ## ✨ Fonctionnalités
 
 - ✅ **P2P Direct** : Transfert ultra-rapide quand possible
@@ -75,3 +65,8 @@ Assurez-vous que votre serveur Socket.io est en cours d'exécution et que `NEXT_
 - ✅ **PWA** : Installable sur mobile
 - ✅ **Tous fichiers** : Photos, vidéos, documents, musique, etc.
 - ✅ **Capture directe** : Prendre une photo et l'envoyer instantanément
+
+## 🔗 Liens
+
+- **Repository** : https://github.com/stxtxm/global-share
+- **Site en ligne** : https://stxtxm.github.io/global-share
