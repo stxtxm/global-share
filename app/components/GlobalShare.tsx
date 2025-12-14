@@ -66,29 +66,6 @@ export default function GlobalShare() {
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const transferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Request notification permission
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().then(permission => {
-        console.log('Notification permission:', permission);
-      });
-    }
-  }, []);
-
-  // Helper to show notification
-  const showNotification = (title: string, body: string) => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      if (document.visibilityState === 'hidden') {
-        new Notification(title, {
-          body,
-          icon: '/icon-192.png',
-          badge: '/icon-192.png',
-          tag: 'globalshare-transfer'
-        });
-      }
-    }
-  };
-
   // Fonction pour annuler un transfert en cours
   const cancelTransfer = useCallback((reason: string) => {
     console.error('Transfer cancelled:', reason);
@@ -106,8 +83,7 @@ export default function GlobalShare() {
     // Afficher l'erreur à l'utilisateur et réinitialiser l'état
     setTransfer(prev => {
       if (prev) {
-        const transferName = prev.name || 'le fichier';
-        showNotification('❌ Transfert annulé', `${transferName}: ${reason}`);
+        // Notification de transfert annulé supprimée
       }
       return null;
     });
@@ -329,20 +305,12 @@ export default function GlobalShare() {
           }, 10 * 60 * 1000); // 10 minutes
 
           const peerName = peers[id]?.name || 'Un appareil';
-          showNotification(
-            '📥 Fichier entrant',
-            `${peerName} vous envoie "${parsed.name}"`
-          );
         } else if (parsed.type === 'eof') {
           console.log(`EOF received. Total: ${incomingRef.current.size} bytes`);
           if (incomingRef.current.meta && incomingRef.current.size === incomingRef.current.meta.size) {
             saveFile(new Blob(incomingRef.current.buffer as BlobPart[]), incomingRef.current.meta.name);
             setTimeout(() => setTransfer(null), 1500);
 
-            showNotification(
-              '✅ Fichier reçu',
-              `"${incomingRef.current.meta.name}" téléchargé avec succès`
-            );
           } else {
             console.error(`File incomplete! Expected ${incomingRef.current.meta?.size}, got ${incomingRef.current.size}`);
             cancelTransfer(`Fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
@@ -651,11 +619,6 @@ export default function GlobalShare() {
       }, 10 * 60 * 1000); // 10 minutes
 
       const peerName = peers[senderId]?.name || 'Un appareil';
-      showNotification(
-        '📥 Fichier entrant (Relay)',
-        `${peerName} vous envoie "${meta.name}"`
-      );
-      return;
     }
 
     if (meta && meta.type === 'eof') {
@@ -675,10 +638,6 @@ export default function GlobalShare() {
         
         setTimeout(() => setTransfer(null), 1500);
 
-        showNotification(
-          '✅ Fichier reçu',
-          `"${incomingRef.current.meta.name}" téléchargé avec succès`
-        );
       } else {
         console.error(`File incomplete! Expected ${incomingRef.current.meta?.size}, got ${incomingRef.current.size}`);
         cancelTransfer(`Fichier incomplet (${incomingRef.current.size}/${incomingRef.current.meta?.size} bytes)`);
