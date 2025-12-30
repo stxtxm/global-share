@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
+import JSZip from 'jszip';
 import './GlobalShare.css';
 
 // Helpers
@@ -80,6 +81,7 @@ export default function GlobalShare() {
   const peersRef = useRef<Record<string, SimplePeerInstance>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const selectedPeerId = useRef<string | null>(null);
   const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
@@ -591,6 +593,57 @@ export default function GlobalShare() {
     e.target.value = '';
   };
 
+  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    const targetId = selectedPeerId.current;
+    e.target.value = '';
+
+    if (!targetId) return;
+    if (files.length === 0) return;
+
+    const peer = peers[targetId];
+    if (!peer || peer.status !== 'connected') {
+      alert('Cet appareil n\'est pas encore connecté. Attendez quelques secondes.');
+      return;
+    }
+
+    // Simple & robust: zip folder client-side then send as a single file
+    try {
+      setTransfer({ type: 'send', name: 'Préparation du dossier…', progress: 0, peerId: targetId });
+
+      const zip = new JSZip();
+
+      // Determine folder root from webkitRelativePath if available
+      const firstPath = (files[0] as unknown as { webkitRelativePath?: string }).webkitRelativePath || files[0].name;
+      const rootFolder = firstPath.includes('/') ? firstPath.split('/')[0] : 'dossier';
+
+      for (const f of files) {
+        const rel = (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name;
+        // Ensure everything stays under the same root folder in the zip
+        const normalized = rel.startsWith(rootFolder + '/') ? rel : `${rootFolder}/${rel}`;
+        zip.file(normalized, f);
+      }
+
+      // Generate zip as Blob
+      const blob = await zip.generateAsync(
+        { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+        (metadata: { percent: number }) => {
+          const pct = Math.max(0, Math.min(99, Math.floor(metadata.percent)));
+          setTransfer(prev => prev ? { ...prev, name: `Compression… (${pct}%)`, progress: pct } : prev);
+        }
+      );
+
+      const zipName = `${rootFolder}.zip`;
+      const zipFile = new File([blob], zipName, { type: 'application/zip' });
+
+      // Start actual sending via existing pipeline
+      startSending(targetId, zipFile);
+    } catch (err) {
+      console.error('Folder zip failed', err);
+      cancelTransfer('Erreur lors de la compression du dossier');
+    }
+  };
+
   const startSending = (targetId: string, file: File) => {
     // Vérifier que le peer est toujours connecté
     const peerInfo = peers[targetId];
@@ -1014,6 +1067,13 @@ export default function GlobalShare() {
               {/* @ts-expect-error - ion-icon is a custom element */}
               <ion-icon name="folder-open"></ion-icon> Choisir un fichier
             </button>
+            <button className="action-sheet-btn" onClick={() => {
+              folderInputRef.current?.click();
+              setShowActionSheet(false);
+            }}>
+              {/* @ts-expect-error - ion-icon is a custom element */}
+              <ion-icon name="folder"></ion-icon> Choisir un dossier
+            </button>
             <button className="action-sheet-btn cancel" onClick={() => setShowActionSheet(false)}>
               Annuler
             </button>
@@ -1027,6 +1087,14 @@ export default function GlobalShare() {
         onChange={handleFileSelect}
         accept="*/*"
         className="hidden"
+      />
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleFolderSelect}
+        className="hidden"
+        // @ts-expect-error - non standard attribute supported by Chromium/WebKit
+        webkitdirectory=""
       />
       <input
         type="file"
