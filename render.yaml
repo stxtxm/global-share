@@ -1,0 +1,20 @@
+# Configuration pour le déploiement sur Render
+# Ce fichier définit deux services :
+# 1. Le frontend Next.js
+# 2. Le serveur WebSocket
+
+services:
+  - type: web
+    name: globalshare
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: |
+      npm install
+      npm run build
+      cd socket-server && npm install
+    startCommand: node socket-server/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+    autoDeploy: true

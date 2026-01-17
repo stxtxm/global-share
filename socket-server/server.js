@@ -2,9 +2,13 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
+
+const outDir = path.join(__dirname, '..', 'out');
+app.use(express.static(outDir));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -89,6 +93,10 @@ io.on('connection', (socket) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(outDir, 'index.html'));
 });
 
 server.listen(PORT, '0.0.0.0', () => {

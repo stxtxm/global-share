@@ -26,7 +26,11 @@ const CHUNK_SIZE = 16 * 1024; // 16KB
 // Get socket server URL from environment or default
 const getSocketUrl = () => {
   if (typeof window !== 'undefined') {
-    return process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
+    if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return 'http://localhost:3001';
+    }
+    return window.location.origin;
   }
   return process.env.NEXT_PUBLIC_SOCKET_URL || '';
 };
