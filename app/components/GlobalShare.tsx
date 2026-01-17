@@ -539,7 +539,16 @@ export default function GlobalShare() {
     });
 
     p.on('error', (err: Error) => {
-      console.error('Peer error with', id, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes('User-Initiated Abort') ||
+        msg.includes('Close called') ||
+        msg.includes('OperationError')
+      ) {
+        console.warn('Peer closed/aborted with', id, msg);
+      } else {
+        console.error('Peer error with', id, err);
+      }
       clearTimeout(connectionTimeout);
       
       // Si un transfert est en cours, basculer vers relay
