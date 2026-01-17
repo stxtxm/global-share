@@ -732,7 +732,7 @@ export default function GlobalShare() {
             console.error('P2P chunk send failed', err);
             // Fallback vers relay si P2P échoue
             if (socketRef.current?.connected) {
-              socketRef.current.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+              socketRef.current.emit('relay-data', { target: targetId, data: chunk });
             } else {
               cancelTransfer('Connexion P2P et relay perdues');
               return;
@@ -740,7 +740,7 @@ export default function GlobalShare() {
           }
         } else {
           if (socketRef.current?.connected) {
-            socketRef.current.emit('relay-data', { target: targetId, data: Array.from(chunk) });
+            socketRef.current.emit('relay-data', { target: targetId, data: chunk });
           } else {
             cancelTransfer('Connexion au serveur perdue');
             return;
@@ -816,7 +816,7 @@ export default function GlobalShare() {
     readSlice(0);
   };
 
-  const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array | number[]) => {
+  const handleReceivedChunk = (senderId: string, chunk: Buffer | Uint8Array | ArrayBuffer | number[]) => {
     // Vérifier si le transfert a été annulé
     if (transferAbortRef.current.abort || transferAbortRef.current.targetId !== senderId) {
       return;
@@ -834,7 +834,7 @@ export default function GlobalShare() {
       return;
     }
 
-    const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+    const data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk as ArrayBuffer | ArrayLike<number>);
 
     incomingRef.current.buffer.push(data);
     incomingRef.current.size += data.byteLength;
@@ -878,7 +878,7 @@ export default function GlobalShare() {
     }
 
     if (data) {
-      handleReceivedChunk(senderId, data as Buffer | Uint8Array | number[]);
+      handleReceivedChunk(senderId, data as Buffer | Uint8Array | ArrayBuffer | number[]);
     }
   };
 
