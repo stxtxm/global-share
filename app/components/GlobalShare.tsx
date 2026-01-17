@@ -450,6 +450,13 @@ export default function GlobalShare() {
     };
   }, [step, cancelTransfer, resyncRoom, transfer]);
 
+  const updatePeerStatus = (id: string, status: 'connecting' | 'connected', method: 'p2p' | 'relay') => {
+    setPeers(prev => ({
+      ...prev,
+      [id]: { ...prev[id], status, method: method || prev[id]?.method || 'relay' }
+    }));
+  };
+
   const addPeer = (id: string, name: string, initiator: boolean) => {
     if (peersRef.current[id]) return;
 
@@ -575,27 +582,31 @@ export default function GlobalShare() {
     });
   };
 
-  const updatePeerStatus = (id: string, status: 'connecting' | 'connected', method: 'p2p' | 'relay') => {
-    setPeers(prev => ({
-      ...prev,
-      [id]: { ...prev[id], status, method: method || prev[id]?.method || 'relay' }
-    }));
-  };
+const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file || !selectedPeerId.current) return;
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedPeerId.current) return;
-
-    const peer = peers[selectedPeerId.current];
-    if (!peer || peer.status !== 'connected') {
-      alert('Cet appareil n&apos;est pas encore connecté. Attendez quelques secondes.');
+  const peer = peers[selectedPeerId.current];
+  if (!peer) {
+    alert('Cet appareil n\'est pas disponible.');
+    e.target.value = '';
+    return;
+  }
+  if (peer.status !== 'connected') {
+    // En mobile, le P2P peut rester en "connecting" (STUN/ICE), mais le relay via Socket.IO est déjà utilisable.
+    // On bascule donc en relay au moment de l'envoi plutôt que de bloquer l'utilisateur.
+    if (socketRef.current?.connected) {
+      updatePeerStatus(selectedPeerId.current, 'connected', 'relay');
+    } else {
+      alert('Connexion au serveur perdue.');
       e.target.value = '';
       return;
     }
+  }
 
-    startSending(selectedPeerId.current, file);
-    e.target.value = '';
-  };
+  startSending(selectedPeerId.current, file);
+  e.target.value = '';
+};
 
   const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -606,9 +617,17 @@ export default function GlobalShare() {
     if (files.length === 0) return;
 
     const peer = peers[targetId];
-    if (!peer || peer.status !== 'connected') {
-      alert('Cet appareil n\'est pas encore connecté. Attendez quelques secondes.');
+    if (!peer) {
+      alert('Cet appareil n\'est pas disponible.');
       return;
+    }
+    if (peer.status !== 'connected') {
+      if (socketRef.current?.connected) {
+        updatePeerStatus(targetId, 'connected', 'relay');
+      } else {
+        alert('Connexion au serveur perdue.');
+        return;
+      }
     }
 
     // Simple & robust: zip folder client-side then send as a single file
@@ -651,7 +670,7 @@ export default function GlobalShare() {
   const startSending = (targetId: string, file: File) => {
     // Vérifier que le peer est toujours connecté
     const peerInfo = peers[targetId];
-    if (!peerInfo || peerInfo.status !== 'connected') {
+    if (!peerInfo) {
       cancelTransfer('L\'appareil n\'est plus connecté');
       return;
     }
@@ -660,6 +679,11 @@ export default function GlobalShare() {
     if (!socketRef.current?.connected) {
       cancelTransfer('Connexion au serveur perdue');
       return;
+    }
+
+    // Si le P2P n'est pas encore prêt, on autorise quand même l'envoi via relay.
+    if (peerInfo.status !== 'connected') {
+      updatePeerStatus(targetId, 'connected', 'relay');
     }
     
     // Réinitialiser l'état d'abort
@@ -705,7 +729,7 @@ export default function GlobalShare() {
 
       // Vérifier que le peer est toujours connecté
       const currentPeer = peers[targetId];
-      if (!currentPeer || currentPeer.status !== 'connected') {
+      if (!currentPeer) {
         cancelTransfer('L\'appareil s\'est déconnecté pendant l\'envoi');
         return;
       }
@@ -1004,8 +1028,12 @@ export default function GlobalShare() {
               className={`peer-card ${peers[id].status === 'connected' ? 'active' : ''}`}
               onClick={() => {
                 if (peers[id].status !== 'connected') {
-                  alert('Connexion en cours... Attendez quelques secondes.');
-                  return;
+                  if (socketRef.current?.connected) {
+                    updatePeerStatus(id, 'connected', 'relay');
+                  } else {
+                    alert('Connexion au serveur perdue.');
+                    return;
+                  }
                 }
                 selectedPeerId.current = id;
 
