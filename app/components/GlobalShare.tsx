@@ -268,19 +268,29 @@ export default function GlobalShare() {
       removePeer(id);
     });
 
+    const safeSignal = (caller: string, payload: unknown) => {
+      const p = peersRef.current[caller] as unknown as { signal?: (data: unknown) => void; destroyed?: boolean } | undefined;
+      if (!p || typeof p.signal !== 'function') return;
+      if (p.destroyed) return;
+      try {
+        p.signal(payload);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('cannot signal after peer is destroyed')) return;
+        console.warn('Peer signal error', caller, err);
+      }
+    };
+
     socket.on('offer', (data: { caller: string; sdp: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
+      safeSignal(data.caller, data.sdp as { type?: string; candidate?: unknown });
     });
 
     socket.on('answer', (data: { caller: string; sdp: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.sdp as { type?: string; candidate?: unknown });
+      safeSignal(data.caller, data.sdp as { type?: string; candidate?: unknown });
     });
 
     socket.on('ice-candidate', (data: { caller: string; candidate: unknown }) => {
-      const p = peersRef.current[data.caller];
-      if (p) p.signal(data.candidate as { type?: string; candidate?: unknown });
+      safeSignal(data.caller, data.candidate as { type?: string; candidate?: unknown });
     });
 
     socket.on('relay-data', ({ from, data, meta }: { from: string; data: unknown; meta: { type: string; name?: string; size?: number; mime?: string } | null }) => {
@@ -588,12 +598,18 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
   if (!file || !selectedPeerId.current) return;
 
   const peer = peers[selectedPeerId.current];
-  if (!peer) {
-    alert('Cet appareil n\'est pas disponible.');
+  if (!peer && !socketRef.current?.connected) {
+    alert('Connexion au serveur perdue.');
     e.target.value = '';
     return;
   }
-  if (peer.status !== 'connected') {
+  if (!peer) {
+    setPeers(prev => ({
+      ...prev,
+      [selectedPeerId.current as string]: { name: prev[selectedPeerId.current as string]?.name || 'Appareil', status: 'connected', method: 'relay' }
+    }));
+  }
+  if (!peer || peer.status !== 'connected') {
     // En mobile, le P2P peut rester en "connecting" (STUN/ICE), mais le relay via Socket.IO est déjà utilisable.
     // On bascule donc en relay au moment de l'envoi plutôt que de bloquer l'utilisateur.
     if (socketRef.current?.connected) {
@@ -618,11 +634,17 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (files.length === 0) return;
 
     const peer = peers[targetId];
-    if (!peer) {
-      alert('Cet appareil n\'est pas disponible.');
+    if (!peer && !socketRef.current?.connected) {
+      alert('Connexion au serveur perdue.');
       return;
     }
-    if (peer.status !== 'connected') {
+    if (!peer) {
+      setPeers(prev => ({
+        ...prev,
+        [targetId]: { name: prev[targetId]?.name || 'Appareil', status: 'connected', method: 'relay' }
+      }));
+    }
+    if (!peer || peer.status !== 'connected') {
       if (socketRef.current?.connected) {
         updatePeerStatus(targetId, 'connected', 'relay');
       } else {
@@ -669,21 +691,22 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
   };
 
   const startSending = (targetId: string, file: File) => {
-    // Vérifier que le peer est toujours connecté
-    const peerInfo = peers[targetId];
-    if (!peerInfo) {
-      cancelTransfer('L\'appareil n\'est plus connecté');
-      return;
-    }
-
     // Vérifier que le socket est connecté
     if (!socketRef.current?.connected) {
       cancelTransfer('Connexion au serveur perdue');
       return;
     }
 
+    const peerInfo = peers[targetId];
+    if (!peerInfo) {
+      setPeers(prev => ({
+        ...prev,
+        [targetId]: { name: prev[targetId]?.name || 'Appareil', status: 'connected', method: 'relay' }
+      }));
+    }
+
     // Si le P2P n'est pas encore prêt, on autorise quand même l'envoi via relay.
-    if (peerInfo.status !== 'connected') {
+    if (peerInfo && peerInfo.status !== 'connected') {
       updatePeerStatus(targetId, 'connected', 'relay');
     }
     
@@ -691,7 +714,7 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     transferAbortRef.current = { abort: false, targetId };
 
     const peerObj = peersRef.current[targetId];
-    const useP2P = peerObj && peerObj.connected && peerInfo.method === 'p2p';
+    const useP2P = peerObj && peerObj.connected && (peerInfo?.method === 'p2p');
 
     console.log(`Sending "${file.name}" (${file.size} bytes) via ${useP2P ? 'P2P' : 'Relay'}`);
     
