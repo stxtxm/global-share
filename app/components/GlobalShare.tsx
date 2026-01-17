@@ -223,8 +223,9 @@ export default function GlobalShare() {
       setConnectionStatus('connecting');
     });
 
-    socket.on('reconnect', () => {
+    socket.io.on('reconnect', () => {
       console.log('Reconnected! Rejoining room...');
+      setConnectionStatus('connected');
       if (!transfer || transfer.type !== 'send') {
         resyncRoom('socket_reconnect');
       }
@@ -727,13 +728,6 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         return;
       }
 
-      // Vérifier que le peer est toujours connecté
-      const currentPeer = peers[targetId];
-      if (!currentPeer) {
-        cancelTransfer('L\'appareil s\'est déconnecté pendant l\'envoi');
-        return;
-      }
-
       // Vérifier que le socket est toujours connecté
       if (!socketRef.current?.connected) {
         cancelTransfer('Connexion au serveur perdue');
@@ -848,13 +842,6 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
 
     if (!incomingRef.current.meta) {
       console.warn('Received chunk without metadata');
-      return;
-    }
-
-    // Vérifier que la connexion est toujours présente (ne pas dépendre du state React `peers` ici)
-    // Le state peut être obsolète dans les callbacks d'événements, ce qui annule le transfert à tort.
-    if (!peersRef.current[senderId]) {
-      console.warn('Received chunk from unknown peer (possibly stale UI state):', senderId);
       return;
     }
 
@@ -1011,7 +998,7 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         </div>
       )}
 
-      {connectionStatus !== 'connected' && (
+      {step === 'room' && connectionStatus === 'connecting' && Object.keys(peers).length === 0 && (
         <div className="connecting-overlay">
           <div className="spinner"></div>
           <p>Connexion en cours...</p>
