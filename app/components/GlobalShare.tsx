@@ -164,6 +164,8 @@ export default function GlobalShare() {
     connectErrorShownRef.current = false;
 
     const socket = io(getSocketUrl(), {
+      // The Cloudflare Worker only implements the WebSocket transport.
+      transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
@@ -195,14 +197,14 @@ export default function GlobalShare() {
       }
     };
 
-    // Laisser Render le temps de démarrer: garder le loader et réessayer jusqu'à 1min30.
-    // Au bout de 1min30 sans connexion, on abandonne.
+    // Le Worker Cloudflare ne dort pas : inutile d'attendre le démarrage de Render.
+    // On laisse 20s pour les réseaux lents, puis on affiche une erreur claire.
     if (connectDeadlineTimeoutRef.current) {
       clearTimeout(connectDeadlineTimeoutRef.current);
     }
     connectDeadlineTimeoutRef.current = setTimeout(() => {
-      failConnect('Impossible de se connecter au serveur après 1min30.');
-    }, 90 * 1000);
+      failConnect('Impossible de se connecter au serveur après 20s.');
+    }, 20 * 1000);
 
     socket.on('connect', () => {
       console.log('Connected to server');

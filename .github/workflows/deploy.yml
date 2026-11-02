@@ -31,7 +31,9 @@ jobs:
       - name: Build Next.js app
         run: npm run build
         env:
-          NEXT_PUBLIC_SOCKET_URL: ${{ secrets.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001' }}
+          # Public URL of the Cloudflare Worker (see socket-server-cloudflare/).
+          # This is not a secret: it is embedded in the browser bundle anyway.
+          NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

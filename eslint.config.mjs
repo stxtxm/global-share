@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "socket-server/**",
+    "socket-server-cloudflare/**",
   ]),
 ]);
 

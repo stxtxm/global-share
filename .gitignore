@@ -15,6 +15,11 @@
 /socket-server/node_modules
 /socket-server/node_modules/
 
+# cloudflare socket server dependencies and local state
+/socket-server-cloudflare/node_modules/
+/socket-server-cloudflare/.wrangler/
+/socket-server-cloudflare/.dev.vars
+
 # testing
 /coverage
 

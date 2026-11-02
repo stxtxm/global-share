@@ -6,11 +6,15 @@ Application Next.js pour le partage de fichiers P2P, déployée sur GitHub Pages
 
 ### 1. Préparer le serveur Socket.io
 
-D'abord, déployez le serveur Socket.io sur Railway ou Render (gratuit) :
+Le serveur de production tourne sur **Cloudflare Workers + Durable Objects**
+(gratuit, sans cold start, sans keep-alive) :
 
-- Allez dans le dossier `socket-server`
-- Suivez les instructions dans `socket-server/README.md`
-- Notez l'URL de votre serveur Socket.io (ex: `https://votre-app.railway.app`)
+- Dossier : `socket-server-cloudflare/`
+- Guide : [socket-server-cloudflare/README.md](./socket-server-cloudflare/README.md)
+- URL : `https://global-share-socket.sitizstorm.workers.dev`
+
+Le dossier `socket-server/` reste le serveur Node de secours (Render).
+Il n'est plus utilisé par le déploiement GitHub Pages.
 
 ### 2. Activer GitHub Pages
 
@@ -19,12 +23,11 @@ D'abord, déployez le serveur Socket.io sur Railway ou Render (gratuit) :
    - Sous "Source", sélectionnez **"GitHub Actions"**
    - Sauvegardez
 
-2. **Configurez la variable d'environnement** (optionnel) :
-   - Allez sur https://github.com/stxtxm/global-share/settings/secrets/actions
-   - Cliquez sur "New repository secret"
-   - Nom : `NEXT_PUBLIC_SOCKET_URL`
-   - Valeur : L'URL de votre serveur Socket.io
-   - Cliquez sur "Add secret"
+2. **URL du serveur Socket.io** :
+   - Le workflow `.github/workflows/deploy.yml` contient déjà l'URL du Worker
+     Cloudflare. Elle est publique et peut être modifiée directement dans ce
+     fichier si le Worker change de nom ou de domaine.
+   - L'ancien secret `NEXT_PUBLIC_SOCKET_URL` n'est plus utilisé par le workflow.
 
 3. **Déclenchez le déploiement** :
    - Faites un push sur la branche `main` OU
@@ -36,7 +39,9 @@ D'abord, déployez le serveur Socket.io sur Railway ou Render (gratuit) :
 
 ## 📝 Variables d'environnement
 
-- `NEXT_PUBLIC_SOCKET_URL` : URL de votre serveur Socket.io (optionnel, par défaut: `http://localhost:3001`)
+- `NEXT_PUBLIC_SOCKET_URL` : URL du serveur Socket.io. En local, la valeur par
+  défaut est `http://localhost:3001`; en production, le workflow utilise l'URL
+  du Worker Cloudflare.
 
 ## 🛠️ Développement local
 
@@ -54,7 +59,8 @@ Assurez-vous que votre serveur Socket.io est en cours d'exécution et que `NEXT_
 
 - **Déploiement GitHub Pages** : Voir [GITHUB_PAGES_DEPLOY.md](./GITHUB_PAGES_DEPLOY.md)
 - **Déploiement GitHub** : Voir [GITHUB_DEPLOY.md](./GITHUB_DEPLOY.md)
-- **Serveur Socket.io** : Voir [socket-server/README.md](./socket-server/README.md)
+- **Serveur Socket.io Cloudflare** : Voir [socket-server-cloudflare/README.md](./socket-server-cloudflare/README.md)
+- **Serveur Socket.io Node (secours)** : Voir [socket-server/README.md](./socket-server/README.md)
 
 ## ✨ Fonctionnalités
 
