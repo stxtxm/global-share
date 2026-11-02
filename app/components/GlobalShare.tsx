@@ -1003,7 +1003,11 @@ const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         </div>
         <div className="room-badge" onClick={() => {
           if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && navigator.clipboard) {
-            navigator.clipboard.writeText(window.location.origin + '/?room=' + roomId);
+            const shareUrl = new URL(window.location.href);
+            shareUrl.search = '';
+            shareUrl.hash = '';
+            shareUrl.searchParams.set('room', roomId);
+            navigator.clipboard.writeText(shareUrl.toString());
             alert('Lien copié !');
           }
         }}>

@@ -7,7 +7,8 @@ export default function ServiceWorkerRegister() {
     if (typeof window === 'undefined') return;
     if (!('serviceWorker' in navigator)) return;
 
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+    navigator.serviceWorker.register(`${basePath}/sw.js`).catch(() => {
       // ignore
     });
   }, []);

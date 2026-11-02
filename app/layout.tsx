@@ -11,7 +11,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "GlobalShare - Partage de fichiers P2P",
   description: "Partage de fichiers P2P sécurisé entre appareils",
-  manifest: "/manifest.json",
+  manifest: "./manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
