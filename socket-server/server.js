@@ -24,29 +24,25 @@ const PORT = process.env.PORT || 3001;
 // Logic
 const rooms = {}; // { roomId: { users: { socketId: { name } } } }
 
+// Événements de transfert (forwardés au pair cible)
+const transferEvents = [
+  'transfer-init', 'transfer-chunk', 'transfer-ack', 'transfer-eof',
+  'transfer-eof-ack', 'transfer-cancel', 'transfer-end'
+];
+
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
   // 1. Join Room
   socket.on('join-room', ({ roomId, name }) => {
     socket.join(roomId);
-
-    // Initialize room if not exists
     if (!rooms[roomId]) rooms[roomId] = { users: {} };
-
-    // Add user
     rooms[roomId].users[socket.id] = { name };
-
-    // Announce to others in room
     socket.to(roomId).emit('user-joined', { id: socket.id, name });
-
-    // Send list of existing peers to me
     const others = Object.keys(rooms[roomId].users)
       .filter(id => id !== socket.id)
       .map(id => ({ id, name: rooms[roomId].users[id].name }));
-
     socket.emit('room-users', others);
-
     console.log(`${name} joined room ${roomId}`);
   });
 
@@ -65,23 +61,27 @@ io.on('connection', (socket) => {
 
   // 3. Fallback Relay (If P2P Fails)
   socket.on('relay-data', ({ target, data, meta }) => {
-    // Forward data chunk directly to target via WebSocket
     io.to(target).emit('relay-data', { from: socket.id, data, meta });
   });
 
-  // 4. Disconnect
+  // 4. Événements de transfert
+  transferEvents.forEach(event => {
+    socket.on(event, (payload) => {
+      if (payload && typeof payload.target === 'string') {
+        io.to(payload.target).emit(event, { ...payload, from: socket.id });
+      }
+    });
+  });
+
+  // 5. Disconnect
   socket.on('disconnecting', () => {
     const roomsJoined = Array.from(socket.rooms);
     roomsJoined.forEach(roomId => {
       if (rooms[roomId] && rooms[roomId].users[socket.id]) {
         const name = rooms[roomId].users[socket.id].name;
         delete rooms[roomId].users[socket.id];
-
-        // Notify others
         socket.to(roomId).emit('user-left', socket.id);
         console.log(`${name} left room ${roomId}`);
-
-        // Cleanup empty room
         if (Object.keys(rooms[roomId].users).length === 0) {
           delete rooms[roomId];
         }
@@ -107,4 +107,3 @@ Health: http://localhost:${PORT}/health
 --------------------------------------------
 `);
 });
-

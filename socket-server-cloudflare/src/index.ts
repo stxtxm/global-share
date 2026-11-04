@@ -248,6 +248,16 @@ export class GlobalRoom {
 
     if (eventName === 'relay-data') {
       this.handleRelayText(client, payload);
+      return;
+    }
+
+    // Événements de transfert (forwardés au pair cible)
+    if (eventName === 'transfer-init' || eventName === 'transfer-chunk' ||
+      eventName === 'transfer-ack' || eventName === 'transfer-eof' ||
+      eventName === 'transfer-eof-ack' || eventName === 'transfer-cancel' ||
+      eventName === 'transfer-end') {
+      this.handleTransferEvent(client, eventName, payload);
+      return;
     }
   }
 
@@ -302,6 +312,15 @@ export class GlobalRoom {
       ...(payload as Record<string, unknown>),
       caller: client.id,
     });
+  }
+
+  private handleTransferEvent(client: Client, eventName: string, payload: unknown): void {
+    if (!payload || typeof payload !== 'object') return;
+    const targetId = (payload as { target?: unknown }).target;
+    if (typeof targetId !== 'string') return;
+    const target = this.sockets.get(targetId);
+    if (!target) return;
+    this.sendEvent(target, eventName, { ...(payload as Record<string, unknown>), from: client.id });
   }
 
   private handleRelayText(client: Client, payload: unknown): void {
