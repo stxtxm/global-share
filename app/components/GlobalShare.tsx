@@ -86,6 +86,8 @@ export default function GlobalShare() {
   const [errorMessage, setErrorMessage] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
+  // Incrémenté à chaque socket créé : le TransferManager se rattache au bon socket.
+  const [socketEpoch, setSocketEpoch] = useState(0);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -159,44 +161,7 @@ export default function GlobalShare() {
       s.off('transfer-ack'); s.off('transfer-eof'); s.off('transfer-eof-ack');
       s.off('transfer-cancel'); s.off('transfer-end');
     };
-  }, [showToast]);
-
-  // ---- Socket lifecycle ----
-  useEffect(() => {
-    const socket = io(getSocketUrl(), {
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
-      timeout: 10000,
-    } as Parameters<typeof io>[1]);
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('Connected to server');
-      setConnectionStatus('connected');
-      if (socketRef.current) socketRef.current.emit('join-room', { roomId, name: myName });
-      setStep('room');
-      setConnectErrorMessage(null);
-      connectErrorShownRef.current = false;
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('Disconnected:', reason);
-      setConnectionStatus('disconnected');
-      if (reason === 'io server disconnect') socket.connect();
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('Connect error:', err);
-      setConnectionStatus('disconnected');
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
+  }, [showToast, socketEpoch]);
 
   // ---- URL room param ----
   useEffect(() => {
@@ -255,37 +220,6 @@ export default function GlobalShare() {
     };
   }, [transfers]);
 
-  // ---- Handlers événements Socket (hors transfer) ----
-  useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket) return;
-    const s = socket;
-    s.on('room-users', (users: { id: string; name: string }[]) => {
-      const next: Record<string, PeerInfo> = {};
-      users.forEach(u => next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' });
-      setPeers(prev => ({ ...prev, ...next }));
-    });
-    s.on('user-joined', ({ id, name }: { id: string; name: string }) => {
-      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
-    });
-    s.on('user-left', (id: string) => {
-      setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
-      managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
-    });
-    s.on('offer', (data: { caller: string; sdp: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } }
-    });
-    s.on('answer', (data: { caller: string; sdp: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } }
-    });
-    s.on('ice-candidate', (data: { caller: string; candidate: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.candidate); } catch { /* ignore */ } }
-    });
-  }, []);
-
   // ---- Gestion arrière-plan / réseau ----
   useEffect(() => {
     const onOnline = () => {
@@ -316,6 +250,7 @@ export default function GlobalShare() {
       reconnectionDelayMax: 5000, reconnectionAttempts: Infinity, timeout: 10000,
     } as Parameters<typeof io>[1]);
     socketRef.current = socket;
+    setSocketEpoch(epoch => epoch + 1);
     const failConnect = (message: string) => {
       console.error(message);
       if (connectDeadlineTimeoutRef.current) { clearTimeout(connectDeadlineTimeoutRef.current); connectDeadlineTimeoutRef.current = null; }
