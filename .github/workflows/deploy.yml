@@ -18,7 +18,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Déployé avant le site : un build Pages ne peut jamais pointer vers une
+  # version du Worker plus ancienne que le dépôt.
+  worker:
+    runs-on: ubuntu-latest
+    env:
+      # Identifiant de compte Cloudflare (public, ce n'est pas un secret).
+      CLOUDFLARE_ACCOUNT_ID: 0bf0ac08e2a32bb3b08436887d9df307
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Require CLOUDFLARE_API_TOKEN
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Secret CLOUDFLARE_API_TOKEN manquant (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+
+      - name: Deploy Cloudflare Worker
+        working-directory: socket-server-cloudflare
+        run: npx --yes wrangler@4.156.2 deploy --durable-objects-code-update-mode immediate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
   build:
+    needs: worker
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

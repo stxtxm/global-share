@@ -42,11 +42,25 @@ NEXT_PUBLIC_SOCKET_URL=http://localhost:8787 npm run dev
 
 ## Deploy
 
+The GitHub Actions workflow deploys this Worker before building the site, using
+the `CLOUDFLARE_API_TOKEN` repository secret (permission **Workers
+Scripts:Edit**). It runs, from `socket-server-cloudflare/`:
+
+```bash
+npx --yes wrangler@4.156.2 deploy --durable-objects-code-update-mode immediate
+```
+
+The immediate mode matters: after a normal deploy, Cloudflare can keep an active
+Durable Object on the previous code for up to five minutes. The `account_id` is
+written in `.github/workflows/deploy.yml`; it is not sensitive.
+
+Manual fallback:
+
 ```bash
 cd socket-server-cloudflare
 npm install
 npx wrangler login
-npx wrangler deploy
+npx wrangler deploy --durable-objects-code-update-mode immediate
 ```
 
 `wrangler` prints the public URL, for example:
@@ -55,7 +69,7 @@ npx wrangler deploy
 https://global-share-socket.<your-subdomain>.workers.dev
 ```
 
-The GitHub Pages workflow currently embeds the deployed URL directly in
+The GitHub Pages workflow embeds the deployed URL directly in
 `.github/workflows/deploy.yml`:
 
 ```yaml
@@ -63,8 +77,7 @@ NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
 ```
 
 Update that value if the Worker name/subdomain changes, then push or merge to
-`main` (or run the `Deploy to GitHub Pages` workflow manually). No GitHub secret
-is needed: the URL is public and lives in the workflow file.
+`main`.
 
 ## Configuration
 

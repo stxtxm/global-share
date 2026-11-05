@@ -37,14 +37,31 @@ le workflow. Cette URL est publique (elle finit dans le bundle navigateur).
 
 ## 2. Backend — Cloudflare Worker
 
-Le Worker n'est **pas** déployé par la CI. Après une modification de
-`socket-server-cloudflare/` :
+Le Worker est déployé automatiquement par le même workflow, **avant** le
+frontend (`worker` → `build` → `deploy`). Un échec du job `worker` bloque la
+publication du site : les deux restent synchronisés.
+
+### Secret requis
+
+Dans **Settings → Secrets and variables → Actions** :
+
+| Secret | Rôle |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Token API Cloudflare avec la permission **Workers Scripts:Edit** |
+
+L'identifiant de compte (`0bf0ac08e2a32bb3b08436887d9df307`) est écrit dans
+`deploy.yml` : ce n'est pas un secret. Le déploiement force l'adoption immédiate
+du code par les Durable Objects
+(`--durable-objects-code-update-mode immediate`) ; sans cela, une instance
+active peut servir l'ancienne version jusqu'à 5 minutes.
+
+### Déploiement manuel (secours)
 
 ```bash
 cd socket-server-cloudflare
 npm install
 npx wrangler login   # une seule fois
-npx wrangler deploy
+npx wrangler deploy --durable-objects-code-update-mode immediate
 ```
 
 `wrangler.toml` déclare le Worker `global-share-socket`, le Durable Object

@@ -26,25 +26,40 @@ servi sous le préfixe `/global-share` (`basePath` dans `next.config.ts`).
 
 Le workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) :
 
-1. installe les dépendances (`npm ci`) ;
-2. lance `npm run lint` et `npx tsc --noEmit` ;
-3. construit l'export statique avec `NEXT_PUBLIC_SOCKET_URL` ;
-4. publie `out/` sur GitHub Pages.
+1. déploie d'abord le Worker Cloudflare (`worker`) ;
+2. installe les dépendances (`npm ci`) ;
+3. lance `npm run lint` et `npx tsc --noEmit` ;
+4. construit l'export statique avec `NEXT_PUBLIC_SOCKET_URL` ;
+5. publie `out/` sur GitHub Pages.
+
+Le site ne peut donc jamais être déployé avant le Worker : si le job `worker`
+échoue, la publication Pages est bloquée.
 
 Il se déclenche à **chaque push sur `main`** (donc au merge d'une pull request)
 et manuellement depuis l'onglet **Actions**. GitHub Pages doit être configuré
 avec la source **« GitHub Actions »** :
 https://github.com/stxtxm/global-share/settings/pages
 
-### Worker (manuel)
+### Worker (automatique)
 
-Le Worker n'est pas déployé par la CI :
+Le Worker est déployé par le même workflow, juste avant le frontend. Le secret
+suivant doit exister dans **Settings → Secrets and variables → Actions** :
+
+- `CLOUDFLARE_API_TOKEN` : token API Cloudflare avec la permission
+  **Workers Scripts:Edit** sur le compte.
+
+L'`account_id` est écrit dans `deploy.yml` (ce n'est pas une donnée sensible).
+Le déploiement utilise `--durable-objects-code-update-mode immediate` : sans ce
+flag, un Durable Object actif peut continuer à exécuter l'ancien code jusqu'à
+5 minutes après le déploiement.
+
+Déploiement manuel de secours :
 
 ```bash
 cd socket-server-cloudflare
 npm install
 npx wrangler login
-npx wrangler deploy
+npx wrangler deploy --durable-objects-code-update-mode immediate
 ```
 
 L'URL publique du Worker est reportée dans `deploy.yml`
