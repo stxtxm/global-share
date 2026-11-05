@@ -32,7 +32,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # wrangler 4.156 exige Node >= 22 (le build Next.js reste sur Node 20).
+          node-version: '22'
 
       - name: Require CLOUDFLARE_API_TOKEN
         env:
