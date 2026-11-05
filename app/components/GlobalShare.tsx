@@ -68,6 +68,7 @@ interface Toast {
   id: number; type: 'info' | 'success' | 'error' | 'warning'; message: string;
 }
 interface IncomingFile { buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null; }
+interface ReceivedFile { id: number; name: string; blob: Blob; size: number; }
 
 declare global {
   interface Window { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void }; }
@@ -83,6 +84,8 @@ export default function GlobalShare() {
   const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [transfers, setTransfers] = useState<TransferState[]>([]);
+  // Blobs reçus conservés pour proposer un téléchargement sur geste explicite.
+  const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -107,6 +110,7 @@ export default function GlobalShare() {
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
   const toastIdRef = useRef(0);
+  const receivedFileIdRef = useRef(0);
 
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
@@ -491,16 +495,27 @@ export default function GlobalShare() {
   }, [joinRoom]);
 
   // ---- Sauvegarde des fichiers reçus ----
-  const saveFile = (blob: Blob, name: string) => {
+  // Android Chrome bloque les téléchargements lancés sans geste utilisateur :
+  // le blob reste donc dans une liste avec un bouton explicite.
+  const downloadBlob = useCallback((blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = name;
+    a.rel = 'noopener';
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+    a.remove();
+    // Révocation différée : trop tôt, Android annule le téléchargement.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }, []);
+
+  const saveFile = useCallback((blob: Blob, name: string) => {
+    const id = ++receivedFileIdRef.current;
+    setReceivedFiles(prev => [{ id, name, blob, size: blob.size }, ...prev]);
+    downloadBlob(blob, name);
+  }, [downloadBlob]);
 
   useEffect(() => {
     if (step === 'room') {
@@ -625,6 +640,30 @@ export default function GlobalShare() {
                     <span>{formatSpeed(t.speed)} / s</span>
                     <span><TransferElapsed createdAt={t.createdAt} /> · {t.confirmed > 0 ? formatBytes(t.confirmed) : '0 B'} envoyé(s)</span>
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Fichiers reçus : bouton requis par Android pour autoriser le téléchargement */}
+        {receivedFiles.length > 0 && (
+          <div style={{ background: 'rgba(30,30,30,0.5)', borderRadius: '12px', padding: '12px', border: '1px solid #333' }}>
+            <h2 style={{ margin: '0 0 8px', color: 'var(--primary)', fontSize: '1rem' }}>Fichiers reçus</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {receivedFiles.map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '10px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{formatBytes(f.size)}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => downloadBlob(f.blob, f.name)}
+                    style={{ flexShrink: 0, padding: '10px 14px', borderRadius: '10px', fontWeight: 600, border: '1px solid var(--primary)', background: 'var(--primary)', color: 'black', cursor: 'pointer' }}
+                  >
+                    Télécharger
+                  </button>
                 </div>
               ))}
             </div>

@@ -520,7 +520,10 @@ export class TransferManager {
     this._setStatus(t, 'completed', 'Terminé');
     this.onStatus(t);
     this.onComplete(t);
-    (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare?.onFileSaved?.(new Blob([merged]), t.file.name);
+    (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare?.onFileSaved?.(
+      new Blob([merged], { type: t.file.mime || 'application/octet-stream' }),
+      t.file.name
+    );
   }
 
   clear(): void {
