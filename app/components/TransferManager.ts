@@ -39,7 +39,7 @@ export interface TransferState {
   ackedSeqs: Set<number>;
   window: { start: number; bytes: number } | null;
   buffer: Map<number, Uint8Array>;
-  ackTimeout?: ReturnType<typeof setTimeout>;
+  ackTimers: Map<number, ReturnType<typeof setTimeout>>;
 }
 
 export interface TransferInitPayload {
@@ -108,6 +108,11 @@ export class TransferManager {
   public onStatus: (t: TransferState) => void;
   public onSendDone: (id: string) => void;
 
+  /** Identité courante : socket.id n'est disponible qu'après la connexion. */
+  get selfId(): string {
+    return this.socket.id ?? this.myId;
+  }
+
   constructor(
     socket: Socket,
     myId: string,
@@ -157,12 +162,12 @@ export class TransferManager {
       ackedSeqs: new Set(),
       window: null,
       buffer: new Map(),
-      ackTimeout: undefined,
+      ackTimers: new Map(),
     };
     this.transfers.set(id, t);
     this._emit('transfer-init', {
       transferId: t.id,
-      initiator: this.myId,
+      initiator: this.selfId,
       target: t.targetId,
       direction: 'send',
       file: { name: file.name, size: file.size, mime: file.mime },
@@ -176,9 +181,11 @@ export class TransferManager {
   startReceive(
     file: TransferFileMeta,
     initiator: string,
-    method: 'p2p' | 'relay'
+    method: 'p2p' | 'relay',
+    transferId?: string
   ): TransferState {
-    const id = `t-${++this.nextTransferId}-${Date.now().toString(36)}`;
+    // L'id doit être celui de l'expéditeur, sinon les chunks ne retrouvent pas le transfert.
+    const id = transferId ?? `t-${++this.nextTransferId}-${Date.now().toString(36)}`;
     const t: TransferState = {
       id,
       direction: 'receive',
@@ -200,7 +207,7 @@ export class TransferManager {
       ackedSeqs: new Set(),
       window: null,
       buffer: new Map(),
-      ackTimeout: undefined,
+      ackTimers: new Map(),
     };
     this.transfers.set(id, t);
     this.onUpdate(t);
@@ -253,13 +260,7 @@ export class TransferManager {
       t.pending.set(seq, chunk);
       t.offset += chunk.length;
       t.lastActivity = Date.now();
-      this._emit('transfer-chunk', {
-        transferId: t.id,
-        seq,
-        size: chunk.length,
-        chunk: Array.from(chunk),
-        target: t.targetId,
-      });
+      this._transmitChunk(t, seq, chunk);
       this._startAckTimeout(t, seq, chunk.length);
     }
   }
@@ -283,12 +284,13 @@ export class TransferManager {
   }): void {
     const known = this.transfers.get(payload.transferId);
     if (known) {
-      if (known.direction === 'receive') known.targetId = payload.target;
+      if (known.direction === 'receive') known.targetId = payload.initiator;
       this.onUpdate(known);
       return;
     }
-    const t = this.startReceive(payload.file, payload.initiator, payload.method);
-    t.targetId = payload.target;
+    const t = this.startReceive(payload.file, payload.initiator, payload.method, payload.transferId);
+    // targetId doit rester l'expéditeur : c'est vers lui que partent les ACK.
+    t.targetId = payload.initiator;
     t.targetName = payload.initiator;
     this.onUpdate(t);
   }
@@ -300,10 +302,14 @@ export class TransferManager {
     chunk: number[];
     target: string;
   }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'receive') return;
-    if (t.buffer.has(payload.seq)) return;
+    if (t.buffer.has(payload.seq)) {
+      // Chunk déjà reçu mais ACK perdu : on le renvoie.
+      this._sendAck(t, payload.seq, payload.size);
+      return;
+    }
     t.buffer.set(payload.seq, new Uint8Array(payload.chunk));
     t.confirmed += payload.size;
     t.lastActivity = Date.now();
@@ -318,13 +324,16 @@ export class TransferManager {
     initiator: string;
     target: string;
   }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'send') return;
     if (t.ackedSeqs.has(payload.seq)) return;
     t.ackedSeqs.add(payload.seq);
     t.confirmed += payload.size;
     t.pending.delete(payload.seq);
+    const ackTimer = t.ackTimers.get(payload.seq);
+    if (ackTimer) clearTimeout(ackTimer);
+    t.ackTimers.delete(payload.seq);
     t.lastActivity = Date.now();
     if (!t.window) t.window = { start: Date.now(), bytes: 0 };
     t.window.bytes += payload.size;
@@ -332,7 +341,7 @@ export class TransferManager {
   }
 
   onTransferEof(payload: { transferId: string; size: number; target: string }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'receive') return;
     this._sendEofAck(t);
@@ -341,7 +350,7 @@ export class TransferManager {
   }
 
   onTransferEofAck(payload: { transferId: string; initiator: string; target: string }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'send') return;
     this._setStatus(t, 'completed', 'Fichier reçu avec succès');
@@ -355,7 +364,7 @@ export class TransferManager {
   }
 
   onTransferCancel(payload: { transferId: string; reason: string; target: string }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t) return;
     this._setStatus(t, 'cancelled', payload.reason ?? "Annulé par lautre partie");
@@ -374,9 +383,10 @@ export class TransferManager {
     reason?: string;
     target: string;
   }): void {
-    if (payload.target !== this.myId) return;
+    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t) return;
+    if (t.status === payload.status) return;
     if (payload.status === 'completed' || payload.status === 'cancelled') {
       this._setStatus(t, payload.status, payload.reason ?? 'End of transfer');
       this._emit('transfer-end', {
@@ -412,7 +422,7 @@ export class TransferManager {
       transferId: t.id,
       seq,
       size,
-      initiator: this.myId,
+      initiator: this.selfId,
       target: t.targetId,
     });
   }
@@ -420,7 +430,17 @@ export class TransferManager {
   private _sendEofAck(t: TransferState): void {
     this._emit('transfer-eof-ack', {
       transferId: t.id,
-      initiator: this.myId,
+      initiator: this.selfId,
+      target: t.targetId,
+    });
+  }
+
+  private _transmitChunk(t: TransferState, seq: number, chunk: Uint8Array): void {
+    this._emit('transfer-chunk', {
+      transferId: t.id,
+      seq,
+      size: chunk.length,
+      chunk: Array.from(chunk),
       target: t.targetId,
     });
   }
@@ -429,21 +449,21 @@ export class TransferManager {
     this.socket.emit(event, payload);
   }
 
-  private _startAckTimeout(t: TransferState, seq: number, size: number): void {
+  private _startAckTimeout(t: TransferState, seq: number, size: number, delay = 15000): void {
     if (t.ackedSeqs.has(seq)) return;
+    const previous = t.ackTimers.get(seq);
+    if (previous) clearTimeout(previous);
     const timer = setTimeout(() => {
+      t.ackTimers.delete(seq);
       if (t.ackedSeqs.has(seq)) return;
       const chunk = t.pending.get(seq);
-      if (chunk) {
-        t.attempts += 1;
-        t.pending.set(seq, chunk);
-        this.sendChunk(t.id, seq, chunk);
-        const delay = Math.min(2000 * Math.pow(2, t.attempts), 30000);
-        t.ackTimeout = setTimeout(() => this._startAckTimeout(t, seq, size), delay);
-      }
-    }, 15000);
-    if (t.ackTimeout) clearTimeout(t.ackTimeout);
-    t.ackTimeout = timer;
+      if (!chunk) return;
+      t.attempts += 1;
+      // Le chunk est déjà dans pending : on le retransmet sans repasser par sendChunk.
+      this._transmitChunk(t, seq, chunk);
+      this._startAckTimeout(t, seq, size, Math.min(delay * 2, 60000));
+    }, delay);
+    t.ackTimers.set(seq, timer);
   }
 
   private _updateReceiverProgress(t: TransferState): void {
@@ -468,12 +488,13 @@ export class TransferManager {
   }
 
   private _isComplete(t: TransferState): boolean {
-    const totalChunks = Math.ceil(t.file.size / t.chunkSize) || 1;
+    if (t.file.size === 0) return true;
+    const totalChunks = Math.ceil(t.file.size / t.chunkSize);
     return t.buffer.size >= totalChunks;
   }
 
   private _finishReceive(t: TransferState): void {
-    const totalChunks = Math.ceil(t.file.size / t.chunkSize) || 1;
+    const totalChunks = Math.ceil(t.file.size / t.chunkSize);
     const chunks: Uint8Array[] = [];
     for (let i = 0; i < totalChunks; i++) {
       const chunk = t.buffer.get(i);
@@ -503,6 +524,10 @@ export class TransferManager {
   }
 
   clear(): void {
+    for (const t of this.transfers.values()) {
+      for (const timer of t.ackTimers.values()) clearTimeout(timer);
+      t.ackTimers.clear();
+    }
     this.transfers.clear();
   }
 }

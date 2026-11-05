@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import JSZip from 'jszip';
-import { TransferManager, TransferState, CHUNK_SIZE_DEFAULT } from './TransferManager';
+import { TransferManager, TransferState } from './TransferManager';
+
+const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
 
 // ----------------------------------------------------------------------------
@@ -188,17 +190,20 @@ export default function GlobalShare() {
       const file = fileRefs.current.get(sendT.id);
       if (!file) return;
       if (sendT.offset >= file.size) {
-        manager.sendEof(sendT.id);
+        // N'annonce la fin qu'une fois tous les chunks acquittés.
+        if (sendT.pending.size === 0) manager.sendEof(sendT.id);
+        else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
         return;
       }
-      if (sendT.pending.size >= CHUNK_SIZE_DEFAULT) {
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), 50);
+      if (sendT.pending.size >= MAX_IN_FLIGHT_CHUNKS) {
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), 20);
         return;
       }
       const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
       const arrayBuffer = await blob.arrayBuffer();
       const chunk = new Uint8Array(arrayBuffer);
       if (sendT.method === 'relay') {
+        // sendChunk avance lui-même l'offset : ne pas le doubler ici.
         manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
       } else {
         const peer = peersRef.current[sendT.targetId];
@@ -207,10 +212,10 @@ export default function GlobalShare() {
             type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
             size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
           }));
+          sendT.offset += chunk.byteLength;
         }
       }
       sendT.nextSeq++;
-      sendT.offset += chunk.byteLength;
       const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
       transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
     };
