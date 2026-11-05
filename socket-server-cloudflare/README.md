@@ -1,8 +1,8 @@
 # GlobalShare Socket Server — Cloudflare Workers
 
-This is a free, always-on replacement for the Render Socket.IO server. It runs on
-Cloudflare Workers with a single SQLite-backed Durable Object. The browser keeps
-using `socket.io-client`; only the WebSocket transport is enabled.
+This is the signaling/relay server for GlobalShare. It runs on Cloudflare
+Workers with a single SQLite-backed Durable Object. The browser keeps using
+`socket.io-client`; only the WebSocket transport is enabled.
 
 ## Why
 
@@ -62,9 +62,9 @@ The GitHub Pages workflow currently embeds the deployed URL directly in
 NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
 ```
 
-Update that value if the Worker name/subdomain changes, then run the
-`Deploy to GitHub Pages` workflow manually (or push to `main`). The old
-`NEXT_PUBLIC_SOCKET_URL` secret is no longer used.
+Update that value if the Worker name/subdomain changes, then push or merge to
+`main` (or run the `Deploy to GitHub Pages` workflow manually). No GitHub secret
+is needed: the URL is public and lives in the workflow file.
 
 ## Configuration
 
@@ -72,8 +72,8 @@ Update that value if the Worker name/subdomain changes, then run the
   SQLite migration required by the Workers Free plan.
 - `ALLOWED_ORIGINS` in `src/index.ts` contains the GitHub Pages origin and local
   development origins. Add any custom frontend domain there.
-- Rooms are kept in memory in one Durable Object, exactly like the previous Node
-  server. If the object is restarted, clients reconnect and rejoin automatically.
+- Rooms are kept in memory in one Durable Object. If the object is restarted,
+  clients reconnect and rejoin automatically.
 
 ## API
 

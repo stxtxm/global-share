@@ -37,6 +37,24 @@ const formatSpeed = (bps: number): string => {
   return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
 };
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const getSocketUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return 'http://localhost:3001';
+    return window.location.origin;
+  }
+  return process.env.NEXT_PUBLIC_SOCKET_URL || '';
+};
+
+// Chrono d'un transfert : le temps est mis à jour par intervalle, jamais pendant le rendu.
+function TransferElapsed({ createdAt }: { createdAt: number }) {
+  const [now, setNow] = useState(createdAt);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{formatTime(now - createdAt)}</>;
+}
 
 // ----------------------------------------------------------------------------
 // Types
@@ -185,18 +203,10 @@ export default function GlobalShare() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const roomParam = params.get('room');
-      if (roomParam) setRoomId(roomParam);
+      // Différé : évite un rendu en cascade synchrone au montage (react-hooks).
+      if (roomParam) queueMicrotask(() => setRoomId(roomParam));
     }
   }, []);
-
-  const getSocketUrl = (): string => {
-    if (typeof window !== 'undefined') {
-      if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return 'http://localhost:3001';
-      return window.location.origin;
-    }
-    return process.env.NEXT_PUBLIC_SOCKET_URL || '';
-  };
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
@@ -481,7 +491,7 @@ export default function GlobalShare() {
     }
     startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
     e.target.value = '';
-  }, [startSending]);
+  }, [startSending, peers]);
 
   const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -515,7 +525,7 @@ export default function GlobalShare() {
       console.error('Folder zip failed', err);
       showToast('error', 'Erreur lors de la compression du dossier');
     }
-  }, [startSending]);
+  }, [startSending, peers, showToast]);
 
   const handleCameraSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -670,7 +680,7 @@ export default function GlobalShare() {
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
                     <span>{formatSpeed(t.speed)} / s</span>
-                    <span>{formatTime(Date.now() - t.createdAt)} · {t.confirmed > 0 ? formatBytes(t.confirmed) : '0 B'} envoyé(s)</span>
+                    <span><TransferElapsed createdAt={t.createdAt} /> · {t.confirmed > 0 ? formatBytes(t.confirmed) : '0 B'} envoyé(s)</span>
                   </div>
                 </div>
               ))}
@@ -733,7 +743,7 @@ export default function GlobalShare() {
         ref={folderInputRef}
         onChange={handleFolderSelect}
         className="hidden"
-        // @ts-ignore - webkitdirectory is non-standard but supported by Chromium/WebKit
+        // @ts-expect-error - webkitdirectory is non-standard but supported by Chromium/WebKit
         webkitdirectory=""
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />

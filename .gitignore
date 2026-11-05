@@ -11,10 +11,6 @@
 !.yarn/releases
 !.yarn/versions
 
-# socket-server dependencies
-/socket-server/node_modules
-/socket-server/node_modules/
-
 # cloudflare socket server dependencies and local state
 /socket-server-cloudflare/node_modules/
 /socket-server-cloudflare/.wrangler/
@@ -42,9 +38,6 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-
-# vercel
-.vercel
 
 # typescript
 *.tsbuildinfo

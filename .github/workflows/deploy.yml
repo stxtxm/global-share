@@ -1,6 +1,11 @@
 name: Deploy to GitHub Pages
 
+# Every push to main deploys. Merging a pull request into main produces such a
+# push, so a PR merge is deployed automatically. Manual runs stay available from
+# the Actions tab.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -28,6 +33,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
       - name: Build Next.js app
         run: npm run build
         env:
@@ -53,4 +64,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-

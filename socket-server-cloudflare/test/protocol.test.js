@@ -71,6 +71,14 @@ async function main() {
   }
   console.log('room membership ok');
 
+  const carol = await connectClient('carol');
+  const carolUsers = waitFor(carol, 'room-users');
+  carol.emit('join-room', { roomId: `${ROOM}-OTHER`, name: 'Carol' });
+  const [carolPeers] = await carolUsers;
+  if (carolPeers.length !== 0) throw new Error('rooms are not isolated');
+  carol.disconnect();
+  console.log('room isolation ok');
+
   const offerPromise = waitFor(bob, 'offer');
   alice.emit('offer', {
     target: bob.id,
