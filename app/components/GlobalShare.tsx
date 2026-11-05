@@ -88,6 +88,7 @@ export default function GlobalShare() {
   const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
   // Incrémenté à chaque socket créé : le TransferManager se rattache au bon socket.
   const [socketEpoch, setSocketEpoch] = useState(0);
+  const [activePeerId, setActivePeerId] = useState<string | null>(null);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -97,7 +98,6 @@ export default function GlobalShare() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const selectedPeerId = useRef<string | null>(null);
   const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -240,6 +240,7 @@ export default function GlobalShare() {
     Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
     peersRef.current = {};
     setPeers({});
+    setActivePeerId(null);
     setTransfers(prev => prev.map(t => { t.status = 'cancelled'; t.error = 'Nouveau salon'; return t; }));
     setStep('room');
     setConnectionStatus('connecting');
@@ -295,6 +296,7 @@ export default function GlobalShare() {
     });
     socket.on('user-left', (id) => {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
+      setActivePeerId(prev => (prev === id ? null : prev));
       managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
     });
     socket.on('offer', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } } });
@@ -315,6 +317,7 @@ export default function GlobalShare() {
     Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
     peersRef.current = {};
     setPeers({});
+    setActivePeerId(null);
     if (socketRef.current) {
       try { socketRef.current.disconnect(); } catch { /* ignore */ }
       socketRef.current = null;
@@ -404,8 +407,8 @@ export default function GlobalShare() {
   // ---- Sélection de fichiers ----
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedPeerId.current) return;
-    const targetId = selectedPeerId.current;
+    const targetId = activePeerId;
+    if (!file || !targetId) return;
     const peer = peers[targetId];
     if (!peer && !socketRef.current?.connected) {
       alert('Connexion au serveur perdue.');
@@ -425,13 +428,13 @@ export default function GlobalShare() {
       }
     }
     startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
-    e.target.value = '';
-  }, [startSending, peers]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [startSending, peers, activePeerId]);
 
   const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    const targetId = selectedPeerId.current;
-    e.target.value = '';
+    const targetId = activePeerId;
+    if (folderInputRef.current) folderInputRef.current.value = '';
     if (!targetId || files.length === 0) return;
     const peer = peers[targetId];
     if (!peer && !socketRef.current?.connected) { alert('Connexion au serveur perdue.'); return; }
@@ -460,16 +463,16 @@ export default function GlobalShare() {
       console.error('Folder zip failed', err);
       showToast('error', 'Erreur lors de la compression du dossier');
     }
-  }, [startSending, peers, showToast]);
+  }, [startSending, peers, showToast, activePeerId]);
 
   const handleCameraSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const targetId = selectedPeerId.current;
+      const targetId = activePeerId;
       if (targetId) startSending(targetId, file, 'relay');
-      e.target.value = '';
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
     }
-  }, [startSending]);
+  }, [startSending, activePeerId]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -628,9 +631,16 @@ export default function GlobalShare() {
           <h2 style={{ margin: 0, color: 'white', fontSize: '1rem' }}>Appareils ({peers && Object.keys(peers).length})</h2>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
             {peers && Object.values(peers).map(p => (
-              <div key={p.id} className="peer-card" style={
-                { background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px', border: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }
-              }>
+              <div
+                key={p.id}
+                className="peer-card"
+                role="button"
+                aria-pressed={activePeerId === p.id}
+                onClick={() => setActivePeerId(p.id)}
+                style={
+                  { background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px', border: activePeerId === p.id ? '1px solid var(--primary)' : '1px solid rgba(255,255,255,0.06)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }
+                }
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontWeight: 700 }}>{p.name.charAt(0).toUpperCase()}</div>
                   <div>
@@ -644,6 +654,37 @@ export default function GlobalShare() {
             {peers && Object.keys(peers).length === 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: '0.9rem', textAlign: 'center', padding: '20px' }}>Aucun appareil join</div>
             )}
+          </div>
+        </div>
+
+        {/* Actions d'envoi vers l'appareil sélectionné */}
+        <div style={{ background: 'rgba(30,30,30,0.3)', borderRadius: '12px', padding: '12px', border: '1px solid #333' }}>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: '8px' }}>
+            {activePeerId ? `Envoyer vers ${peers[activePeerId]?.name ?? 'cet appareil'}` : 'Sélectionnez un appareil'}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {([
+              { label: 'Fichier', ref: fileInputRef },
+              { label: 'Dossier', ref: folderInputRef },
+              { label: 'Caméra', ref: cameraInputRef },
+            ] as const).map(({ label, ref }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => ref.current?.click()}
+                disabled={!activePeerId}
+                style={{
+                  flex: 1, padding: '10px 12px', borderRadius: '10px', fontWeight: 600,
+                  border: '1px solid var(--primary)',
+                  background: activePeerId ? 'var(--primary)' : 'transparent',
+                  color: activePeerId ? 'black' : 'var(--text-dim)',
+                  cursor: activePeerId ? 'pointer' : 'not-allowed',
+                  opacity: activePeerId ? 1 : 0.5,
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       </main>
