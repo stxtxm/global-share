@@ -276,8 +276,8 @@ export class TransferManager {
     const t = this.transfers.get(id);
     if (!t) return;
     if (t.status === 'cancelled' || t.status === 'failed') return;
-    if (t.status === 'interrupted') {
-      this._setStatus(t, 'transferring', 'Reprise après déconnexion');
+    if (t.status === 'paused' || t.status === 'interrupted') {
+      this._setStatus(t, 'transferring', 'Reprise du transfert');
       this.onUpdate(t);
     }
   }
