@@ -2,6 +2,9 @@
 // Protocole Socket.IO amélioré : ack, resume, dedup, débit adaptatif
 import type { Socket } from 'socket.io-client';
 
+/** Résultat du contrôle SHA-256 du fichier reconstruit. */
+export type IntegrityStatus = 'unknown' | 'verified' | 'mismatch';
+
 export type TransferStatus =
   | 'pending'
   | 'transferring'
@@ -40,6 +43,11 @@ export interface TransferState {
   window: { start: number; bytes: number } | null;
   buffer: Map<number, Uint8Array>;
   ackTimers: Map<number, ReturnType<typeof setTimeout>>;
+  /** SHA-256 attendu du fichier complet (hexadécimal), si connu. */
+  hash?: string;
+  integrity: IntegrityStatus;
+  /** Réémission de l'EOF tant que l'autre partie n'a pas acquitté. */
+  eofTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface TransferInitPayload {
@@ -50,6 +58,7 @@ export interface TransferInitPayload {
   file: TransferFileMeta;
   chunkSize: number;
   method: 'p2p' | 'relay';
+  hash?: string;
 }
 
 export interface TransferChunkPayload {
@@ -94,12 +103,35 @@ export interface TransferEndPayload {
 }
 
 export const CHUNK_SIZE_DEFAULT = 64 * 1024;
+// Sans réémission, un seul paquet d'EOF perdu bloquait le transfert pour de bon.
+const EOF_RETRY_MS = 2000;
+// Au-delà, lire tout le fichier en mémoire serait risqué sur un téléphone.
+export const HASH_MAX_BYTES = 64 * 1024 * 1024;
+
+/** SHA-256 hexadécimal, ou null si l'API WebCrypto n'est pas disponible. */
+export async function sha256Hex(data: Uint8Array | ArrayBuffer): Promise<string | null> {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    if (!subtle) return null;
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    // Copie seulement si la vue ne couvre pas tout son buffer.
+    const exact = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength;
+    const source = (exact ? bytes.buffer : bytes.slice().buffer) as ArrayBuffer;
+    const digest = await subtle.digest('SHA-256', source);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch {
+    return null;
+  }
+}
 
 export class TransferManager {
   public socket: Socket;
   public myId: string;
   private transfers = new Map<string, TransferState>();
   private nextTransferId = 0;
+  private finishing = new Set<string>();
 
   public onUpdate: (t: TransferState) => void;
   public onComplete: (t: TransferState) => void;
@@ -138,7 +170,8 @@ export class TransferManager {
   startSend(
     file: { name: string; size: number; mime?: string },
     targetId: string,
-    method: 'p2p' | 'relay'
+    method: 'p2p' | 'relay',
+    hash?: string
   ): TransferState {
     const id = `t-${++this.nextTransferId}-${Date.now().toString(36)}`;
     const t: TransferState = {
@@ -163,6 +196,9 @@ export class TransferManager {
       window: null,
       buffer: new Map(),
       ackTimers: new Map(),
+      hash,
+      integrity: 'unknown',
+      eofTimer: null,
     };
     this.transfers.set(id, t);
     this._emit('transfer-init', {
@@ -173,6 +209,7 @@ export class TransferManager {
       file: { name: file.name, size: file.size, mime: file.mime },
       chunkSize: t.chunkSize,
       method: t.method,
+      hash: t.hash,
     });
     this.onUpdate(t);
     return t;
@@ -182,7 +219,8 @@ export class TransferManager {
     file: TransferFileMeta,
     initiator: string,
     method: 'p2p' | 'relay',
-    transferId?: string
+    transferId?: string,
+    hash?: string
   ): TransferState {
     // L'id doit être celui de l'expéditeur, sinon les chunks ne retrouvent pas le transfert.
     const id = transferId ?? `t-${++this.nextTransferId}-${Date.now().toString(36)}`;
@@ -208,6 +246,9 @@ export class TransferManager {
       window: null,
       buffer: new Map(),
       ackTimers: new Map(),
+      hash,
+      integrity: 'unknown',
+      eofTimer: null,
     };
     this.transfers.set(id, t);
     this.onUpdate(t);
@@ -268,11 +309,18 @@ export class TransferManager {
   sendEof(transferId: string): void {
     const t = this.transfers.get(transferId);
     if (!t || t.direction !== 'send') return;
-    this._emit('transfer-eof', {
-      transferId: t.id,
-      size: t.file.size,
-      target: t.targetId,
-    });
+    // Une seule boucle de réémission par transfert : le récepteur acquitte et
+    // ignore les EOF suivants, donc les répéter ne coûte rien.
+    if (t.status !== 'transferring' || t.eofTimer) return;
+    const emitEof = () => {
+      this._emit('transfer-eof', {
+        transferId: t.id,
+        size: t.file.size,
+        target: t.targetId,
+      });
+      t.eofTimer = setTimeout(emitEof, EOF_RETRY_MS);
+    };
+    emitEof();
   }
 
   onTransferInit(payload: {
@@ -281,6 +329,7 @@ export class TransferManager {
     target: string;
     file: { name: string; size: number; mime?: string };
     method: 'p2p' | 'relay';
+    hash?: string;
   }): void {
     const known = this.transfers.get(payload.transferId);
     if (known) {
@@ -288,7 +337,13 @@ export class TransferManager {
       this.onUpdate(known);
       return;
     }
-    const t = this.startReceive(payload.file, payload.initiator, payload.method, payload.transferId);
+    const t = this.startReceive(
+      payload.file,
+      payload.initiator,
+      payload.method,
+      payload.transferId,
+      payload.hash
+    );
     // targetId doit rester l'expéditeur : c'est vers lui que partent les ACK.
     t.targetId = payload.initiator;
     t.targetName = payload.initiator;
@@ -344,15 +399,21 @@ export class TransferManager {
     if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'receive') return;
-    this._sendEofAck(t);
     t.lastActivity = Date.now();
-    if (this._isComplete(t)) this._finishReceive(t);
+    // L'expéditeur réémet l'EOF tant qu'il n'a pas d'ACK : n'acquitter qu'une
+    // fois tout arrivé, et ne reconstruire le fichier qu'une seule fois.
+    // C'est ce qui lançait plusieurs téléchargements du même fichier.
+    if (!this._isComplete(t)) return;
+    this._sendEofAck(t);
+    void this._finishReceive(t);
   }
 
   onTransferEofAck(payload: { transferId: string; initiator: string; target: string }): void {
     if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t || t.direction !== 'send') return;
+    this._clearEofTimer(t);
+    if (t.status === 'completed') return;
     this._setStatus(t, 'completed', 'Fichier reçu avec succès');
     this._emit('transfer-end', {
       transferId: t.id,
@@ -367,6 +428,7 @@ export class TransferManager {
     if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t) return;
+    this._clearEofTimer(t);
     this._setStatus(t, 'cancelled', payload.reason ?? "Annulé par lautre partie");
     this._emit('transfer-end', {
       transferId: t.id,
@@ -386,7 +448,11 @@ export class TransferManager {
     if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t) return;
+    // Côté réception, seul le contrôle local termine le transfert : l'annonce
+    // de l'expéditeur ne doit pas court-circuiter la vérification du fichier.
+    if (t.direction === 'receive' && payload.status === 'completed') return;
     if (t.status === payload.status) return;
+    this._clearEofTimer(t);
     if (payload.status === 'completed' || payload.status === 'cancelled') {
       this._setStatus(t, payload.status, payload.reason ?? 'End of transfer');
       this._emit('transfer-end', {
@@ -415,6 +481,12 @@ export class TransferManager {
     if (reason) t.error = reason;
     t.lastActivity = Date.now();
     this.onUpdate(t);
+  }
+
+  private _clearEofTimer(t: TransferState): void {
+    if (!t.eofTimer) return;
+    clearTimeout(t.eofTimer);
+    t.eofTimer = null;
   }
 
   private _sendAck(t: TransferState, seq: number, size: number): void {
@@ -493,44 +565,71 @@ export class TransferManager {
     return t.buffer.size >= totalChunks;
   }
 
-  private _finishReceive(t: TransferState): void {
-    const totalChunks = Math.ceil(t.file.size / t.chunkSize);
-    const chunks: Uint8Array[] = [];
-    for (let i = 0; i < totalChunks; i++) {
-      const chunk = t.buffer.get(i);
-      if (!chunk) {
-        this._setStatus(t, 'failed', 'Fichier incomplet (séquence ' + i + ' manquante)');
-        this._emit('transfer-end', {
-          transferId: t.id,
-          status: 'failed',
-          reason: 'Fichier incomplet',
-          target: t.targetId,
-        });
-        return;
+  private async _finishReceive(t: TransferState): Promise<void> {
+    // Un même transfert ne se termine qu'une fois : sinon le fichier était
+    // proposé (et téléchargé) autant de fois que l'expéditeur réémettait l'EOF.
+    if (t.status === 'completed' || this.finishing.has(t.id)) return;
+    this.finishing.add(t.id);
+    try {
+      const totalChunks = Math.ceil(t.file.size / t.chunkSize);
+      const chunks: Uint8Array[] = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = t.buffer.get(i);
+        if (!chunk) {
+          this._setStatus(t, 'failed', 'Fichier incomplet (séquence ' + i + ' manquante)');
+          this._emit('transfer-end', {
+            transferId: t.id,
+            status: 'failed',
+            reason: 'Fichier incomplet',
+            target: t.targetId,
+          });
+          return;
+        }
+        chunks.push(chunk);
       }
-      chunks.push(chunk);
+      const merged = new Uint8Array(t.file.size);
+      let offset = 0;
+      for (const c of chunks) {
+        merged.set(c, offset);
+        offset += c.byteLength;
+      }
+      // Vérification avant de proposer le fichier : une corruption silencieuse
+      // donnait un APK impossible à installer, sans le moindre message.
+      if (t.hash) {
+        const digest = await sha256Hex(merged);
+        t.integrity = digest !== null && digest === t.hash.toLowerCase() ? 'verified' : 'mismatch';
+      }
+      t.buffer.clear();
+      this._setStatus(
+        t,
+        'completed',
+        t.integrity === 'mismatch' ? 'Fichier corrompu pendant le transfert' : 'Terminé'
+      );
+      this.onStatus(t);
+      this.onComplete(t);
+      (
+        window as unknown as {
+          globalShare?: {
+            onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void;
+          };
+        }
+      ).globalShare?.onFileSaved?.(
+        new Blob([merged], { type: t.file.mime || 'application/octet-stream' }),
+        t.file.name,
+        t.integrity
+      );
+    } finally {
+      this.finishing.delete(t.id);
     }
-    const total = t.file.size;
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const c of chunks) {
-      merged.set(c, offset);
-      offset += c.byteLength;
-    }
-    this._setStatus(t, 'completed', 'Terminé');
-    this.onStatus(t);
-    this.onComplete(t);
-    (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare?.onFileSaved?.(
-      new Blob([merged], { type: t.file.mime || 'application/octet-stream' }),
-      t.file.name
-    );
   }
 
   clear(): void {
     for (const t of this.transfers.values()) {
       for (const timer of t.ackTimers.values()) clearTimeout(timer);
       t.ackTimers.clear();
+      this._clearEofTimer(t);
     }
+    this.finishing.clear();
     this.transfers.clear();
   }
 }

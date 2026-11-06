@@ -5,7 +5,13 @@ import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import JSZip from 'jszip';
-import { TransferManager, TransferState } from './TransferManager';
+import {
+  TransferManager,
+  TransferState,
+  IntegrityStatus,
+  sha256Hex,
+  HASH_MAX_BYTES,
+} from './TransferManager';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -68,10 +74,19 @@ interface Toast {
   id: number; type: 'info' | 'success' | 'error' | 'warning'; message: string;
 }
 interface IncomingFile { buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null; }
-interface ReceivedFile { id: number; name: string; blob: Blob; size: number; }
+interface ReceivedFile {
+  id: number; name: string; blob: Blob; size: number;
+  /** URL du blob, créée une fois et conservée tant que la page vit. */
+  url: string;
+  integrity: IntegrityStatus;
+}
 
 declare global {
-  interface Window { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void }; }
+  interface Window {
+    globalShare?: {
+      onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void;
+    };
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -414,17 +429,33 @@ export default function GlobalShare() {
     setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
   }, []);
 
-  const startSending = useCallback((targetId: string, file: File, method: 'p2p' | 'relay') => {
+  const startSending = useCallback(async (targetId: string, file: File, method: 'p2p' | 'relay') => {
     if (!socketRef.current?.connected) {
       showToast('error', 'Connexion au serveur perdue');
       return;
     }
-    const t = managerRef.current?.startSend({ name: file.name, size: file.size, mime: file.type }, targetId, method);
+    // Empreinte du fichier : le récepteur vérifie qu'il a reconstruit exactement
+    // les mêmes octets. Au-delà de la limite on s'en passe, pour ne pas charger
+    // un fichier entier en mémoire sur un téléphone.
+    let hash: string | null = null;
+    if (file.size <= HASH_MAX_BYTES) {
+      hash = await sha256Hex(await file.arrayBuffer());
+    }
+    if (!socketRef.current?.connected) {
+      showToast('error', 'Connexion au serveur perdue');
+      return;
+    }
+    const t = managerRef.current?.startSend(
+      { name: file.name, size: file.size, mime: file.type },
+      targetId,
+      method,
+      hash ?? undefined
+    );
     if (t) {
       fileRefs.current.set(t.id, file);
       showToast('info', `Préparation de l envoi : ${file.name}`);
     }
-  }, []);
+  }, [showToast]);
 
   // ---- Sélection de fichiers ----
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -449,7 +480,7 @@ export default function GlobalShare() {
         return;
       }
     }
-    startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
+    void startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [startSending, peers, activePeerId]);
 
@@ -480,7 +511,7 @@ export default function GlobalShare() {
       const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
       const zipName = `${rootFolder}.zip`;
       const zipFile = new File([blob], zipName, { type: 'application/zip' });
-      startSending(targetId, zipFile, 'relay');
+      await startSending(targetId, zipFile, 'relay');
     } catch (err) {
       console.error('Folder zip failed', err);
       showToast('error', 'Erreur lors de la compression du dossier');
@@ -491,7 +522,7 @@ export default function GlobalShare() {
     const file = e.target.files?.[0];
     if (file) {
       const targetId = activePeerId;
-      if (targetId) startSending(targetId, file, 'relay');
+      if (targetId) void startSending(targetId, file, 'relay');
       if (cameraInputRef.current) cameraInputRef.current.value = '';
     }
   }, [startSending, activePeerId]);
@@ -510,8 +541,9 @@ export default function GlobalShare() {
   // ---- Sauvegarde des fichiers reçus ----
   // Android Chrome bloque les téléchargements lancés sans geste utilisateur :
   // le blob reste donc dans une liste avec un bouton explicite.
-  const downloadBlob = useCallback((blob: Blob, name: string) => {
-    const url = URL.createObjectURL(blob);
+  // L'URL du blob est créée une seule fois par fichier et n'est plus révoquée :
+  // la révoquer pendant que le navigateur écrit le fichier pouvait le tronquer.
+  const downloadUrl = useCallback((url: string, name: string) => {
     const a = document.createElement('a');
     a.href = url;
     a.download = name;
@@ -520,24 +552,27 @@ export default function GlobalShare() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    // Révocation différée : trop tôt, Android annule le téléchargement.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }, []);
 
-  const saveFile = useCallback((blob: Blob, name: string) => {
+  const saveFile = useCallback((blob: Blob, name: string, integrity: IntegrityStatus) => {
     const id = ++receivedFileIdRef.current;
-    setReceivedFiles(prev => [{ id, name, blob, size: blob.size }, ...prev]);
-    downloadBlob(blob, name);
-  }, [downloadBlob]);
+    const url = URL.createObjectURL(blob);
+    setReceivedFiles(prev => [{ id, name, blob, size: blob.size, url, integrity }, ...prev]);
+    if (integrity === 'mismatch') {
+      showToast('error', `Fichier corrompu pendant le transfert : ${name}. Renvoyez-le.`);
+      return;
+    }
+    downloadUrl(url, name);
+  }, [downloadUrl, showToast]);
 
   useEffect(() => {
     if (step === 'room') {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = { onFileSaved: saveFile };
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = { onFileSaved: saveFile };
     } else {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = undefined;
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
     }
     return () => {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = undefined;
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
     };
   }, [step, saveFile]);
 
@@ -668,11 +703,13 @@ export default function GlobalShare() {
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '10px' }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{formatBytes(f.size)}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                      {formatBytes(f.size)} · {f.integrity === 'verified' ? 'intégrité vérifiée' : f.integrity === 'mismatch' ? 'fichier corrompu' : 'intégrité non vérifiée'}
+                    </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => downloadBlob(f.blob, f.name)}
+                    onClick={() => downloadUrl(f.url, f.name)}
                     style={{ flexShrink: 0, padding: '10px 14px', borderRadius: '10px', fontWeight: 600, border: '1px solid var(--primary)', background: 'var(--primary)', color: 'black', cursor: 'pointer' }}
                   >
                     Télécharger
