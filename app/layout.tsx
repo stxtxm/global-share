@@ -21,9 +21,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1.0,
-  maximumScale: 1.0,
-  userScalable: false,
-  themeColor: "#bb86fc",
+  // Laisse le pincement pour zoomer (accessibilité) et étend la page sous
+  // l'encoche : les marges internes utilisent env(safe-area-inset-*).
+  viewportFit: "cover",
+  themeColor: "#0a0b10",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({
@@ -33,9 +35,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <head>
-        <script type="module" src="https://unpkg.com/ionicons@7.1.0/dist/ionicons/ionicons.esm.js" async></script>
-      </head>
       <body className={`${inter.variable} antialiased`}>
         <ServiceWorkerRegister />
         {children}
