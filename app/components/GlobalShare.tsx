@@ -107,6 +107,8 @@ export default function GlobalShare() {
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const transferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Empêche deux exécutions simultanées de la boucle d'envoi.
+  const sendLoopRunningRef = useRef(false);
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
   const toastIdRef = useRef(0);
@@ -182,46 +184,57 @@ export default function GlobalShare() {
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
     const sendLoop = async () => {
-      if (transferTimeoutRef.current) {
-        clearTimeout(transferTimeoutRef.current);
-        transferTimeoutRef.current = null;
-      }
-      const manager = managerRef.current;
-      if (!manager) return;
-      const transfers = manager.getAll();
-      const sendT = transfers.find(t => t.direction === 'send' && t.status === 'transferring');
-      if (!sendT) return;
-      const file = fileRefs.current.get(sendT.id);
-      if (!file) return;
-      if (sendT.offset >= file.size) {
-        // N'annonce la fin qu'une fois tous les chunks acquittés.
-        if (sendT.pending.size === 0) manager.sendEof(sendT.id);
-        else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
-        return;
-      }
-      if (sendT.pending.size >= MAX_IN_FLIGHT_CHUNKS) {
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), 20);
-        return;
-      }
-      const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
-      const arrayBuffer = await blob.arrayBuffer();
-      const chunk = new Uint8Array(arrayBuffer);
-      if (sendT.method === 'relay') {
-        // sendChunk avance lui-même l'offset : ne pas le doubler ici.
-        manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
-      } else {
-        const peer = peersRef.current[sendT.targetId];
-        if (peer) {
-          peer.send(JSON.stringify({
-            type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
-            size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
-          }));
-          sendT.offset += chunk.byteLength;
+      // Un ACK relance la boucle pendant que le chunk courant est encore en
+      // cours de lecture. Sans ce verrou, deux exécutions lisent le même
+      // `offset` et envoient le même bloc sous deux séquences différentes :
+      // le fichier reconstruit garde la bonne taille mais contient un bloc
+      // dupliqué et un bloc manquant (APK/zip corrompu).
+      if (sendLoopRunningRef.current) return;
+      sendLoopRunningRef.current = true;
+      try {
+        if (transferTimeoutRef.current) {
+          clearTimeout(transferTimeoutRef.current);
+          transferTimeoutRef.current = null;
         }
+        const manager = managerRef.current;
+        if (!manager) return;
+        const transfers = manager.getAll();
+        const sendT = transfers.find(t => t.direction === 'send' && t.status === 'transferring');
+        if (!sendT) return;
+        const file = fileRefs.current.get(sendT.id);
+        if (!file) return;
+        if (sendT.offset >= file.size) {
+          // N'annonce la fin qu'une fois tous les chunks acquittés.
+          if (sendT.pending.size === 0) manager.sendEof(sendT.id);
+          else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
+          return;
+        }
+        if (sendT.pending.size >= MAX_IN_FLIGHT_CHUNKS) {
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 20);
+          return;
+        }
+        const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
+        const arrayBuffer = await blob.arrayBuffer();
+        const chunk = new Uint8Array(arrayBuffer);
+        if (sendT.method === 'relay') {
+          // sendChunk avance lui-même l'offset : ne pas le doubler ici.
+          manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
+        } else {
+          const peer = peersRef.current[sendT.targetId];
+          if (peer) {
+            peer.send(JSON.stringify({
+              type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
+              size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
+            }));
+            sendT.offset += chunk.byteLength;
+          }
+        }
+        sendT.nextSeq++;
+        const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
+      } finally {
+        sendLoopRunningRef.current = false;
       }
-      sendT.nextSeq++;
-      const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
-      transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
     };
     void sendLoop();
     return () => {
