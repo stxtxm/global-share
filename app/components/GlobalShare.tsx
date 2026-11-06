@@ -209,6 +209,7 @@ export default function GlobalShare() {
   // Incrémenté à chaque socket créé : le TransferManager se rattache au bon socket.
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
+  const [trackingOpen, setTrackingOpen] = useState(false);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -770,6 +771,11 @@ export default function GlobalShare() {
 
   // ---- Salon actif ----
   const activePeer = activePeerId ? peers[activePeerId] : undefined;
+  const activeTransfers = transfers.filter(t => t.status === 'transferring' || t.status === 'pending');
+  const trackingProgress = activeTransfers.length
+    ? Math.round(activeTransfers.reduce((sum, t) => sum + t.progress, 0) / activeTransfers.length)
+    : 0;
+  const isTrackingOpen = trackingOpen && activeTransfers.length > 0;
 
   return (
     <div className="gs-app">
@@ -843,7 +849,7 @@ export default function GlobalShare() {
         </div>
       )}
 
-      <main className="gs-main">
+      <main className={`gs-main${activeTransfers.length > 0 ? ' gs-main--tracking' : ''}`}>
         {/* Transferts en cours et terminés */}
         {transfers.length > 0 && (
           <section className="gs-section" aria-label="Transferts">
@@ -852,8 +858,12 @@ export default function GlobalShare() {
               <span className="gs-count">{transfers.length}</span>
             </div>
             <div className="gs-list">
-              {transfers.map(t => (
-                <div key={t.id} className="gs-transfer">
+              {transfers.map((t, i) => (
+                <div
+                  key={t.id}
+                  className={`gs-transfer${t.status === 'completed' ? ' is-complete' : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                >
                   <div className="gs-transfer-head">
                     <div className="gs-transfer-text">
                       <div className="gs-transfer-name">{t.file.name}</div>
@@ -888,8 +898,8 @@ export default function GlobalShare() {
               <span className="gs-count">{receivedFiles.length}</span>
             </div>
             <div className="gs-list">
-              {receivedFiles.map(f => (
-                <div key={f.id} className="gs-file">
+              {receivedFiles.map((f, i) => (
+                <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
                   <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
                   <div className="gs-file-meta">
                     <div className="gs-file-name" title={f.name}>{f.name}</div>
@@ -945,11 +955,12 @@ export default function GlobalShare() {
             </div>
           ) : (
             <div className="gs-list">
-              {Object.values(peers).map(p => (
+              {Object.values(peers).map((p, i) => (
                 <button
                   key={p.id}
                   type="button"
-                  className="gs-peer"
+                  className={`gs-peer${p.status === 'connected' ? ' is-ready' : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
                   aria-pressed={activePeerId === p.id}
                   onClick={() => setActivePeerId(prev => (prev === p.id ? null : p.id))}
                 >
@@ -972,6 +983,52 @@ export default function GlobalShare() {
 
       {/* Barre d'action : toujours dans la zone du pouce */}
       <div className="gs-actionbar">
+        {activeTransfers.length > 0 && (
+          <div className={`gs-minibar${isTrackingOpen ? ' is-open' : ''}`}>
+            {isTrackingOpen && (
+              <div className="gs-minibar-panel">
+                {activeTransfers.map(t => (
+                  <div key={t.id} className="gs-minirow">
+                    <div className="gs-minirow-head">
+                      <span className="gs-minirow-name" title={t.file.name}>{t.file.name}</span>
+                      <span className="gs-minirow-pct">{t.progress}%</span>
+                    </div>
+                    <div className="gs-bar">
+                      <div className="gs-bar-fill" style={{ width: `${t.progress}%` }} />
+                    </div>
+                    <div className="gs-minirow-sub">
+                      {t.direction === 'send' ? 'Vers ' : 'De '}{t.targetName} · {formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="gs-minibar-track" aria-hidden="true">
+              <div className="gs-bar-fill" style={{ width: `${trackingProgress}%` }} />
+            </div>
+            <button
+              type="button"
+              className="gs-minibar-toggle"
+              onClick={() => setTrackingOpen(open => !open)}
+              aria-expanded={isTrackingOpen}
+            >
+              <span className="gs-minibar-badge" aria-hidden="true">{trackingProgress}%</span>
+              <span className="gs-minibar-text">
+                <strong>
+                  {activeTransfers.length > 1
+                    ? `${activeTransfers.length} transferts en cours`
+                    : activeTransfers[0].file.name}
+                </strong>
+                <span>
+                  {activeTransfers.length > 1
+                    ? 'Progression globale'
+                    : `${formatSpeed(activeTransfers[0].speed)}/s · ${formatBytes(activeTransfers[0].confirmed)}`}
+                </span>
+              </span>
+              <span className="gs-minibar-chevron" aria-hidden="true">▾</span>
+            </button>
+          </div>
+        )}
         <div className="gs-actionbar-target">
           {activePeer ? (
             <>Envoyer vers <strong>{activePeer.name}</strong></>
