@@ -52,6 +52,10 @@ jobs:
 
   build:
     needs: worker
+    # Un build Pages n'a besoin d'aucun nouveau Worker pour être publié. Sans
+    # cette condition, une panne Cloudflare (jeton expiré, API indisponible)
+    # bloquait aussi la publication du client. Le job worker reste rouge.
+    if: always() && needs.worker.result != 'cancelled'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
