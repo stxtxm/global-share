@@ -5,7 +5,15 @@ import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import SimplePeer from 'simple-peer/simplepeer.min.js';
 import JSZip from 'jszip';
-import { TransferManager, TransferState, CHUNK_SIZE_DEFAULT } from './TransferManager';
+import {
+  TransferManager,
+  TransferState,
+  IntegrityStatus,
+  sha256Hex,
+  HASH_MAX_BYTES,
+} from './TransferManager';
+
+const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
 
 // ----------------------------------------------------------------------------
@@ -37,6 +45,124 @@ const formatSpeed = (bps: number): string => {
   return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
 };
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const getSocketUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return 'http://localhost:3001';
+    return window.location.origin;
+  }
+  return process.env.NEXT_PUBLIC_SOCKET_URL || '';
+};
+
+// Libellés des états de transfert, pour ne pas afficher l'identifiant brut.
+const TRANSFER_LABELS: Record<string, string> = {
+  pending: 'En attente',
+  transferring: 'En cours',
+  paused: 'En pause',
+  interrupted: 'Interrompu',
+  completed: 'Terminé',
+  cancelled: 'Annulé',
+  failed: 'Échec',
+};
+
+// ---------------------------------------------------------------------------
+// Icônes — SVG inline : aucune requête réseau, taille pilotée par le CSS.
+// ---------------------------------------------------------------------------
+interface IconProps {
+  className?: string;
+}
+
+const iconProps = {
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.8,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': true,
+} as const;
+
+function IconBolt({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z" />
+    </svg>
+  );
+}
+
+function IconShare({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M12 15V4" />
+      <path d="m7.5 8.5 4.5-4.5 4.5 4.5" />
+      <path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6" />
+    </svg>
+  );
+}
+
+function IconClose({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+function IconFile({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+    </svg>
+  );
+}
+
+function IconFolder({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
+}
+
+function IconCamera({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13" r="3.2" />
+    </svg>
+  );
+}
+
+function IconDownload({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M12 4v10" />
+      <path d="m7.5 9.5 4.5 4.5 4.5-4.5" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
+function IconDevices({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <rect x="2.5" y="5" width="13" height="9.5" rx="2" />
+      <path d="M6.5 18.5h5" />
+      <rect x="16.5" y="10" width="5" height="9.5" rx="1.6" />
+    </svg>
+  );
+}
+
+// Chrono d'un transfert : le temps est mis à jour par intervalle, jamais pendant le rendu.
+function TransferElapsed({ createdAt }: { createdAt: number }) {
+  const [now, setNow] = useState(createdAt);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <>{formatTime(now - createdAt)}</>;
+}
 
 // ----------------------------------------------------------------------------
 // Types
@@ -48,9 +174,19 @@ interface Toast {
   id: number; type: 'info' | 'success' | 'error' | 'warning'; message: string;
 }
 interface IncomingFile { buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null; }
+interface ReceivedFile {
+  id: number; name: string; blob: Blob; size: number;
+  /** URL du blob, créée une fois et conservée tant que la page vit. */
+  url: string;
+  integrity: IntegrityStatus;
+}
 
 declare global {
-  interface Window { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void }; }
+  interface Window {
+    globalShare?: {
+      onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void;
+    };
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -63,11 +199,17 @@ export default function GlobalShare() {
   const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [transfers, setTransfers] = useState<TransferState[]>([]);
+  // Blobs reçus conservés pour proposer un téléchargement sur geste explicite.
+  const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
+  // Incrémenté à chaque socket créé : le TransferManager se rattache au bon socket.
+  const [socketEpoch, setSocketEpoch] = useState(0);
+  const [activePeerId, setActivePeerId] = useState<string | null>(null);
+  const [trackingOpen, setTrackingOpen] = useState(false);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -77,14 +219,16 @@ export default function GlobalShare() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const selectedPeerId = useRef<string | null>(null);
   const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
   const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const transferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Empêche deux exécutions simultanées de la boucle d'envoi.
+  const sendLoopRunningRef = useRef(false);
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
   const toastIdRef = useRef(0);
+  const receivedFileIdRef = useRef(0);
 
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
@@ -141,144 +285,78 @@ export default function GlobalShare() {
       s.off('transfer-ack'); s.off('transfer-eof'); s.off('transfer-eof-ack');
       s.off('transfer-cancel'); s.off('transfer-end');
     };
-  }, [showToast]);
-
-  // ---- Socket lifecycle ----
-  useEffect(() => {
-    const socket = io(getSocketUrl(), {
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity,
-      timeout: 10000,
-    } as Parameters<typeof io>[1]);
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      console.log('Connected to server');
-      setConnectionStatus('connected');
-      if (socketRef.current) socketRef.current.emit('join-room', { roomId, name: myName });
-      setStep('room');
-      setConnectErrorMessage(null);
-      connectErrorShownRef.current = false;
-    });
-
-    socket.on('disconnect', (reason) => {
-      console.log('Disconnected:', reason);
-      setConnectionStatus('disconnected');
-      if (reason === 'io server disconnect') socket.connect();
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('Connect error:', err);
-      setConnectionStatus('disconnected');
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
+  }, [showToast, socketEpoch]);
 
   // ---- URL room param ----
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const roomParam = params.get('room');
-      if (roomParam) setRoomId(roomParam);
+      // Différé : évite un rendu en cascade synchrone au montage (react-hooks).
+      if (roomParam) queueMicrotask(() => setRoomId(roomParam));
     }
   }, []);
-
-  const getSocketUrl = (): string => {
-    if (typeof window !== 'undefined') {
-      if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return 'http://localhost:3001';
-      return window.location.origin;
-    }
-    return process.env.NEXT_PUBLIC_SOCKET_URL || '';
-  };
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
     const sendLoop = async () => {
-      if (transferTimeoutRef.current) {
-        clearTimeout(transferTimeoutRef.current);
-        transferTimeoutRef.current = null;
-      }
-      const manager = managerRef.current;
-      if (!manager) return;
-      const transfers = manager.getAll();
-      const sendT = transfers.find(t => t.direction === 'send' && (t.status === 'transferring' || t.status === 'paused'));
-      if (!sendT) return;
-      if (sendT.status === 'paused') {
-        // En pause : on n'envoie rien, on attend que resume() soit appelé
-        return;
-      }
-      const file = fileRefs.current.get(sendT.id);
-      if (!file) return;
-      if (sendT.offset >= file.size) {
-        manager.sendEof(sendT.id);
-        return;
-      }
-      if (sendT.pending.size >= CHUNK_SIZE_DEFAULT) {
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), 50);
-        return;
-      }
-      const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
-      const arrayBuffer = await blob.arrayBuffer();
-      const chunk = new Uint8Array(arrayBuffer);
-      if (sendT.method === 'relay') {
-        manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
-      } else {
-        const peer = peersRef.current[sendT.targetId];
-        if (peer) {
-          peer.send(JSON.stringify({
-            type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
-            size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
-          }));
+      // Un ACK relance la boucle pendant que le chunk courant est encore en
+      // cours de lecture. Sans ce verrou, deux exécutions lisent le même
+      // `offset` et envoient le même bloc sous deux séquences différentes :
+      // le fichier reconstruit garde la bonne taille mais contient un bloc
+      // dupliqué et un bloc manquant (APK/zip corrompu).
+      if (sendLoopRunningRef.current) return;
+      sendLoopRunningRef.current = true;
+      try {
+        if (transferTimeoutRef.current) {
+          clearTimeout(transferTimeoutRef.current);
+          transferTimeoutRef.current = null;
         }
+        const manager = managerRef.current;
+        if (!manager) return;
+        const transfers = manager.getAll();
+        const sendT = transfers.find(t => t.direction === 'send' && t.status === 'transferring');
+        if (!sendT) return;
+        const file = fileRefs.current.get(sendT.id);
+        if (!file) return;
+        if (sendT.offset >= file.size) {
+          // N'annonce la fin qu'une fois tous les chunks acquittés.
+          if (sendT.pending.size === 0) manager.sendEof(sendT.id);
+          else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
+          return;
+        }
+        if (sendT.pending.size >= MAX_IN_FLIGHT_CHUNKS) {
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 20);
+          return;
+        }
+        const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
+        const arrayBuffer = await blob.arrayBuffer();
+        const chunk = new Uint8Array(arrayBuffer);
+        if (sendT.method === 'relay') {
+          // sendChunk avance lui-même l'offset : ne pas le doubler ici.
+          manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
+        } else {
+          const peer = peersRef.current[sendT.targetId];
+          if (peer) {
+            peer.send(JSON.stringify({
+              type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
+              size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
+            }));
+            sendT.offset += chunk.byteLength;
+          }
+        }
+        sendT.nextSeq++;
+        const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
+      } finally {
+        sendLoopRunningRef.current = false;
       }
-      sendT.nextSeq++;
-      sendT.offset += chunk.byteLength;
-      const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
-      transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
     };
     void sendLoop();
     return () => {
       if (transferTimeoutRef.current) clearTimeout(transferTimeoutRef.current);
     };
   }, [transfers]);
-
-  // ---- Handlers événements Socket (hors transfer) ----
-  useEffect(() => {
-    const socket = socketRef.current;
-    if (!socket) return;
-    const s = socket;
-    s.on('room-users', (users: { id: string; name: string }[]) => {
-      const next: Record<string, PeerInfo> = {};
-      users.forEach(u => next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' });
-      setPeers(prev => ({ ...prev, ...next }));
-    });
-    s.on('user-joined', ({ id, name }: { id: string; name: string }) => {
-      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
-    });
-    s.on('user-left', (id: string) => {
-      setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
-      managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
-    });
-    s.on('offer', (data: { caller: string; sdp: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } }
-    });
-    s.on('answer', (data: { caller: string; sdp: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } }
-    });
-    s.on('ice-candidate', (data: { caller: string; candidate: unknown }) => {
-      const peer = peersRef.current[data.caller];
-      if (peer && !peer.destroyed) { try { peer.signal(data.candidate); } catch { /* ignore */ } }
-    });
-  }, []);
 
   // ---- Gestion arrière-plan / réseau ----
   useEffect(() => {
@@ -300,6 +378,7 @@ export default function GlobalShare() {
     Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
     peersRef.current = {};
     setPeers({});
+    setActivePeerId(null);
     setTransfers(prev => prev.map(t => { t.status = 'cancelled'; t.error = 'Nouveau salon'; return t; }));
     setStep('room');
     setConnectionStatus('connecting');
@@ -310,6 +389,7 @@ export default function GlobalShare() {
       reconnectionDelayMax: 5000, reconnectionAttempts: Infinity, timeout: 10000,
     } as Parameters<typeof io>[1]);
     socketRef.current = socket;
+    setSocketEpoch(epoch => epoch + 1);
     const failConnect = (message: string) => {
       console.error(message);
       if (connectDeadlineTimeoutRef.current) { clearTimeout(connectDeadlineTimeoutRef.current); connectDeadlineTimeoutRef.current = null; }
@@ -354,6 +434,7 @@ export default function GlobalShare() {
     });
     socket.on('user-left', (id) => {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
+      setActivePeerId(prev => (prev === id ? null : prev));
       managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
     });
     socket.on('offer', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } } });
@@ -374,6 +455,7 @@ export default function GlobalShare() {
     Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
     peersRef.current = {};
     setPeers({});
+    setActivePeerId(null);
     if (socketRef.current) {
       try { socketRef.current.disconnect(); } catch { /* ignore */ }
       socketRef.current = null;
@@ -448,26 +530,42 @@ export default function GlobalShare() {
     setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
   }, []);
 
-  const startSending = useCallback((targetId: string, file: File, method: 'p2p' | 'relay') => {
+  const startSending = useCallback(async (targetId: string, file: File, method: 'p2p' | 'relay') => {
     if (!socketRef.current?.connected) {
       showToast('error', 'Connexion au serveur perdue');
       return;
     }
-    const t = managerRef.current?.startSend({ name: file.name, size: file.size, mime: file.type }, targetId, method);
+    // Empreinte du fichier : le récepteur vérifie qu'il a reconstruit exactement
+    // les mêmes octets. Au-delà de la limite on s'en passe, pour ne pas charger
+    // un fichier entier en mémoire sur un téléphone.
+    let hash: string | null = null;
+    if (file.size <= HASH_MAX_BYTES) {
+      hash = await sha256Hex(await file.arrayBuffer());
+    }
+    if (!socketRef.current?.connected) {
+      showToast('error', 'Connexion au serveur perdue');
+      return;
+    }
+    const t = managerRef.current?.startSend(
+      { name: file.name, size: file.size, mime: file.type },
+      targetId,
+      method,
+      hash ?? undefined
+    );
     if (t) {
       fileRefs.current.set(t.id, file);
       showToast('info', `Préparation de l envoi : ${file.name}`);
     }
-  }, []);
+  }, [showToast]);
 
   // ---- Sélection de fichiers ----
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedPeerId.current) return;
-    const targetId = selectedPeerId.current;
+    const targetId = activePeerId;
+    if (!file || !targetId) return;
     const peer = peers[targetId];
     if (!peer && !socketRef.current?.connected) {
-      alert('Connexion au serveur perdue.');
+      showToast('error', 'Connexion au serveur perdue.');
       e.target.value = '';
       return;
     }
@@ -478,19 +576,19 @@ export default function GlobalShare() {
       if (socketRef.current?.connected) {
         setPeers(prev => ({ ...prev, [targetId]: { id: targetId, name: prev[targetId]?.name || 'Appareil', status: 'connected', method: 'relay' } }));
       } else {
-        alert('Connexion au serveur perdue.');
+        showToast('error', 'Connexion au serveur perdue.');
         e.target.value = '';
         return;
       }
     }
-    startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
-    e.target.value = '';
-  }, [startSending]);
+    void startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [startSending, peers, activePeerId, showToast]);
 
   const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    const targetId = selectedPeerId.current;
-    e.target.value = '';
+    const targetId = activePeerId;
+    if (folderInputRef.current) folderInputRef.current.value = '';
     if (!targetId || files.length === 0) return;
     const peer = peers[targetId];
     if (!peer && !socketRef.current?.connected) { alert('Connexion au serveur perdue.'); return; }
@@ -514,27 +612,27 @@ export default function GlobalShare() {
       const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
       const zipName = `${rootFolder}.zip`;
       const zipFile = new File([blob], zipName, { type: 'application/zip' });
-      startSending(targetId, zipFile, 'relay');
+      await startSending(targetId, zipFile, 'relay');
     } catch (err) {
       console.error('Folder zip failed', err);
       showToast('error', 'Erreur lors de la compression du dossier');
     }
-  }, [startSending]);
+  }, [startSending, peers, showToast, activePeerId]);
 
   const handleCameraSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const targetId = selectedPeerId.current;
-      if (targetId) startSending(targetId, file, 'relay');
-      e.target.value = '';
+      const targetId = activePeerId;
+      if (targetId) void startSending(targetId, file, 'relay');
+      if (cameraInputRef.current) cameraInputRef.current.value = '';
     }
-  }, [startSending]);
+  }, [startSending, activePeerId]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
-    if (!roomId.trim()) { e.preventDefault(); alert('Veuillez entrer un code de salon.'); return; }
+    if (!roomId.trim()) { e.preventDefault(); showToast('warning', 'Saisissez un code de salon.'); return; }
     joinRoom();
-  }, [roomId, joinRoom]);
+  }, [roomId, joinRoom, showToast]);
 
   const handleReconnect = useCallback(() => {
     setShowErrorModal(false);
@@ -542,230 +640,441 @@ export default function GlobalShare() {
   }, [joinRoom]);
 
   // ---- Sauvegarde des fichiers reçus ----
-  const saveFile = (blob: Blob, name: string) => {
-    const url = URL.createObjectURL(blob);
+  // Android Chrome bloque les téléchargements lancés sans geste utilisateur :
+  // le blob reste donc dans une liste avec un bouton explicite.
+  // L'URL du blob est créée une seule fois par fichier et n'est plus révoquée :
+  // la révoquer pendant que le navigateur écrit le fichier pouvait le tronquer.
+  const downloadUrl = useCallback((url: string, name: string) => {
     const a = document.createElement('a');
     a.href = url;
     a.download = name;
+    a.rel = 'noopener';
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+    a.remove();
+  }, []);
+
+  const saveFile = useCallback((blob: Blob, name: string, integrity: IntegrityStatus) => {
+    const id = ++receivedFileIdRef.current;
+    const url = URL.createObjectURL(blob);
+    setReceivedFiles(prev => [{ id, name, blob, size: blob.size, url, integrity }, ...prev]);
+    if (integrity === 'mismatch') {
+      showToast('error', `Fichier corrompu pendant le transfert : ${name}. Renvoyez-le.`);
+      return;
+    }
+    downloadUrl(url, name);
+  }, [downloadUrl, showToast]);
+
+  // Partage du salon : feuille système sur mobile, presse-papiers ailleurs.
+  const copyRoomLink = useCallback(async () => {
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+    const link = `${window.location.origin}${basePath}/?room=${encodeURIComponent(roomId)}`;
+    const shareData = { title: 'GlobalShare', text: `Rejoins le salon ${roomId}`, url: link };
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      await navigator.clipboard.writeText(link);
+      showToast('success', 'Lien du salon copié');
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') return;
+      showToast('warning', `Lien du salon : ${link}`);
+    }
+  }, [roomId, showToast]);
 
   useEffect(() => {
     if (step === 'room') {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = { onFileSaved: saveFile };
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = { onFileSaved: saveFile };
     } else {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = undefined;
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
     }
     return () => {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string) => void } }).globalShare = undefined;
+      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
     };
   }, [step, saveFile]);
 
   // ---- Écran d accueil ----
   if (step === 'welcome') {
     return (
-      <div className="app-wrapper">
-        <header>
-          <Link href="/" className="brand">
-            {React.createElement('ion-icon', { name: 'planet' })} GlobalShare
+      <div className="gs-app gs-app--welcome">
+        <div className="gs-glow" aria-hidden="true" />
+        <header className="gs-topbar gs-topbar--bare">
+          <Link href="/" className="gs-brand">
+            <span className="gs-brand-mark"><IconBolt /></span>
+            <span>GlobalShare</span>
           </Link>
         </header>
-        <main className="welcome-screen">
-          <h1>Rejoindre un Salon</h1>
-          <p>Entrez le même code sur tous les appareils</p>
-          <div className="input-group">
-            <label>Votre Nom</label>
-            <input
-              value={myName}
-              onChange={e => setMyName(e.target.value)}
-            />
+        <main className="gs-welcome-main">
+          <div className="gs-hero">
+            <h1>Partagez un fichier, pas un compte</h1>
+            <p>Le même code sur deux appareils suffit. Le fichier part directement, sans inscription.</p>
           </div>
-          <div className="input-group">
-            <label>Code du Salon</label>
-            <input
-              value={roomId}
-              onChange={e => setRoomId(e.target.value.toUpperCase())}
-              placeholder="Ex: A1B2C3"
-              onKeyDown={handleKeyDown}
-            />
+          <div className="gs-card">
+            <div className="gs-field">
+              <label htmlFor="gs-name">Votre appareil</label>
+              <input
+                id="gs-name"
+                className="gs-input"
+                value={myName}
+                onChange={e => setMyName(e.target.value)}
+                placeholder="Nom de l'appareil"
+                maxLength={24}
+                enterKeyHint="next"
+              />
+            </div>
+            <div className="gs-field">
+              <label htmlFor="gs-room">Code du salon</label>
+              <input
+                id="gs-room"
+                className="gs-input gs-input--code"
+                value={roomId}
+                onChange={e => setRoomId(e.target.value.toUpperCase())}
+                placeholder="A1B2C3"
+                onKeyDown={handleKeyDown}
+                autoCapitalize="characters"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                maxLength={12}
+                enterKeyHint="go"
+              />
+              <span className="gs-hint">Le même code sur les deux appareils.</span>
+            </div>
+            <button
+              type="button"
+              className="gs-btn gs-btn--primary gs-btn--block"
+              onClick={() => joinRoom()}
+              disabled={!roomId.trim() || !myName.trim()}
+            >
+              Rejoindre le salon
+            </button>
+            <button
+              type="button"
+              className="gs-btn gs-btn--ghost gs-btn--block"
+              onClick={() => setRoomId(generateRoomId())}
+            >
+              <IconBolt className="gs-icon gs-icon--sm" />
+              Générer un code
+            </button>
           </div>
-          <button className="btn-primary" onClick={() => joinRoom()}>Rejoindre</button>
-          <button
-            style={{ background: 'transparent', border: 'none', color: 'var(--secondary)', marginTop: '20px', cursor: 'pointer' }}
-            onClick={() => setRoomId(generateRoomId())}
-          >
-            Générer un code aléatoire
-          </button>
+          <ul className="gs-steps" aria-label="Comment ça marche">
+            <li>1. Code partagé</li>
+            <li>2. Appareils reliés</li>
+            <li>3. Envoi direct</li>
+          </ul>
         </main>
       </div>
     );
   }
 
   // ---- Salon actif ----
+  const activePeer = activePeerId ? peers[activePeerId] : undefined;
+  const activeTransfers = transfers.filter(t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused');
+  const trackingProgress = activeTransfers.length
+    ? Math.round(activeTransfers.reduce((sum, t) => sum + t.progress, 0) / activeTransfers.length)
+    : 0;
+  const isTrackingOpen = trackingOpen && activeTransfers.length > 0;
+
   return (
-    <div className="app-wrapper">
-      <header>
-        <div className="brand" onClick={exitRoom}>
-          {React.createElement('ion-icon', { name: 'planet' })} GlobalShare
-        </div>
-        <div className="connection-status" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
-          {connectionStatus === 'connected' ? (
-            <span style={{ color: '#03dac6', fontWeight: 600 }}>● Connecté</span>
-          ) : connectionStatus === 'connecting' ? (
-            <span style={{ color: '#bb86fc', fontWeight: 600 }}>● Connexion…</span>
-          ) : (
-            <span style={{ color: '#cf6679', fontWeight: 600 }}>● Hors ligne</span>
-          )}
-          {connectErrorMessage && <span style={{ color: '#cf6679' }}>{connectErrorMessage}</span>}
+    <div className="gs-app">
+      <div className="gs-glow" aria-hidden="true" />
+      <header className="gs-topbar">
+        <button
+          type="button"
+          className="gs-room-chip"
+          onClick={() => void copyRoomLink()}
+          title="Partager le lien du salon"
+        >
+          <span className="gs-room-chip-label">Salon</span>
+          <span className="gs-room-chip-code">{roomId}</span>
+          <IconShare className="gs-icon gs-icon--sm" />
+        </button>
+        <div className="gs-topbar-right">
+          <span className={`gs-status gs-status--${connectionStatus}`} role="status">
+            <span className="gs-dot" aria-hidden="true" />
+            {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
+          </span>
+          <button
+            type="button"
+            className="gs-iconbtn"
+            onClick={exitRoom}
+            aria-label="Quitter le salon"
+            title="Quitter le salon"
+          >
+            <IconClose />
+          </button>
         </div>
       </header>
 
       {toasts.length > 0 && (
-        <div className="toast-container" style={{ position: 'fixed', top: '16px', left: '50%', transform: 'translateX(-50%)', zIndex: 3000, display: 'flex', flexDirection: 'column', gap: '8px', width: '90%' }}>
+        <div className="gs-toasts" aria-live="polite">
           {toasts.map(t => (
-            <div key={t.id} className={"toast " + (t.type === 'success' ? 'success' : t.type === 'error' ? 'error' : t.type === 'warning' ? 'warning' : 'info')} style={{ background: 'rgba(30,30,30,0.95)', border: '1px solid ' + (t.type === 'success' ? '#03dac6' : t.type === 'error' ? '#cf6679' : t.type === 'warning' ? '#ff9800' : '#bb86fc'), color: 'white', padding: '12px 16px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', maxWidth: '90%' }}>
-              <div style={{ fontWeight: 600 }}>{t.type === 'success' ? '✓' : t.type === 'error' ? '✗' : t.type === 'warning' ? '⚠' : 'ℹ'}</div>
-              <div style={{ fontSize: '0.9rem' }}>{t.message}</div>
+            <div
+              key={t.id}
+              className={`gs-toast gs-toast--${t.type}`}
+              role={t.type === 'error' ? 'alert' : 'status'}
+            >
+              <span className="gs-toast-icon" aria-hidden="true">
+                {t.type === 'success' ? '✓' : t.type === 'error' ? '!' : t.type === 'warning' ? '⚠' : 'i'}
+              </span>
+              <span>{t.message}</span>
             </div>
           ))}
         </div>
       )}
 
       {showErrorModal && (
-        <div className="gs-modal-overlay" onClick={() => setShowErrorModal(false)}>
-          <div className="gs-modal">
-            <div className="gs-modal-title">Connexion perdue</div>
-            <div className="gs-modal-body">{errorMessage || connectErrorMessage}</div>
-            <div className="gs-modal-actions">
-              <button className="gs-modal-btn" onClick={handleReconnect}>Reconnecter</button>
+        <div className="gs-overlay" onClick={() => setShowErrorModal(false)}>
+          <div
+            className="gs-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gs-sheet-title"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="gs-sheet-handle" aria-hidden="true" />
+            <div className="gs-sheet-title" id="gs-sheet-title">Connexion perdue</div>
+            <div className="gs-sheet-body">{errorMessage || connectErrorMessage}</div>
+            <div className="gs-sheet-actions">
+              <button type="button" className="gs-btn gs-btn--ghost" onClick={() => setShowErrorModal(false)}>
+                Fermer
+              </button>
+              <button type="button" className="gs-btn gs-btn--primary" onClick={handleReconnect}>
+                Réessayer
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      <main style={{ flex: 1, padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {/* Liste des transferts en cours */}
+      <main className={`gs-main${activeTransfers.length > 0 ? ' gs-main--tracking' : ''}`}>
+        {/* Transferts en cours et terminés */}
         {transfers.length > 0 && (
-          <div style={{ background: 'rgba(30,30,30,0.5)', borderRadius: '12px', padding: '12px', border: '1px solid #333' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h2 style={{ margin: 0, color: 'var(--primary)' }}>Transfert(s) en cours</h2>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{transfers.length} enregistré(s)</span>
+          <section className="gs-section" aria-label="Transferts">
+            <div className="gs-section-head">
+              <h2 className="gs-section-title">Transferts</h2>
+              <span className="gs-count">{transfers.length}</span>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {transfers.map(t => (
-                <div key={t.id} className="transfer-card" style={
-                  { background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px', border: '1px solid rgba(255,255,255,0.06)' }
-                }>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
-                    <div>
-                      <div style={{ fontWeight: 700, color: 'white' }}>{t.file.name}</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{formatBytes(t.file.size)} · {t.targetName}</div>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{t.status}</span>
-                      <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--secondary)' }}>{t.progress}%</span>
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-                        {t.status === 'transferring' ? (
-                          <button
-                            className="pause-btn"
-                            onClick={() => managerRef.current?.pause(t.id)}
-                            style={{
-                              background: 'rgba(255,255,255,0.1)',
-                              border: '1px solid rgba(255,255,255,0.2)',
-                              color: 'white',
-                              padding: '4px 10px',
-                              borderRadius: '6px',
-                              fontSize: '0.75rem',
-                              cursor: 'pointer',
-                              fontWeight: 600,
-                            }}
-                          >
-                            ⏸ Pause
-                          </button>
-                        ) : (
-                          <button
-                            className="resume-btn"
-                            onClick={() => managerRef.current?.resume(t.id)}
-                            style={{
-                              background: 'var(--secondary)',
-                              border: 'none',
-                              color: 'black',
-                              padding: '4px 10px',
-                              borderRadius: '6px',
-                              fontSize: '0.75rem',
-                              cursor: 'pointer',
-                              fontWeight: 600,
-                            }}
-                          >
-                            ▶ Reprendre
-                          </button>
-                        )}
+            <div className="gs-list">
+              {transfers.map((t, i) => (
+                <div
+                  key={t.id}
+                  className={`gs-transfer${t.status === 'completed' ? ' is-complete' : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                >
+                  <div className="gs-transfer-head">
+                    <div className="gs-transfer-text">
+                      <div className="gs-transfer-name">{t.file.name}</div>
+                      <div className="gs-transfer-sub">
+                        {t.direction === 'send' ? 'Vers ' : 'De '}
+                        <strong>{t.targetName}</strong> · {formatBytes(t.file.size)}
                       </div>
                     </div>
+                    <div className="gs-transfer-pct">{t.progress}%</div>
                   </div>
-                  <div style={{ height: 4, background: '#333', borderRadius: '3px', marginTop: '10px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', background: t.status === 'completed' ? '#03dac6' : t.status === 'cancelled' ? '#888' : '#bb86fc', width: `${t.progress}%`, transition: 'width 0.2s' }}></div>
+                  <div className="gs-bar">
+                    <div
+                      className={`gs-bar-fill${t.status === 'completed' ? ' is-done' : ''}`}
+                      style={{ width: `${t.progress}%` }}
+                    />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                    <span>{formatSpeed(t.speed)} / s</span>
-                    <span>{formatTime(Date.now() - t.createdAt)} · {t.confirmed > 0 ? formatBytes(t.confirmed) : '0 B'} envoyé(s)</span>
+                  <div className="gs-transfer-foot">
+                    <span>{TRANSFER_LABELS[t.status] ?? t.status} · <TransferElapsed createdAt={t.createdAt} /></span>
+                    {t.direction === 'send' && (t.status === 'transferring' || t.status === 'paused') && (
+                      <button
+                        type="button"
+                        className="gs-btn gs-btn--ghost gs-btn--sm"
+                        style={{ flexShrink: 0 }}
+                        onClick={() => (t.status === 'paused' ? managerRef.current?.resume(t.id) : managerRef.current?.pause(t.id))}
+                      >
+                        {t.status === 'paused' ? '▶ Reprendre' : '⏸ Pause'}
+                      </button>
+                    )}
+                    <span>{formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}</span>
                   </div>
                 </div>
               ))}
             </div>
-          </div>
+          </section>
+        )}
+
+        {/* Fichiers reçus : bouton requis par Android pour autoriser le téléchargement */}
+        {receivedFiles.length > 0 && (
+          <section className="gs-section" aria-label="Fichiers reçus">
+            <div className="gs-section-head">
+              <h2 className="gs-section-title">Reçus</h2>
+              <span className="gs-count">{receivedFiles.length}</span>
+            </div>
+            <div className="gs-list">
+              {receivedFiles.map((f, i) => (
+                <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
+                  <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
+                  <div className="gs-file-meta">
+                    <div className="gs-file-name" title={f.name}>{f.name}</div>
+                    <div className="gs-file-sub">
+                      <span>{formatBytes(f.size)}</span>
+                      <span
+                        className={`gs-pill ${f.integrity === 'verified'
+                          ? 'gs-pill--ok'
+                          : f.integrity === 'mismatch'
+                            ? 'gs-pill--bad'
+                            : 'gs-pill--warn'}`}
+                      >
+                        {f.integrity === 'verified'
+                          ? 'intégrité vérifiée'
+                          : f.integrity === 'mismatch'
+                            ? 'fichier corrompu'
+                            : 'intégrité non vérifiée'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="gs-dl"
+                    onClick={() => downloadUrl(f.url, f.name)}
+                  >
+                    <IconDownload className="gs-icon gs-icon--sm" />
+                    Télécharger
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* Liste des pairs */}
-        <div style={{ background: 'rgba(30,30,30,0.3)', borderRadius: '12px', padding: '12px', border: '1px solid #333' }}>
-          <h2 style={{ margin: 0, color: 'white', fontSize: '1rem' }}>Appareils ({peers && Object.keys(peers).length})</h2>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '8px' }}>
-            {peers && Object.values(peers).map(p => (
-              <div key={p.id} className="peer-card" style={
-                { background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '12px', border: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }
-              }>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontWeight: 700 }}>{p.name.charAt(0).toUpperCase()}</div>
-                  <div>
-                    <div style={{ fontWeight: 600, color: 'white', fontSize: '0.9rem' }}>{p.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{p.method === 'p2p' ? 'P2P direct' : 'Via relai'}</div>
-                  </div>
-                </div>
-                <div style={{ color: 'var(--text-dim)', fontSize: '1rem' }}>▸</div>
-              </div>
-            ))}
-            {peers && Object.keys(peers).length === 0 && (
-              <div style={{ color: 'var(--text-dim)', fontSize: '0.9rem', textAlign: 'center', padding: '20px' }}>Aucun appareil join</div>
-            )}
+        <section className="gs-section" aria-label="Appareils du salon">
+          <div className="gs-section-head">
+            <h2 className="gs-section-title">Appareils</h2>
+            <span className="gs-count">{Object.keys(peers).length}</span>
           </div>
-        </div>
+          {Object.keys(peers).length === 0 ? (
+            <div className="gs-empty">
+              <span className="gs-empty-icon" aria-hidden="true"><IconDevices /></span>
+              <strong>En attente d&apos;un autre appareil</strong>
+              <span>
+                Ouvrez GlobalShare sur l&apos;autre appareil et saisissez le code{' '}
+                <b className="gs-room-chip-code">{roomId}</b>.
+              </span>
+              <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" onClick={() => void copyRoomLink()}>
+                <IconShare className="gs-icon gs-icon--sm" />
+                Partager le lien
+              </button>
+            </div>
+          ) : (
+            <div className="gs-list">
+              {Object.values(peers).map((p, i) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`gs-peer${p.status === 'connected' ? ' is-ready' : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                  aria-pressed={activePeerId === p.id}
+                  onClick={() => setActivePeerId(prev => (prev === p.id ? null : p.id))}
+                >
+                  <span className="gs-avatar" aria-hidden="true">{p.name.charAt(0).toUpperCase()}</span>
+                  <span className="gs-peer-meta">
+                    <span className="gs-peer-name">{p.name}</span>
+                    <span className="gs-peer-sub">
+                      <span className="gs-tag">{p.method === 'p2p' ? 'P2P' : 'Relais'}</span>
+                      {p.status === 'connected' ? 'Prêt à recevoir' : 'Connexion…'}
+                    </span>
+                  </span>
+                  {activePeerId === p.id && <span className="gs-check" aria-hidden="true">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
       </main>
 
-      {/* Barre de transfert en cours */}
-      {transfers.find(t => t.status === 'transferring' || t.status === 'pending') && (
-        <div className="transfer-panel" style={{ background: 'rgba(30,30,30,0.6)', borderTop: '4px solid var(--secondary)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 700, color: 'white' }}>{transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.file.name}</div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{formatBytes(transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.confirmed || 0)} / {formatBytes(transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.file.size || 0)}</div>
+      {/* Barre d'action : toujours dans la zone du pouce */}
+      <div className="gs-actionbar">
+        {activeTransfers.length > 0 && (
+          <div className={`gs-minibar${isTrackingOpen ? ' is-open' : ''}`}>
+            {isTrackingOpen && (
+              <div className="gs-minibar-panel">
+                {activeTransfers.map(t => (
+                  <div key={t.id} className="gs-minirow">
+                    <div className="gs-minirow-head">
+                      <span className="gs-minirow-name" title={t.file.name}>{t.file.name}</span>
+                      <span className="gs-minirow-pct">{t.progress}%</span>
+                    </div>
+                    <div className="gs-bar">
+                      <div className="gs-bar-fill" style={{ width: `${t.progress}%` }} />
+                    </div>
+                    <div className="gs-minirow-sub">
+                      {t.direction === 'send' ? 'Vers ' : 'De '}{t.targetName} · {formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="gs-minibar-track" aria-hidden="true">
+              <div className="gs-bar-fill" style={{ width: `${trackingProgress}%` }} />
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--secondary)' }}>{transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.progress || 0}%</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{formatSpeed(transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.speed || 0)} / s</div>
-            </div>
+            <button
+              type="button"
+              className="gs-minibar-toggle"
+              onClick={() => setTrackingOpen(open => !open)}
+              aria-expanded={isTrackingOpen}
+            >
+              <span className="gs-minibar-badge" aria-hidden="true">{trackingProgress}%</span>
+              <span className="gs-minibar-text">
+                <strong>
+                  {activeTransfers.length > 1
+                    ? `${activeTransfers.length} transferts en cours`
+                    : activeTransfers[0].file.name}
+                </strong>
+                <span>
+                  {activeTransfers.length > 1
+                    ? 'Progression globale'
+                    : `${formatSpeed(activeTransfers[0].speed)}/s · ${formatBytes(activeTransfers[0].confirmed)}`}
+                </span>
+              </span>
+              <span className="gs-minibar-chevron" aria-hidden="true">▾</span>
+            </button>
           </div>
-          <div style={{ height: 6, background: '#333', borderRadius: '3px', marginTop: '8px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', background: 'var(--secondary)', width: `${transfers.find(t => t.status === 'transferring' || t.status === 'pending')?.progress || 0}%`, transition: 'width 0.2s' }}></div>
-          </div>
+        )}
+        <div className="gs-actionbar-target">
+          {activePeer ? (
+            <>Envoyer vers <strong>{activePeer.name}</strong></>
+          ) : (
+            'Choisissez un appareil ci-dessus'
+          )}
         </div>
-      )}
-
-      <div className="room-badge">
-        <span>Salon {roomId}</span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{myName}</span>
+        <div className="gs-actionbar-row">
+          <button
+            type="button"
+            className="gs-action gs-action--primary"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!activePeerId}
+          >
+            <IconFile />
+            <span>Fichier</span>
+          </button>
+          <button
+            type="button"
+            className="gs-action"
+            onClick={() => folderInputRef.current?.click()}
+            disabled={!activePeerId}
+          >
+            <IconFolder />
+            <span>Dossier</span>
+          </button>
+          <button
+            type="button"
+            className="gs-action"
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={!activePeerId}
+          >
+            <IconCamera />
+            <span>Photo</span>
+          </button>
+        </div>
       </div>
 
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept="*/*" className="hidden" />
@@ -774,7 +1083,7 @@ export default function GlobalShare() {
         ref={folderInputRef}
         onChange={handleFolderSelect}
         className="hidden"
-        // @ts-ignore - webkitdirectory is non-standard but supported by Chromium/WebKit
+        // @ts-expect-error - webkitdirectory is non-standard but supported by Chromium/WebKit
         webkitdirectory=""
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />

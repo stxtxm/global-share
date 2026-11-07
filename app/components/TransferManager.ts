@@ -269,17 +269,34 @@ export class TransferManager {
   pause(id: string): void {
     const t = this.transfers.get(id);
     if (!t) return;
+    if (t.status !== 'transferring') return;
+    // Une pause doit réellement arrêter le trafic : sans ça les chunks en
+    // attente d'acquittement continuaient d'être réémis toutes les 15 s et
+    // l'EOF était renvoyé pendant que l'utilisateur croyait le transfert figé.
+    if (t.direction === 'send') {
+      for (const timer of t.ackTimers.values()) clearTimeout(timer);
+      t.ackTimers.clear();
+      this._clearEofTimer(t);
+    }
     this._setStatus(t, 'paused', 'Transfert en attente');
   }
 
   resume(id: string): void {
     const t = this.transfers.get(id);
     if (!t) return;
-    if (t.status === 'cancelled' || t.status === 'failed') return;
-    if (t.status === 'paused' || t.status === 'interrupted') {
-      this._setStatus(t, 'transferring', 'Reprise du transfert');
-      this.onUpdate(t);
+    if (t.status === 'cancelled' || t.status === 'failed' || t.status === 'completed') return;
+    if (t.status !== 'paused' && t.status !== 'interrupted') return;
+    this._setStatus(t, 'transferring', 'Reprise du transfert');
+    if (t.direction !== 'send') return;
+    // Les minuteurs d'acquittement ont été coupés à la pause (ou perdus lors
+    // d'une déconnexion) : on relance l'émission des chunks encore en attente,
+    // sinon un ACK perdu juste avant la pause laissait un trou définitif.
+    for (const [seq, chunk] of t.pending) {
+      if (t.ackedSeqs.has(seq)) continue;
+      this._transmitChunk(t, seq, chunk);
+      this._startAckTimeout(t, seq, chunk.length);
     }
+    if (t.offset >= t.file.size && t.pending.size === 0) this.sendEof(t.id);
   }
 
   get(id: string): TransferState | undefined {
@@ -297,6 +314,7 @@ export class TransferManager {
   sendChunk(transferId: string, seq: number, chunk: Uint8Array): void {
     const t = this.transfers.get(transferId);
     if (!t || t.direction !== 'send') return;
+    if (t.status !== 'transferring') return;
     if (!t.pending.has(seq)) {
       t.pending.set(seq, chunk);
       t.offset += chunk.length;
@@ -528,6 +546,8 @@ export class TransferManager {
     const timer = setTimeout(() => {
       t.ackTimers.delete(seq);
       if (t.ackedSeqs.has(seq)) return;
+      // En pause, plus rien ne part : la reprise reprogramme ces minuteurs.
+      if (t.status !== 'transferring') return;
       const chunk = t.pending.get(seq);
       if (!chunk) return;
       t.attempts += 1;
