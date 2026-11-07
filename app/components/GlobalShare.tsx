@@ -204,16 +204,6 @@ function IconDevices({ className = 'gs-icon' }: IconProps) {
   );
 }
 
-// Chrono d'un transfert : le temps est mis à jour par intervalle, jamais pendant le rendu.
-function TransferElapsed({ createdAt }: { createdAt: number }) {
-  const [now, setNow] = useState(createdAt);
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return <>{formatTime(now - createdAt)}</>;
-}
-
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
@@ -726,7 +716,7 @@ export default function GlobalShare() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [startSending, peers, activePeerId, showToast]);
 
-  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     const targetId = activePeerId;
     if (folderInputRef.current) folderInputRef.current.value = '';
