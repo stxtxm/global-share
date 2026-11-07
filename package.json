@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "dev:all": "concurrently \"npm run dev\" \"npm --prefix socket-server-cloudflare run dev -- --port 3001\"",
-    "test:protocol": "npm --prefix socket-server-cloudflare run test:protocol"
+    "test:protocol": "npm --prefix socket-server-cloudflare run test:protocol",
+    "test:unit": "node --experimental-strip-types --test test/transfer-pause.test.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",

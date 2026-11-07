@@ -44,7 +44,6 @@ const formatSpeed = (bps: number): string => {
   if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
   return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
 };
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const getSocketUrl = (): string => {
   if (typeof window !== 'undefined') {
     if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
@@ -173,7 +172,6 @@ interface PeerInfo {
 interface Toast {
   id: number; type: 'info' | 'success' | 'error' | 'warning'; message: string;
 }
-interface IncomingFile { buffer: Uint8Array[]; size: number; meta: { name: string; size: number; mime?: string } | null; }
 interface ReceivedFile {
   id: number; name: string; blob: Blob; size: number;
   /** URL du blob, créée une fois et conservée tant que la page vit. */
@@ -203,7 +201,6 @@ export default function GlobalShare() {
   const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [connectErrorMessage, setConnectErrorMessage] = useState<string | null>(null);
   // Incrémenté à chaque socket créé : le TransferManager se rattache au bon socket.
@@ -219,9 +216,6 @@ export default function GlobalShare() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const incomingRef = useRef<IncomingFile>({ buffer: [], size: 0, meta: null });
-  const transferAbortRef = useRef<{ abort: boolean; targetId: string | null }>({ abort: false, targetId: null });
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const transferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Empêche deux exécutions simultanées de la boucle d'envoi.
   const sendLoopRunningRef = useRef(false);
@@ -265,7 +259,7 @@ export default function GlobalShare() {
           showToast('error', `Échec du transfert : ${t.file.name} — ${error}`);
         },
         onStatus: (t) => setTransfers(prev => prev.map(x => x.id === t.id ? t : x)),
-        onSendDone: (id) => {},
+        onSendDone: () => {},
       }
     );
     managerRef.current = manager;
@@ -442,15 +436,6 @@ export default function GlobalShare() {
     socket.on('ice-candidate', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.candidate); } catch { /* ignore */ } } });
   }, [roomId, myName]);
 
-  const resyncRoom = useCallback((reason: string) => {
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('join-room', { roomId, name: myName });
-    }
-    Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
-    peersRef.current = {};
-    setPeers({});
-  }, [roomId, myName]);
-
   const exitRoom = useCallback(() => {
     Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
     peersRef.current = {};
@@ -465,69 +450,6 @@ export default function GlobalShare() {
     setStep('welcome');
     setConnectionStatus('disconnected');
     setRoomId('');
-  }, []);
-
-  // ---- Gestion des pairs (P2P) ----
-  const addPeer = useCallback((id: string, name: string, initiator: boolean) => {
-    if (peersRef.current[id]) return;
-    setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'p2p' } }));
-    const p = new SimplePeer({ initiator, trickle: true, config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-    } } as RTCConfiguration);
-    const connectionTimeout = setTimeout(() => {
-      if (!p.connected) {
-        console.log('P2P timeout, using relay for', id);
-        setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connected', method: 'relay' } }));
-      }
-    }, 10000);
-    p.on('signal', (data: { type?: string; candidate?: unknown }) => {
-      if (data.type === 'offer') {
-        socketRef.current?.emit('offer', { target: id, caller: socketRef.current!.id, sdp: data });
-      } else if (data.type === 'answer') {
-        socketRef.current?.emit('answer', { target: id, caller: socketRef.current!.id, sdp: data });
-      } else if (data.candidate) {
-        socketRef.current?.emit('ice-candidate', { target: id, caller: socketRef.current!.id, candidate: data });
-      }
-    });
-    p.on('connect', () => {
-      clearTimeout(connectionTimeout);
-      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connected', method: 'p2p' } }));
-    });
-    p.on('data', (data: Buffer) => {
-      try {
-        const msg = JSON.parse(data.toString()) as {
-          type: string; transferId?: string; seq?: number; size?: number;
-          chunk?: ArrayBuffer; target?: string; initiator?: string;
-        };
-        if (msg.type === 'transfer-chunk') {
-          managerRef.current?.onTransferChunk({ transferId: msg.transferId!, seq: msg.seq!, size: msg.size!, chunk: Array.from(new Uint8Array(msg.chunk as ArrayBuffer)), target: socketRef.current?.id ?? '' });
-        } else if (msg.type === 'transfer-eof') {
-          managerRef.current?.onTransferEof({ transferId: msg.transferId!, size: msg.size!, target: socketRef.current?.id ?? '' });
-        } else if (msg.type === 'transfer-ack') {
-          managerRef.current?.onTransferAck({ transferId: msg.transferId!, seq: msg.seq!, size: msg.size!, initiator: socketRef.current?.id ?? '', target: msg.target! });
-        }
-      } catch { /* ignore */ }
-    });
-    p.on('error', (err: Error) => {
-      console.error('Peer error:', err);
-      clearTimeout(connectionTimeout);
-      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connected', method: 'relay' } }));
-    });
-    p.on('close', () => {
-      clearTimeout(connectionTimeout);
-      setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
-    });
-    peersRef.current[id] = p;
-  }, []);
-
-  const removePeer = useCallback((id: string) => {
-    const peer = peersRef.current[id];
-    if (peer) { try { peer.destroy(); } catch { /* ignore */ } }
-    delete peersRef.current[id];
-    setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
   }, []);
 
   const startSending = useCallback(async (targetId: string, file: File, method: 'p2p' | 'relay') => {
@@ -836,7 +758,7 @@ export default function GlobalShare() {
           >
             <div className="gs-sheet-handle" aria-hidden="true" />
             <div className="gs-sheet-title" id="gs-sheet-title">Connexion perdue</div>
-            <div className="gs-sheet-body">{errorMessage || connectErrorMessage}</div>
+            <div className="gs-sheet-body">{connectErrorMessage}</div>
             <div className="gs-sheet-actions">
               <button type="button" className="gs-btn gs-btn--ghost" onClick={() => setShowErrorModal(false)}>
                 Fermer

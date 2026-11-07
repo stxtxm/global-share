@@ -50,12 +50,32 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Le test unitaire exécute directement le TypeScript via le type
+          # stripping natif, disponible à partir de Node 22.
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test:unit
+
   build:
-    needs: worker
+    needs: [worker, test]
     # Un build Pages n'a besoin d'aucun nouveau Worker pour être publié. Sans
     # cette condition, une panne Cloudflare (jeton expiré, API indisponible)
     # bloquait aussi la publication du client. Le job worker reste rouge.
-    if: always() && needs.worker.result != 'cancelled'
+    if: always() && needs.worker.result != 'cancelled' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
