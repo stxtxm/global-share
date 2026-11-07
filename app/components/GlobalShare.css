@@ -666,6 +666,16 @@
   font-weight: 600;
 }
 
+/* Transport réel du transfert, à côté du destinataire. */
+.gs-transfer-sub .gs-tag {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.gs-tag--p2p {
+  color: var(--gs-accent-2);
+}
+
 .gs-transfer-pct {
   flex-shrink: 0;
   font-size: 0.95rem;

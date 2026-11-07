@@ -27,6 +27,8 @@ export interface TransferState {
   targetName: string;
   file: TransferFileMeta;
   method: 'p2p' | 'relay';
+  /** Transport réellement emprunté par les données ; il peut changer en cours de route. */
+  transport: 'p2p' | 'relay';
   chunkSize: number;
   status: TransferStatus;
   progress: number;
@@ -190,6 +192,7 @@ export class TransferManager {
       targetName: 'Appareil',
       file,
       method,
+      transport: method,
       chunkSize: CHUNK_SIZE_DEFAULT,
       status: 'transferring',
       progress: 0,
@@ -240,6 +243,7 @@ export class TransferManager {
       targetName: initiator,
       file,
       method,
+      transport: method,
       chunkSize: CHUNK_SIZE_DEFAULT,
       status: 'transferring',
       progress: 0,
@@ -383,6 +387,8 @@ export class TransferManager {
     size: number;
     chunk: number[] | Uint8Array;
     target: string;
+    /** Chemin réel de ce chunk ; absent = relais (les chunks socket passent par là). */
+    via?: 'p2p' | 'relay';
   }): void {
     if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
@@ -391,6 +397,11 @@ export class TransferManager {
       // Chunk déjà reçu mais ACK perdu : on le renvoie.
       this._sendAck(t, payload.seq, payload.size);
       return;
+    }
+    const via = payload.via ?? 'relay';
+    if (t.transport !== via) {
+      t.transport = via;
+      this.onStatus(t);
     }
     t.buffer.set(payload.seq, new Uint8Array(payload.chunk));
     t.confirmed += payload.size;
@@ -538,7 +549,17 @@ export class TransferManager {
     // P2P d'abord, relais ensuite : une réémission après perte d'ACK suit le
     // même choix, et retombe automatiquement sur le socket si le canal direct
     // a disparu entre-temps.
-    if (t.method === 'p2p' && this.p2pSender?.(t, seq, chunk)) return;
+    if (t.method === 'p2p' && this.p2pSender?.(t, seq, chunk)) {
+      if (t.transport !== 'p2p') {
+        t.transport = 'p2p';
+        this.onStatus(t);
+      }
+      return;
+    }
+    if (t.transport !== 'relay') {
+      t.transport = 'relay';
+      this.onStatus(t);
+    }
     this._emit('transfer-chunk', {
       transferId: t.id,
       seq,

@@ -102,6 +102,12 @@ jobs:
           # Public URL of the Cloudflare Worker (see socket-server-cloudflare/).
           # This is not a secret: it is embedded in the browser bundle anyway.
           NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
+          # Relais TURN facultatif (voir docs/DEPLOYMENT.md) : indispensable
+          # derrière un NAT symétrique, où la connexion directe échoue. Vides par
+          # défaut, auquel cas seuls les STUN publics sont utilisés.
+          NEXT_PUBLIC_TURN_URLS: ${{ vars.TURN_URLS }}
+          NEXT_PUBLIC_TURN_USERNAME: ${{ vars.TURN_USERNAME }}
+          NEXT_PUBLIC_TURN_CREDENTIAL: ${{ vars.TURN_CREDENTIAL }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v6

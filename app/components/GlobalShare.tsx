@@ -19,9 +19,25 @@ import './GlobalShare.css';
 // Délai au-delà duquel une tentative de connexion directe est abandonnée : le
 // relais prend le relais sans que l'utilisateur ait à attendre.
 const P2P_CONNECT_TIMEOUT_MS = 15_000;
+// Serveurs ICE. Les STUN publics suffisent sur la plupart des réseaux ; derrière
+// un NAT symétrique (4G de certains opérateurs, réseaux d'entreprise) seule une
+// redirection TURN permet d'établir la connexion, sinon on retombe sur le relais
+// Socket.IO. Le TURN se configure au build via NEXT_PUBLIC_TURN_* ; sans ces
+// variables, rien ne change (STUN seul).
+const TURN_URLS = (process.env.NEXT_PUBLIC_TURN_URLS ?? '')
+  .split(',')
+  .map(url => url.trim())
+  .filter(Boolean);
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  ...(TURN_URLS.length > 0
+    ? [{
+      urls: TURN_URLS,
+      username: process.env.NEXT_PUBLIC_TURN_USERNAME ?? '',
+      credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? '',
+    }]
+    : []),
 ];
 
 // Trames du canal de données P2P : longueur de l'id, id, séquence (uint32),
@@ -316,7 +332,8 @@ export default function GlobalShare() {
 
     const s = socket;
     s.on('transfer-init', (p) => manager.onTransferInit(p));
-    s.on('transfer-chunk', (p) => manager.onTransferChunk(p));
+    // Les chunks reçus par le socket viennent forcément du relais.
+    s.on('transfer-chunk', (p) => manager.onTransferChunk({ ...p, via: 'relay' }));
     s.on('transfer-ack', (p) => manager.onTransferAck(p));
     s.on('transfer-eof', (p) => manager.onTransferEof(p));
     s.on('transfer-eof-ack', (p) => manager.onTransferEofAck(p));
@@ -478,6 +495,7 @@ export default function GlobalShare() {
         size: frame.chunk.byteLength,
         chunk: frame.chunk,
         target: manager.selfId,
+        via: 'p2p',
       });
     });
 
@@ -948,6 +966,14 @@ export default function GlobalShare() {
                       <div className="gs-transfer-sub">
                         {t.direction === 'send' ? 'Vers ' : 'De '}
                         <strong>{t.targetName}</strong> · {formatBytes(t.file.size)}
+                        <span
+                          className={`gs-tag gs-tag--${t.transport}`}
+                          title={t.transport === 'p2p'
+                            ? 'Données échangées en direct entre les navigateurs'
+                            : 'Données relayées par le serveur'}
+                        >
+                          {t.transport === 'p2p' ? 'P2P' : 'Relais'}
+                        </span>
                       </div>
                     </div>
                     <div className="gs-transfer-pct">{t.progress}%</div>

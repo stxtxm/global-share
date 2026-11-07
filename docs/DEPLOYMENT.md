@@ -35,6 +35,29 @@ env:
 Si le Worker change de nom ou de sous-domaine, mettez à jour cette valeur dans
 le workflow. Cette URL est publique (elle finit dans le bundle navigateur).
 
+### Relais TURN (facultatif)
+
+Les transferts commencent par une connexion directe entre les deux navigateurs.
+Derrière un NAT symétrique (certaines offres 4G, réseaux d'entreprise), cette
+connexion ne peut pas aboutir : l'application retombe alors sur le relais
+Socket.IO, plus lent puisqu'il traverse le Worker. Un serveur **TURN** débloque
+ces réseaux tout en gardant le chiffrement WebRTC.
+
+Renseignez ces **variables de dépôt** (Settings → Secrets and variables →
+Actions → onglet *Variables*) ; elles sont injectées au build et, de toute
+façon, visibles dans le bundle public :
+
+| Variable | Exemple |
+| --- | --- |
+| `TURN_URLS` | `turn:turn.example.net:3478,turns:turn.example.net:5349` (séparés par des virgules) |
+| `TURN_USERNAME` | identifiant fourni par le service TURN |
+| `TURN_CREDENTIAL` | mot de passe ou jeton fourni par le service TURN |
+
+Sans ces variables, seuls les STUN publics de Google sont utilisés et le repli
+relais reste actif — rien ne casse. Comme tout identifiant embarqué côté
+navigateur est public, préférez un compte TURN dédié à ce site et des
+identifiants à durée de vie limitée (ou renouvelés régulièrement).
+
 ## 2. Backend — Cloudflare Worker
 
 Le Worker est déployé automatiquement par le même workflow, **avant** le
