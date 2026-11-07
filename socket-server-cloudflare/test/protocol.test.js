@@ -49,6 +49,32 @@ async function main() {
   if (!health.ok) throw new Error(`health returned ${health.status}`);
   console.log('health ok');
 
+  const turn = await fetch(`${URL}/turn`, {
+    headers: process.env.ORIGIN ? { Origin: process.env.ORIGIN } : {},
+  });
+  if (!turn.ok) throw new Error(`turn returned ${turn.status}`);
+  if (!turn.headers.get('access-control-allow-origin')) {
+    throw new Error('turn response lacks a CORS header');
+  }
+  const turnBody = await turn.json();
+  if (!Array.isArray(turnBody.urls)) throw new Error('turn body has no urls array');
+  if (turnBody.urls.length === 0) {
+    // Aucun secret configuré : la route doit rester servie et vide, pour que
+    // le client retombe simplement sur les STUN publics.
+    if (turnBody.ttl !== 0) throw new Error('empty turn body should carry ttl 0');
+    console.log('turn endpoint ok (not configured)');
+  } else {
+    const [expiry] = String(turnBody.username).split(':');
+    if (!/^\d+$/.test(expiry) || Number(expiry) * 1000 <= Date.now()) {
+      throw new Error(`turn username is not dated in the future: ${turnBody.username}`);
+    }
+    if (typeof turnBody.credential !== 'string' || turnBody.credential.length < 8) {
+      throw new Error('turn credential missing');
+    }
+    if (!(turnBody.ttl > 0)) throw new Error('configured turn body should carry a positive ttl');
+    console.log(`turn endpoint ok (ephemeral credentials, ttl ${turnBody.ttl}s)`);
+  }
+
   const alice = await connectClient('alice');
   const bob = await connectClient('bob');
 
