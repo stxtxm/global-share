@@ -65,7 +65,7 @@ export interface TransferChunkPayload {
   transferId: string;
   seq: number;
   size: number;
-  chunk: number[];
+  chunk: number[] | Uint8Array;
   target: string;
 }
 
@@ -132,6 +132,15 @@ export class TransferManager {
   private transfers = new Map<string, TransferState>();
   private nextTransferId = 0;
   private finishing = new Set<string>();
+
+  /**
+   * Transport direct optionnel (canal WebRTC). Renvoie true quand le chunk est
+   * réellement parti par ce canal ; false fait retomber l'émission sur le
+   * socket, c'est-à-dire sur le relais.
+   */
+  public p2pSender:
+    | ((t: TransferState, seq: number, chunk: Uint8Array) => boolean)
+    | null = null;
 
   public onUpdate: (t: TransferState) => void;
   public onComplete: (t: TransferState) => void;
@@ -372,7 +381,7 @@ export class TransferManager {
     transferId: string;
     seq: number;
     size: number;
-    chunk: number[];
+    chunk: number[] | Uint8Array;
     target: string;
   }): void {
     if (payload.target !== this.selfId) return;
@@ -526,6 +535,10 @@ export class TransferManager {
   }
 
   private _transmitChunk(t: TransferState, seq: number, chunk: Uint8Array): void {
+    // P2P d'abord, relais ensuite : une réémission après perte d'ACK suit le
+    // même choix, et retombe automatiquement sur le socket si le canal direct
+    // a disparu entre-temps.
+    if (t.method === 'p2p' && this.p2pSender?.(t, seq, chunk)) return;
     this._emit('transfer-chunk', {
       transferId: t.id,
       seq,

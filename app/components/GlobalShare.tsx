@@ -16,6 +16,40 @@ import {
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
 
+// Délai au-delà duquel une tentative de connexion directe est abandonnée : le
+// relais prend le relais sans que l'utilisateur ait à attendre.
+const P2P_CONNECT_TIMEOUT_MS = 15_000;
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+// Trames du canal de données P2P : longueur de l'id, id, séquence (uint32),
+// puis les octets bruts. Le JSON aurait quadruplé le volume (tableaux de
+// nombres) et dépassé la taille de message admise par les DataChannels.
+const encodeChunkFrame = (transferId: string, seq: number, chunk: Uint8Array): Uint8Array => {
+  const id = new TextEncoder().encode(transferId);
+  const header = 1 + id.length + 4;
+  const frame = new Uint8Array(header + chunk.byteLength);
+  frame[0] = id.length;
+  frame.set(id, 1);
+  new DataView(frame.buffer).setUint32(1 + id.length, seq);
+  frame.set(chunk, header);
+  return frame;
+};
+
+const decodeChunkFrame = (
+  data: Uint8Array
+): { transferId: string; seq: number; chunk: Uint8Array } | null => {
+  if (data.byteLength < 5) return null;
+  const idLength = data[0];
+  const header = 1 + idLength + 4;
+  if (idLength === 0 || data.byteLength < header) return null;
+  const transferId = new TextDecoder().decode(data.subarray(1, 1 + idLength));
+  const seq = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(1 + idLength);
+  return { transferId, seq, chunk: data.subarray(header) };
+};
+
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
@@ -212,6 +246,9 @@ export default function GlobalShare() {
   const socketRef = useRef<Socket | null>(null);
   const managerRef = useRef<TransferManager | null>(null);
   const peersRef = useRef<Record<string, SimplePeer>>({});
+  // État de la négociation directe par pair, et son délai d'abandon.
+  const p2pStateRef = useRef<Record<string, 'connecting' | 'open' | 'failed'>>({});
+  const p2pTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const fileRefs = useRef<Map<string, File>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -263,6 +300,19 @@ export default function GlobalShare() {
       }
     );
     managerRef.current = manager;
+    // Les chunks d'un transfert marqué P2P partent par le canal direct ; si le
+    // canal n'est pas (ou plus) ouvert, le TransferManager retombe sur le
+    // socket, donc sur le relais, sans perdre le transfert en cours.
+    manager.p2pSender = (t, seq, chunk) => {
+      const peer = peersRef.current[t.targetId];
+      if (!peer || peer.destroyed || !peer.connected) return false;
+      try {
+        peer.send(encodeChunkFrame(t.id, seq, chunk));
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     const s = socket;
     s.on('transfer-init', (p) => manager.onTransferInit(p));
@@ -326,19 +376,10 @@ export default function GlobalShare() {
         const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
         const arrayBuffer = await blob.arrayBuffer();
         const chunk = new Uint8Array(arrayBuffer);
-        if (sendT.method === 'relay') {
-          // sendChunk avance lui-même l'offset : ne pas le doubler ici.
-          manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
-        } else {
-          const peer = peersRef.current[sendT.targetId];
-          if (peer) {
-            peer.send(JSON.stringify({
-              type: 'transfer-chunk', transferId: sendT.id, seq: sendT.nextSeq,
-              size: chunk.length, chunk: Array.from(chunk), target: sendT.targetId,
-            }));
-            sendT.offset += chunk.byteLength;
-          }
-        }
+        // Le transport (canal direct ou relais) est choisi par le
+        // TransferManager : sendChunk avance l'offset, arme le suivi des ACK et
+        // réémet en cas de perte, quel que soit le chemin emprunté.
+        manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
         sendT.nextSeq++;
         const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
         transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
@@ -351,6 +392,101 @@ export default function GlobalShare() {
       if (transferTimeoutRef.current) clearTimeout(transferTimeoutRef.current);
     };
   }, [transfers]);
+
+  // ---- Chemin direct (WebRTC) ----
+  // Un canal de données par pair ; le relais Socket.IO reste le repli quand la
+  // connexion directe échoue (NAT symétrique, réseau filtrant, onglet en veille).
+  const destroyPeer = useCallback((peerId: string) => {
+    const timer = p2pTimersRef.current[peerId];
+    if (timer) {
+      clearTimeout(timer);
+      delete p2pTimersRef.current[peerId];
+    }
+    delete p2pStateRef.current[peerId];
+    const peer = peersRef.current[peerId];
+    delete peersRef.current[peerId];
+    if (peer && !peer.destroyed) {
+      try { peer.destroy(); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const ensureP2P = useCallback((peerId: string, initiator: boolean) => {
+    if (!peerId) return;
+    if (typeof window === 'undefined' || typeof window.RTCPeerConnection === 'undefined') return;
+    const current = peersRef.current[peerId];
+    if (current && !current.destroyed) return;
+    // Une tentative ratée ne doit pas se relancer en boucle : on reste relais.
+    if (p2pStateRef.current[peerId] === 'failed') return;
+    p2pStateRef.current[peerId] = 'connecting';
+
+    const peer = new SimplePeer({
+      initiator,
+      trickle: true,
+      config: { iceServers: ICE_SERVERS },
+    });
+    peersRef.current[peerId] = peer;
+
+    const fallback = () => {
+      p2pStateRef.current[peerId] = 'failed';
+      const timer = p2pTimersRef.current[peerId];
+      if (timer) {
+        clearTimeout(timer);
+        delete p2pTimersRef.current[peerId];
+      }
+      setPeers(prev => (prev[peerId]
+        ? { ...prev, [peerId]: { ...prev[peerId], method: 'relay' } }
+        : prev));
+    };
+
+    p2pTimersRef.current[peerId] = setTimeout(() => {
+      if (p2pStateRef.current[peerId] === 'open') return;
+      try { peer.destroy(); } catch { /* ignore */ }
+      fallback();
+    }, P2P_CONNECT_TIMEOUT_MS);
+
+    peer.on('signal', (signal: { type?: string }) => {
+      const socket = socketRef.current;
+      if (!socket?.connected) return;
+      const event = signal.type === 'offer' ? 'offer'
+        : signal.type === 'answer' ? 'answer'
+          : 'ice-candidate';
+      socket.emit(event, { target: peerId, sdp: signal });
+    });
+
+    peer.on('connect', () => {
+      p2pStateRef.current[peerId] = 'open';
+      const timer = p2pTimersRef.current[peerId];
+      if (timer) {
+        clearTimeout(timer);
+        delete p2pTimersRef.current[peerId];
+      }
+      setPeers(prev => (prev[peerId]
+        ? { ...prev, [peerId]: { ...prev[peerId], method: 'p2p', status: 'connected' } }
+        : prev));
+    });
+
+    peer.on('data', (data: Uint8Array) => {
+      const manager = managerRef.current;
+      if (!manager || !(data instanceof Uint8Array)) return;
+      const frame = decodeChunkFrame(data);
+      if (!frame) return;
+      // Même chemin qu'en relais : acquittement, déduplication et contrôle
+      // d'intégrité restent identiques.
+      manager.onTransferChunk({
+        transferId: frame.transferId,
+        seq: frame.seq,
+        size: frame.chunk.byteLength,
+        chunk: frame.chunk,
+        target: manager.selfId,
+      });
+    });
+
+    peer.on('error', fallback);
+    peer.on('close', () => {
+      if (peersRef.current[peerId] === peer) delete peersRef.current[peerId];
+      fallback();
+    });
+  }, []);
 
   // ---- Gestion arrière-plan / réseau ----
   useEffect(() => {
@@ -369,7 +505,7 @@ export default function GlobalShare() {
       try { socketRef.current.disconnect(); } catch { /* ignore */ }
       socketRef.current = null;
     }
-    Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
+    Object.keys(peersRef.current).forEach(destroyPeer);
     peersRef.current = {};
     setPeers({});
     setActivePeerId(null);
@@ -408,6 +544,9 @@ export default function GlobalShare() {
     socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
       setConnectionStatus('disconnected');
+      // Les identifiants changent à la reconnexion : les canaux directs
+      // deviennent caducs et seront renégociés sur les nouveaux ids.
+      Object.keys(peersRef.current).forEach(destroyPeer);
       if (reason === 'io server disconnect') socket.connect();
     });
     socket.on('connect_error', () => {
@@ -419,25 +558,42 @@ export default function GlobalShare() {
       }
     });
     socket.on('room-users', (users: { id: string; name: string }[]) => {
+      const selfId = socket.id ?? '';
       const next: Record<string, PeerInfo> = {};
-      users.forEach(u => next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' });
+      users.forEach(u => {
+        next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' };
+        // Règle déterministe pour que les deux côtés ne s'offrent pas la
+        // connexion en même temps : l'id le plus petit propose.
+        ensureP2P(u.id, selfId < u.id);
+      });
       setPeers(prev => ({ ...prev, ...next }));
     });
     socket.on('user-joined', ({ id, name }) => {
       setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
+      ensureP2P(id, (socket.id ?? '') < id);
     });
     socket.on('user-left', (id) => {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
       setActivePeerId(prev => (prev === id ? null : prev));
+      destroyPeer(id);
       managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
     });
-    socket.on('offer', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } } });
-    socket.on('answer', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.sdp as object); } catch { /* ignore */ } } });
-    socket.on('ice-candidate', (data) => { const peer = peersRef.current[data.caller]; if (peer && !peer.destroyed) { try { peer.signal(data.candidate); } catch { /* ignore */ } } });
-  }, [roomId, myName]);
+    // Signalisation WebRTC : le worker ne fait que la transmettre, la connexion
+    // directe se négocie entre les deux navigateurs.
+    const onSignal = (data: { caller: string; sdp?: object }) => {
+      if (!data?.caller || !data.sdp) return;
+      ensureP2P(data.caller, false);
+      const peer = peersRef.current[data.caller];
+      if (!peer || peer.destroyed) return;
+      try { peer.signal(data.sdp); } catch { /* signal tardif ou obsolète */ }
+    };
+    socket.on('offer', onSignal);
+    socket.on('answer', onSignal);
+    socket.on('ice-candidate', onSignal);
+  }, [roomId, myName, ensureP2P, destroyPeer]);
 
   const exitRoom = useCallback(() => {
-    Object.values(peersRef.current).forEach(p => { try { p.destroy(); } catch { /* ignore */ } });
+    Object.keys(peersRef.current).forEach(destroyPeer);
     peersRef.current = {};
     setPeers({});
     setActivePeerId(null);
@@ -450,7 +606,7 @@ export default function GlobalShare() {
     setStep('welcome');
     setConnectionStatus('disconnected');
     setRoomId('');
-  }, []);
+  }, [destroyPeer]);
 
   const startSending = useCallback(async (targetId: string, file: File, method: 'p2p' | 'relay') => {
     if (!socketRef.current?.connected) {
