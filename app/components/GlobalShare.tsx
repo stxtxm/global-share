@@ -280,6 +280,16 @@ export default function GlobalShare() {
   const iceServersRef = useRef<RTCIceServer[]>(BASE_ICE_SERVERS);
   const turnValidUntilRef = useRef(0);
 
+  const [renderTime, setRenderTime] = useState(0);
+
+  // Maintenir un timestamp de rafraîchissement pour l'affichage du temps écoulé
+  // (évite d'appeler Date.now() directement pendant le render).
+  useEffect(() => {
+    setRenderTime(Date.now());
+    const id = setInterval(() => setRenderTime(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
     setToasts(prev => [...prev, { id, type, message }]);
@@ -716,7 +726,7 @@ export default function GlobalShare() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, [startSending, peers, activePeerId, showToast]);
 
-  const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     const targetId = activePeerId;
     if (folderInputRef.current) folderInputRef.current.value = '';
@@ -1020,7 +1030,7 @@ export default function GlobalShare() {
                     />
                   </div>
                   <div className="gs-transfer-foot">
-                    <span>{TRANSFER_LABELS[t.status] ?? t.status} · <TransferElapsed createdAt={t.createdAt} /></span>
+                    <span>{TRANSFER_LABELS[t.status] ?? t.status} · {formatTime(renderTime - t.createdAt)}</span>
                     {t.direction === 'send' && (t.status === 'transferring' || t.status === 'paused') && (
                       <button
                         type="button"
