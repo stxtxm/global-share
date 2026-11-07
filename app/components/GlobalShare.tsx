@@ -28,7 +28,8 @@ const TURN_URLS = (process.env.NEXT_PUBLIC_TURN_URLS ?? '')
   .split(',')
   .map(url => url.trim())
   .filter(Boolean);
-const ICE_SERVERS: RTCIceServer[] = [
+// Repli statique, utile si aucun secret TURN n'est configuré côté Worker.
+const BASE_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   ...(TURN_URLS.length > 0
@@ -276,6 +277,8 @@ export default function GlobalShare() {
   const connectErrorShownRef = useRef(false);
   const toastIdRef = useRef(0);
   const receivedFileIdRef = useRef(0);
+  const iceServersRef = useRef<RTCIceServer[]>(BASE_ICE_SERVERS);
+  const turnValidUntilRef = useRef(0);
 
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
@@ -410,6 +413,34 @@ export default function GlobalShare() {
     };
   }, [transfers]);
 
+  // Identifiants TURN éphémères servis par le Worker : le navigateur n'embarque
+  // donc aucun mot de passe durable. Renouvelés à mi-vie pour qu'une
+  // négociation tardive ne tombe jamais sur des identifiants expirés ; sans
+  // configuration côté Worker, l'appel renvoie une liste vide et l'on reste
+  // sur les STUN publics.
+  const refreshIceServers = useCallback(async () => {
+    if (Date.now() < turnValidUntilRef.current) return;
+    const base = getSocketUrl().replace(/\/+$/, '');
+    if (!base) return;
+    try {
+      const res = await fetch(`${base}/turn`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        urls?: string[]; username?: string; credential?: string; ttl?: number;
+      };
+      if (!data.urls || data.urls.length === 0) return;
+      iceServersRef.current = [
+        ...BASE_ICE_SERVERS,
+        { urls: data.urls, username: data.username ?? '', credential: data.credential ?? '' },
+      ];
+      const ttl = typeof data.ttl === 'number' && data.ttl > 0 ? data.ttl : 3600;
+      turnValidUntilRef.current = Date.now() + Math.max(60, ttl / 2) * 1000;
+    } catch {
+      // Pas de TURN joignable : les STUN suffisent sur la plupart des réseaux,
+      // et le relais Socket.IO reste le dernier recours.
+    }
+  }, []);
+
   // ---- Chemin direct (WebRTC) ----
   // Un canal de données par pair ; le relais Socket.IO reste le repli quand la
   // connexion directe échoue (NAT symétrique, réseau filtrant, onglet en veille).
@@ -427,7 +458,7 @@ export default function GlobalShare() {
     }
   }, []);
 
-  const ensureP2P = useCallback((peerId: string, initiator: boolean) => {
+  const ensureP2P = useCallback(async (peerId: string, initiator: boolean) => {
     if (!peerId) return;
     if (typeof window === 'undefined' || typeof window.RTCPeerConnection === 'undefined') return;
     const current = peersRef.current[peerId];
@@ -436,10 +467,14 @@ export default function GlobalShare() {
     if (p2pStateRef.current[peerId] === 'failed') return;
     p2pStateRef.current[peerId] = 'connecting';
 
+    // Les identifiants TURN, s'il y en a, doivent être frais au moment où la
+    // connexion se négocie.
+    await refreshIceServers();
+
     const peer = new SimplePeer({
       initiator,
       trickle: true,
-      config: { iceServers: ICE_SERVERS },
+      config: { iceServers: iceServersRef.current },
     });
     peersRef.current[peerId] = peer;
 
@@ -504,7 +539,7 @@ export default function GlobalShare() {
       if (peersRef.current[peerId] === peer) delete peersRef.current[peerId];
       fallback();
     });
-  }, []);
+  }, [refreshIceServers]);
 
   // ---- Gestion arrière-plan / réseau ----
   useEffect(() => {
@@ -582,13 +617,13 @@ export default function GlobalShare() {
         next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' };
         // Règle déterministe pour que les deux côtés ne s'offrent pas la
         // connexion en même temps : l'id le plus petit propose.
-        ensureP2P(u.id, selfId < u.id);
+        void ensureP2P(u.id, selfId < u.id);
       });
       setPeers(prev => ({ ...prev, ...next }));
     });
     socket.on('user-joined', ({ id, name }) => {
       setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
-      ensureP2P(id, (socket.id ?? '') < id);
+      void ensureP2P(id, (socket.id ?? '') < id);
     });
     socket.on('user-left', (id) => {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
@@ -600,7 +635,7 @@ export default function GlobalShare() {
     // directe se négocie entre les deux navigateurs.
     const onSignal = (data: { caller: string; sdp?: object }) => {
       if (!data?.caller || !data.sdp) return;
-      ensureP2P(data.caller, false);
+      void ensureP2P(data.caller, false);
       const peer = peersRef.current[data.caller];
       if (!peer || peer.destroyed) return;
       try { peer.signal(data.sdp); } catch { /* signal tardif ou obsolète */ }

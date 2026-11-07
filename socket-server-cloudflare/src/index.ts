@@ -1,5 +1,11 @@
 export interface Env {
   ROOMS: DurableObjectNamespace;
+  /** URLs TURN séparées par des virgules (ex. "turn:h:3478,turns:h:5349"). */
+  TURN_URLS?: string;
+  /** Secret partagé avec le serveur TURN, pour la TURN REST API. */
+  TURN_SECRET?: string;
+  /** Durée de vie des identifiants TURN, en secondes (défaut 3600). */
+  TURN_TTL_SECONDS?: string;
 }
 
 type BinaryAttachment = ArrayBuffer | ArrayBufferView;
@@ -35,6 +41,78 @@ const ALLOWED_ORIGINS = new Set([
   'http://127.0.0.1:3001',
 ]);
 
+// --- Identifiants TURN éphémères -------------------------------------------
+// Le serveur TURN et le Worker partagent un secret : le nom d'utilisateur porte
+// la date d'expiration et le mot de passe en est la signature HMAC-SHA1, comme
+// le définit la TURN REST API. Les identifiants servis au navigateur expirent
+// d'eux-mêmes, donc aucun mot de passe durable ne traîne dans le bundle public.
+const TURN_DEFAULT_TTL_SECONDS = 3600;
+const TURN_USER_PREFIX = 'global-share';
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+async function sha1(data: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest('SHA-1', data));
+}
+
+function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const out = new Uint8Array(left.length + right.length);
+  out.set(left, 0);
+  out.set(right, left.length);
+  return out;
+}
+
+async function hmacSha1Base64(secret: string, message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  let key = encoder.encode(secret);
+  if (key.length > 64) key = await sha1(key);
+  // HMAC n'existe pas pour SHA-1 dans WebCrypto : on applique la construction
+  // générique (blocs ipad/opad) sur le digest SHA-1.
+  const inner = new Uint8Array(64);
+  const outer = new Uint8Array(64);
+  for (let i = 0; i < 64; i += 1) {
+    const byte = key[i] ?? 0;
+    inner[i] = byte ^ 0x36;
+    outer[i] = byte ^ 0x5c;
+  }
+  const digestedInner = await sha1(concatBytes(inner, encoder.encode(message)));
+  return toBase64(await sha1(concatBytes(outer, digestedInner)));
+}
+
+function turnJson(body: unknown, origin: string | null): Response {
+  return new Response(JSON.stringify(body), {
+    headers: {
+      'content-type': 'application/json',
+      'access-control-allow-origin': origin && ALLOWED_ORIGINS.has(origin) ? origin : '*',
+      'cache-control': 'no-store',
+      vary: 'Origin',
+    },
+  });
+}
+
+async function handleTurn(env: Env, origin: string | null): Promise<Response> {
+  const urls = (env.TURN_URLS ?? '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean);
+  if (urls.length === 0 || !env.TURN_SECRET) {
+    // Rien de configuré : le client reste sur les STUN publics, et le repli
+    // relais Socket.IO continue de fonctionner.
+    return turnJson({ urls: [], ttl: 0 }, origin);
+  }
+  const configured = Number.parseInt(env.TURN_TTL_SECONDS ?? '', 10);
+  const ttl = Number.isFinite(configured) && configured > 0
+    ? Math.min(Math.max(configured, 60), 86_400)
+    : TURN_DEFAULT_TTL_SECONDS;
+  const username = `${Math.floor(Date.now() / 1000) + ttl}:${TURN_USER_PREFIX}`;
+  const credential = await hmacSha1Base64(env.TURN_SECRET, username);
+  return turnJson({ urls, username, credential, ttl }, origin);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -50,6 +128,10 @@ export default {
           },
         }
       );
+    }
+
+    if (url.pathname === '/turn') {
+      return handleTurn(env, request.headers.get('Origin'));
     }
 
     if (url.pathname.startsWith('/socket.io/')) {

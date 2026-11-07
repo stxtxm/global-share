@@ -43,20 +43,35 @@ connexion ne peut pas aboutir : l'application retombe alors sur le relais
 Socket.IO, plus lent puisqu'il traverse le Worker. Un serveur **TURN** débloque
 ces réseaux tout en gardant le chiffrement WebRTC.
 
-Renseignez ces **variables de dépôt** (Settings → Secrets and variables →
-Actions → onglet *Variables*) ; elles sont injectées au build et, de toute
-façon, visibles dans le bundle public :
+Les identifiants sont **générés à la demande par le Worker**, jamais embarqués
+dans le bundle : le navigateur appelle `GET /turn` au moment de négocier et
+reçoit un nom d'utilisateur daté plus sa signature HMAC-SHA1 (TURN REST API).
+Ils expirent d'eux-mêmes (`TURN_TTL_SECONDS`, une heure par défaut, renouvelés
+à mi-vie par le client).
 
-| Variable | Exemple |
-| --- | --- |
-| `TURN_URLS` | `turn:turn.example.net:3478,turns:turn.example.net:5349` (séparés par des virgules) |
-| `TURN_USERNAME` | identifiant fourni par le service TURN |
-| `TURN_CREDENTIAL` | mot de passe ou jeton fourni par le service TURN |
+Côté Worker, deux valeurs suffisent :
 
-Sans ces variables, seuls les STUN publics de Google sont utilisés et le repli
-relais reste actif — rien ne casse. Comme tout identifiant embarqué côté
-navigateur est public, préférez un compte TURN dédié à ce site et des
-identifiants à durée de vie limitée (ou renouvelés régulièrement).
+| Nom | Nature | Exemple |
+| --- | --- | --- |
+| `TURN_URLS` | variable | `turn:turn.example.net:3478,turns:turn.example.net:5349` (séparés par des virgules) |
+| `TURN_SECRET` | **secret** | secret partagé avec le serveur TURN (`wrangler secret put TURN_SECRET`) |
+| `TURN_TTL_SECONDS` | variable, facultative | `3600` |
+
+Le serveur TURN doit accepter ce mode (`use-auth-secret` pour coturn, ou
+l'équivalent chez un fournisseur managé). Vérification rapide une fois
+configuré :
+
+```bash
+curl -s https://global-share-socket.sitizstorm.workers.dev/turn
+# {"urls":["turn:…"],"username":"<expiration>:global-share","credential":"…","ttl":3600}
+# {"urls":[],"ttl":0} tant que rien n'est configuré
+```
+
+Sans configuration, seuls les STUN publics de Google sont utilisés et le repli
+relais reste actif — rien ne casse. À défaut de secret partagé, il reste
+possible de figer des identifiants au build avec les variables de dépôt
+`TURN_URLS`, `TURN_USERNAME` et `TURN_CREDENTIAL`, mais ils sont alors lisibles
+par n'importe qui dans le bundle public.
 
 ## 2. Backend — Cloudflare Worker
 
