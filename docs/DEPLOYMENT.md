@@ -107,6 +107,15 @@ npx wrangler deploy --durable-objects-code-update-mode immediate
 trouve dans `ALLOWED_ORIGINS` (`src/index.ts`) : elle doit contenir l'origine du
 frontend (`https://stxtxm.github.io`) et les origines de développement.
 
+L'application de bureau, elle, n'a pas d'origine fixe : elle sert sa page depuis
+`http://127.0.0.1:<port>` avec un **port tiré au hasard** au lancement. La règle
+`LOOPBACK_ORIGIN` accepte donc toute origine `http://localhost:<port>` et
+`http://127.0.0.1:<port>`, quel que soit le port ; ne la remplacez pas par une
+liste de ports fixes, sinon la création et l'entrée dans un salon échouent dans
+l'app installée alors que le site web continue de fonctionner. Le test
+`npm run test:origin` couvre les deux côtés (loopback accepté, origine distante
+refusée).
+
 Vérification rapide :
 
 ```bash
@@ -124,6 +133,7 @@ Les logs en production sont accessibles avec `npx wrangler tail`.
 | `npx tsc --noEmit` | frontend |
 | `npm --prefix socket-server-cloudflare run typecheck` | Worker |
 | `npm run test:protocol` | protocole Socket.IO (Worker local) |
+| `npm run test:origin` | origines autorisées (Worker local ou distant) |
 | `npm run build` | export statique |
 
 Le test de protocole a besoin d'un Worker qui tourne :
@@ -143,6 +153,19 @@ notification de déconnexion. Pour le lancer contre une instance distante :
 SOCKET_URL=https://global-share-socket.sitizstorm.workers.dev npm run test:protocol
 ```
 
+Le test d'origines fait de même et peut viser aussi bien le Worker local que la
+production :
+
+```bash
+SOCKET_URL=https://global-share-socket.sitizstorm.workers.dev npm run test:origin
+# allowed  http://127.0.0.1:51234
+# allowed  http://localhost:51234
+# allowed  https://stxtxm.github.io
+# refused  https://evil.example
+# refused  http://192.168.1.20:51234
+# ALL OK
+```
+
 ## 4. Dépannage
 
 - **Page blanche ou assets en 404** : vérifier que Pages utilise bien
@@ -151,6 +174,25 @@ SOCKET_URL=https://global-share-socket.sitizstorm.workers.dev npm run test:proto
   vérifier l'onglet Actions et la protection de branche.
 - **Connexion Socket.IO impossible** : vérifier `NEXT_PUBLIC_SOCKET_URL`, que
   l'origine figure dans `ALLOWED_ORIGINS`, et `/health`.
+- **App de bureau : « échec de connexion » en créant ou en rejoignant un salon**
+  alors que le site web fonctionne. Le Worker répond `403 Origin not allowed`
+  parce que la page Electron est servie sur `http://127.0.0.1:<port aléatoire>`.
+  Diagnostiquer avec un **vrai handshake WebSocket** : `curl` en HTTP/2 renvoie
+  toujours `400` (pas d'upgrade) et ne prouve rien, utilisez `--http1.1`.
+
+  ```bash
+  curl -sS --http1.1 -o /dev/null -w '%{http_code}\n' \
+    -H 'Origin: http://127.0.0.1:45123' \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==' \
+    'https://global-share-socket.sitizstorm.workers.dev/socket.io/?EIO=4&transport=websocket'
+  # 101 = origine acceptée, 403 = « Origin not allowed »
+  ```
+
+  Le contrôle est fait par `isAllowedOrigin()` dans `src/index.ts` :
+  `ALLOWED_ORIGINS` pour les origines distantes, `LOOPBACK_ORIGIN` pour tout
+  port local. Le correctif est côté Worker uniquement — inutile de publier une
+  nouvelle version de l'app — et `npm run test:origin` empêche la régression.
 - **Le merge d'une PR ne déploie pas** : le merge doit produire un push sur
   `main` (merge commit ou squash) ; un merge dans une autre branche ne déploie
   rien.
