@@ -41,6 +41,17 @@ const ALLOWED_ORIGINS = new Set([
   'http://127.0.0.1:3001',
 ]);
 
+// L'application de bureau sert sa page depuis un serveur local sur un port
+// choisi au hasard : toute origine de loopback est donc acceptée, sinon la
+// connexion au salon échoue en « Origin not allowed ».
+const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/;
+
+function isAllowedOrigin(origin: string | null): boolean {
+  // Une requête sans Origin ne vient pas d'une page web (client natif, test).
+  if (!origin) return true;
+  return ALLOWED_ORIGINS.has(origin) || LOOPBACK_ORIGIN.test(origin);
+}
+
 // --- Identifiants TURN éphémères -------------------------------------------
 // Le serveur TURN et le Worker partagent un secret : le nom d'utilisateur porte
 // la date d'expiration et le mot de passe en est la signature HMAC-SHA1, comme
@@ -142,8 +153,7 @@ export default {
         });
       }
 
-      const origin = request.headers.get('Origin');
-      if (origin && !ALLOWED_ORIGINS.has(origin)) {
+      if (!isAllowedOrigin(request.headers.get('Origin'))) {
         return new Response('Origin not allowed.', { status: 403 });
       }
 
