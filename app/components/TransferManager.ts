@@ -277,6 +277,21 @@ export class TransferManager {
       reason,
       target: t.targetId,
     });
+    // `_setStatus` ne prévient que du changement d'état : sans cet appel, la
+    // ligne annulée restait affichée « En cours » dans l'interface locale.
+    this.onCancel(t, reason);
+  }
+
+  /**
+   * Annule les transferts qui visent un pair précis (départ du salon, perte de
+   * réseau). L'événement `user-left` porte l'identifiant du pair, pas celui du
+   * transfert : le passer à `cancel()` ne trouvait rien et la ligne restait
+   * bloquée sur « En cours ».
+   */
+  cancelForPeer(peerId: string, reason: string): void {
+    Array.from(this.transfers.values())
+      .filter((t) => t.targetId === peerId)
+      .forEach((t) => this.cancel(t.id, reason));
   }
 
   pause(id: string): void {

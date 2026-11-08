@@ -708,7 +708,7 @@ export default function GlobalShare() {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
       setActivePeerId(prev => (prev === id ? null : prev));
       destroyPeer(id);
-      managerRef.current?.cancel(id, "L'appareil s'est déconnecté");
+      managerRef.current?.cancelForPeer(id, "L'appareil s'est déconnecté");
     });
     // Signalisation WebRTC : le worker ne fait que la transmettre, la connexion
     // directe se négocie entre les deux navigateurs.
