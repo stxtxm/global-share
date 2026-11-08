@@ -2,6 +2,9 @@
 
 const { app, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const { spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 8_000;
@@ -9,13 +12,9 @@ const FIRST_CHECK_DELAY_MS = 8_000;
 let getWindow = () => null;
 let checking = false;
 let downloading = false;
+let installing = false;
 let manualCheck = false;
 let promptedVersion = null;
-
-// rpm et deb s'installent via pkexec/sudo : l'utilisateur devra saisir son mot
-// de passe au moment de l'installation. Un AppImage se remplace sans rien
-// demander (process.env.APPIMAGE n'est défini que dans ce cas).
-const needsElevation = () => process.platform === 'linux' && !process.env.APPIMAGE;
 
 function messageBox(options) {
   const window = getWindow();
@@ -24,57 +23,63 @@ function messageBox(options) {
     : dialog.showMessageBox(options);
 }
 
-async function promptDownload(info) {
-  if (downloading || info.version === promptedVersion) return;
-  promptedVersion = info.version;
+function setProgress(value) {
+  const window = getWindow();
+  if (window && !window.isDestroyed()) window.setProgressBar(value);
+}
 
-  const { response } = await messageBox({
-    type: 'info',
-    title: 'Mise à jour disponible',
-    message: `GlobalShare ${info.version} est disponible.`,
-    detail:
-      `Vous utilisez la version ${app.getVersion()}. ` +
-      "La mise à jour se télécharge en arrière-plan puis s'installe au redémarrage.",
-    buttons: ['Télécharger', 'Plus tard'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (response !== 0) return;
-
-  downloading = true;
+// Type du paquet Linux installé, écrit par electron-builder dans
+// resources/package-type. Un AppImage (et Windows) renvoie null : sa mise à
+// jour s'installe toute seule, sans mot de passe.
+function linuxPackageType() {
+  if (process.platform !== 'linux' || process.env.APPIMAGE) return null;
   try {
-    await autoUpdater.downloadUpdate();
-  } catch (error) {
-    downloading = false;
-    promptedVersion = null;
-    reportError(error, true);
+    const type = fs.readFileSync(path.join(process.resourcesPath, 'package-type'), 'utf8').trim();
+    return type === 'rpm' || type === 'deb' ? type : null;
+  } catch {
+    return null;
   }
 }
 
-async function promptInstall(info) {
-  downloading = false;
-  const window = getWindow();
-  if (window && !window.isDestroyed()) window.setProgressBar(-1);
-
-  const { response } = await messageBox({
-    type: 'info',
-    title: 'Mise à jour prête',
-    message: `GlobalShare ${info.version} est téléchargée.`,
-    detail: needsElevation()
-      ? "L'installation du paquet (rpm/deb) demande le mot de passe administrateur via l'invite du système. " +
-        "« Plus tard » installera la mise à jour à la fermeture de l'application."
-      : "Redémarrez pour utiliser la nouvelle version. « Plus tard » l'installera à la fermeture de l'application.",
-    buttons: ['Redémarrer et installer', 'Plus tard'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-
-  if (response === 0) {
-    // Laisse le dialogue se fermer avant que l'application ne quitte.
-    setImmediate(() => autoUpdater.quitAndInstall());
+function hasCommand(command) {
+  try {
+    return spawnSync('command', ['-v', command], { shell: true, stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
   }
+}
+
+// electron-updater 6 installe les rpm/deb avec un spawnSync sous pkexec : le
+// processus principal reste gelé pendant la saisie du mot de passe (le bureau
+// propose alors de forcer la fermeture) et un échec n'est pas remonté.
+// Le téléchargement reste celui d'electron-updater ; l'installation est faite
+// ici, sans bloquer, avec les erreurs du gestionnaire de paquets affichées.
+function installCommand(type, installerPath) {
+  if (type === 'deb') return ['dpkg', ['-i', installerPath]];
+  if (hasCommand('dnf')) return ['dnf', ['install', '--nogpgcheck', '-y', installerPath]];
+  if (hasCommand('yum')) return ['yum', ['install', '--nogpgcheck', '-y', installerPath]];
+  return ['rpm', ['-Uvh', '--replacepkgs', '--replacefiles', '--nodeps', installerPath]];
+}
+
+function elevatedCommand(command) {
+  if (typeof process.getuid === 'function' && process.getuid() === 0) return command;
+  // pkexec ouvre la boîte de mot de passe de la session (polkit). La commande
+  // lui est passée en argv, donc sans shell ni problème de guillemets.
+  return hasCommand('pkexec') ? ['pkexec', command] : null;
+}
+
+function runCommand([command, args]) {
+  return new Promise((resolve) => {
+    let output = '';
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const collect = (chunk) => {
+      output = (output + String(chunk)).slice(-4000);
+    };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.on('error', (error) => resolve({ ok: false, output: error.message }));
+    child.on('close', (code) => resolve({ ok: code === 0, output: output.trim() }));
+  });
 }
 
 function reportError(error, alwaysShow) {
@@ -89,6 +94,112 @@ function reportError(error, alwaysShow) {
     buttons: ['Fermer'],
     noLink: true,
   });
+}
+
+function reportInstallFailure(detail, installerPath) {
+  console.error(`[updater] ${detail}`);
+  void messageBox({
+    type: 'error',
+    title: 'Mise à jour impossible',
+    message: "L'installation de la mise à jour a échoué.",
+    detail:
+      (installerPath ? `Le paquet téléchargé est conservé ici :\n${installerPath}\n\n` : '') +
+      detail +
+      '\n\nVous pouvez aussi installer la nouvelle version depuis les releases GitHub.',
+    buttons: ['Fermer'],
+    noLink: true,
+  });
+}
+
+async function installLinuxPackage(info, installerPath) {
+  const type = linuxPackageType();
+  const command = elevatedCommand(installCommand(type, installerPath));
+  if (!command) {
+    reportInstallFailure(
+      "pkexec est introuvable : le mot de passe administrateur ne peut pas être demandé.",
+      installerPath,
+    );
+    return;
+  }
+
+  installing = true;
+  setProgress(2); // barre indéterminée pendant l'installation
+  const result = await runCommand(command);
+  installing = false;
+  setProgress(-1);
+
+  if (!result.ok) {
+    reportInstallFailure(result.output || "Le gestionnaire de paquets a refusé l'installation.", installerPath);
+    return;
+  }
+
+  // Le paquet installé remplace l'application : on relance la nouvelle version.
+  app.relaunch();
+  app.exit(0);
+}
+
+async function promptInstall(info, installerPath) {
+  downloading = false;
+  setProgress(-1);
+  const isPackage = linuxPackageType() !== null;
+
+  const { response } = await messageBox({
+    type: 'info',
+    title: 'Mise à jour prête',
+    message: `GlobalShare ${info.version} est téléchargée.`,
+    detail: isPackage
+      ? "L'installation demande le mot de passe administrateur dans la fenêtre du système, puis GlobalShare redémarre. " +
+        '« Plus tard » n’installe rien maintenant.'
+      : 'GlobalShare va redémarrer pour utiliser la nouvelle version.',
+    buttons: ['Installer et redémarrer', 'Plus tard'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response !== 0) return;
+
+  if (!isPackage) {
+    // AppImage et Windows : electron-updater sait installer sans élévation.
+    setImmediate(() => autoUpdater.quitAndInstall());
+    return;
+  }
+
+  if (!installerPath) {
+    reportInstallFailure("Le fichier téléchargé est introuvable.", null);
+    return;
+  }
+
+  await installLinuxPackage(info, installerPath);
+}
+
+async function promptDownload(info) {
+  if (downloading || installing || info.version === promptedVersion) return;
+  promptedVersion = info.version;
+
+  const { response } = await messageBox({
+    type: 'info',
+    title: 'Mise à jour disponible',
+    message: `GlobalShare ${info.version} est disponible.`,
+    detail:
+      `Vous utilisez la version ${app.getVersion()}. ` +
+      'La mise à jour se télécharge en arrière-plan ; vous choisirez ensuite de l’installer.',
+    buttons: ['Télécharger', 'Plus tard'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response !== 0) return;
+
+  downloading = true;
+  try {
+    const files = await autoUpdater.downloadUpdate();
+    const installerPath = Array.isArray(files) ? files[0] : undefined;
+    await promptInstall(info, installerPath);
+  } catch (error) {
+    downloading = false;
+    promptedVersion = null;
+    reportError(error, true);
+  }
 }
 
 function checkForUpdates(options = {}) {
@@ -122,10 +233,12 @@ function initAutoUpdater(resolveWindow) {
   getWindow = resolveWindow;
   if (!app.isPackaged) return;
 
-  // Le téléchargement est déclenché par l'utilisateur, l'installation peut
-  // attendre la fermeture de l'application.
+  // Le téléchargement est déclenché par l'utilisateur, l'installation aussi.
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Sur rpm/deb, l'installation à la fermeture d'electron-updater gèle le
+  // processus sur la boîte de mot de passe : cette voie est désactivée, c'est
+  // installLinuxPackage() qui s'en charge.
+  autoUpdater.autoInstallOnAppQuit = linuxPackageType() === null;
   autoUpdater.allowPrerelease = false;
 
   autoUpdater.on('update-available', (info) => {
@@ -147,19 +260,16 @@ function initAutoUpdater(resolveWindow) {
   });
 
   autoUpdater.on('download-progress', (progress) => {
-    const window = getWindow();
-    if (window && !window.isDestroyed()) {
-      window.setProgressBar(Math.min(1, Math.max(0, progress.percent / 100)));
-    }
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    void promptInstall(info);
+    setProgress(Math.min(1, Math.max(0, progress.percent / 100)));
   });
 
   autoUpdater.on('error', (error) => {
+    // Une vérification périodique échoue en silence ; dès que l'utilisateur a
+    // demandé le téléchargement ou l'installation, l'erreur est affichée.
+    const visible = manualCheck || downloading || installing;
     downloading = false;
-    reportError(error, manualCheck);
+    installing = false;
+    reportError(error, visible);
     manualCheck = false;
   });
 

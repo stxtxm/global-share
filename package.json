@@ -1,41 +1,17 @@
 {
-  "name": "global-share",
+  "name": "globalshare",
+  "productName": "GlobalShare",
   "version": "1.0.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
-    "dev:all": "concurrently \"npm run dev\" \"npm --prefix socket-server-cloudflare run dev -- --port 3001\"",
-    "test:protocol": "npm --prefix socket-server-cloudflare run test:protocol",
-    "test:unit": "node --experimental-strip-types --test test/transfer-pause.test.ts",
-    "desktop": "npm run build:desktop && electron desktop",
-    "build:desktop": "node scripts/build-desktop.mjs",
-    "dist": "npm run build:desktop && electron-builder",
-    "dist:linux": "npm run build:desktop && electron-builder --linux rpm deb AppImage",
-    "dist:win": "npm run build:desktop && electron-builder --win nsis"
+  "description": "Partage de fichiers P2P entre appareils",
+  "author": {
+    "name": "stxtxm",
+    "email": "stxtxm@users.noreply.github.com"
   },
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "desktopName": "globalshare.desktop",
   "dependencies": {
-    "jszip": "^3.10.1",
-    "lightningcss": "^1.33.0",
-    "next": "16.0.10",
-    "react": "19.2.1",
-    "react-dom": "19.2.1",
-    "simple-peer": "^9.11.1",
-    "socket.io-client": "^4.8.1"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20.19.27",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "concurrently": "^8.2.2",
-    "electron": "^45.2.3",
-    "electron-builder": "^26.18.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.10",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "electron-updater": "^6.6.2"
   }
 }
