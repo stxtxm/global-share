@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, nativeImage, shell } = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -17,6 +17,19 @@ const SITE_URL = 'https://stxtxm.github.io/global-share/';
 const WEB_ROOT = app.isPackaged
   ? path.join(process.resourcesPath, 'web')
   : path.join(__dirname, '..', 'out');
+
+// Icône de la fenêtre (barre des tâches, aperçu Alt+Tab). Elle est livrée à
+// côté de l'asar : Chromium ne sait pas la lire depuis l'archive.
+const ICON_FILE = app.isPackaged
+  ? path.join(process.resourcesPath, 'icon.png')
+  : path.join(__dirname, 'resources', 'icon.png');
+
+// L'image est décodée ici : un chemin passé tel quel à BrowserWindow n'est pas
+// toujours appliqué comme icône de fenêtre sous Linux.
+const WINDOW_ICON = (() => {
+  const image = nativeImage.createFromPath(ICON_FILE);
+  return image.isEmpty() ? undefined : image;
+})();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -124,7 +137,7 @@ function createWindow(port) {
     show: false,
     title: 'GlobalShare',
     backgroundColor: '#0a0b10',
-    icon: path.join(__dirname, 'resources', 'icon.png'),
+    icon: WINDOW_ICON,
     webPreferences: {
       // La page est du contenu web classique : aucun accès Node n'est nécessaire.
       contextIsolation: true,

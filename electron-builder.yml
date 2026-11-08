@@ -15,12 +15,15 @@ files:
   - main.js
   - updater.js
   - package.json
-  - resources/icon.png
 
 # Chemins relatifs à la racine du projet (projectDir), pas à desktop/.
 extraResources:
   - from: out
     to: web
+  # Icône de fenêtre : doit rester en dehors de l'asar, Chromium ne lit pas
+  # les images depuis l'archive pour l'icône de fenêtre (_NET_WM_ICON).
+  - from: desktop/resources/icons/512x512.png
+    to: icon.png
 
 # Garde la taille de l'application raisonnable : seules les locales utiles au
 # français et à l'anglais sont livrées.
@@ -43,6 +46,10 @@ linux:
     - AppImage
   category: Network;FileTransfer
   executableName: globalshare
+  # Jeu d'icônes complet (16x16 à 1024x1024) : avec un seul PNG, les lanceurs
+  # qui cherchent une taille précise (panneaux XFCE/MATE, menus KDE) n'ont
+  # aucune icône à afficher. Chemin relatif à buildResources (desktop/resources).
+  icon: icons
   # Aligne le nom du fichier .desktop sur `desktopName`, pour que le bureau
   # associe la fenêtre à l'icône de l'application (WM_CLASS).
   syncDesktopName: true

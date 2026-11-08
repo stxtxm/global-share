@@ -19,6 +19,9 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "socket-server-cloudflare/**",
+    // Paquets Electron produits par electron-builder : ils embarquent une
+    // copie de l'export Next.js, inutile à relire.
+    "dist/**",
   ]),
 ]);
 
