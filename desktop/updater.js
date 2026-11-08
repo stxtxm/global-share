@@ -2,7 +2,7 @@
 
 const { app, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -42,11 +42,15 @@ function linuxPackageType() {
 }
 
 function hasCommand(command) {
-  try {
-    return spawnSync('command', ['-v', command], { shell: true, stdio: 'ignore' }).status === 0;
-  } catch {
-    return false;
-  }
+  return (process.env.PATH || '').split(path.delimiter).some((dir) => {
+    if (!dir) return false;
+    try {
+      fs.accessSync(path.join(dir, command), fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // electron-updater 6 installe les rpm/deb avec un spawnSync sous pkexec : le
@@ -61,11 +65,12 @@ function installCommand(type, installerPath) {
   return ['rpm', ['-Uvh', '--replacepkgs', '--replacefiles', '--nodeps', installerPath]];
 }
 
-function elevatedCommand(command) {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) return command;
-  // pkexec ouvre la boîte de mot de passe de la session (polkit). La commande
-  // lui est passée en argv, donc sans shell ni problème de guillemets.
-  return hasCommand('pkexec') ? ['pkexec', command] : null;
+function elevatedCommand([command, args]) {
+  if (typeof process.getuid === 'function' && process.getuid() === 0) return [command, args];
+  // pkexec ouvre la boîte de mot de passe de la session (polkit), sans shell.
+  // Les arguments doivent être dépliés : un tableau imbriqué serait converti
+  // en une seule chaîne « install,--nogpgcheck,… » que dnf refuse.
+  return hasCommand('pkexec') ? ['pkexec', [command, ...args]] : null;
 }
 
 function runCommand([command, args]) {
