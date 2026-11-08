@@ -1,0 +1,112 @@
+name: Release desktop apps
+
+# Le tag est la source de vérité de la version : pousser v1.2.0 produit les
+# paquets rpm/deb/AppImage et l'installateur Windows, puis les publie dans la
+# release GitHub que l'auto-update interroge.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de la version à publier (ex. v1.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 'desktop-release-${{ github.ref }}'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+            target: --linux rpm deb AppImage
+          - os: windows-latest
+            name: windows
+            target: --win nsis
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install rpm tooling
+        if: matrix.name == 'linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix desktop ci
+
+      - name: Sync version with tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: node scripts/set-version.mjs
+
+      - name: Build static export
+        run: npm run build:desktop
+        env:
+          # Mêmes valeurs que les défauts de scripts/build-desktop.mjs, rendues
+          # explicites pour la lisibilité de la release.
+          NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
+          NEXT_PUBLIC_SHARE_BASE: https://stxtxm.github.io/global-share
+          NEXT_PUBLIC_TURN_URLS: ${{ vars.TURN_URLS }}
+          NEXT_PUBLIC_TURN_USERNAME: ${{ vars.TURN_USERNAME }}
+          NEXT_PUBLIC_TURN_CREDENTIAL: ${{ vars.TURN_CREDENTIAL }}
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: desktop-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.rpm
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.exe
+            dist/*.yml
+            dist/*.blockmap
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* \
+              --title "GlobalShare ${TAG#v}" \
+              --generate-notes
+          fi

@@ -1,8 +1,11 @@
 import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === 'production';
+// L'application de bureau (Electron) sert l'export à la racine d'un serveur
+// local : le préfixe de GitHub Pages n'a pas lieu d'être.
+const isDesktop = process.env.NEXT_PUBLIC_DESKTOP === '1';
 // GitHub Pages serves this repository as a project site under /global-share.
-const basePath = isProd ? '/global-share' : '';
+const basePath = isProd && !isDesktop ? '/global-share' : '';
 
 // URL du serveur WebSocket en fonction de l'environnement
 const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';

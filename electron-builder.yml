@@ -1,0 +1,74 @@
+# Configuration des applications de bureau GlobalShare (Electron).
+# L'application elle-même est décrite par desktop/package.json ; l'export
+# statique Next.js (out/) est embarqué dans resources/web.
+appId: io.github.stxtxm.globalshare
+productName: GlobalShare
+
+directories:
+  app: desktop
+  output: dist
+  buildResources: desktop/resources
+
+# Seuls le processus principal et ses dépendances de production sont embarqués :
+# les dépendances Next.js ne servent qu'au build de l'export statique.
+files:
+  - main.js
+  - updater.js
+  - package.json
+  - resources/icon.png
+
+# Chemins relatifs à la racine du projet (projectDir), pas à desktop/.
+extraResources:
+  - from: out
+    to: web
+
+# Garde la taille de l'application raisonnable : seules les locales utiles au
+# français et à l'anglais sont livrées.
+electronLanguages:
+  - fr
+  - en-US
+
+# Source des mises à jour : les releases GitHub du dépôt (latest.yml pour
+# Windows, latest-linux.yml pour Linux).
+publish:
+  provider: github
+  owner: stxtxm
+  repo: global-share
+  releaseType: release
+
+linux:
+  target:
+    - rpm
+    - deb
+    - AppImage
+  category: Network;FileTransfer
+  executableName: globalshare
+  # Aligne le nom du fichier .desktop sur `desktopName`, pour que le bureau
+  # associe la fenêtre à l'icône de l'application (WM_CLASS).
+  syncDesktopName: true
+  synopsis: Partage de fichiers P2P entre appareils
+  description: >-
+    Partagez un fichier, pas un compte. Le même code de salon sur deux appareils
+    suffit : le transfert part en direct (WebRTC) et retombe sur le relais
+    Socket.IO quand le réseau l'impose.
+  maintainer: stxtxm <stxtxm@users.noreply.github.com>
+  desktop:
+    entry:
+      Name: GlobalShare
+      Comment: Partage de fichiers P2P entre appareils
+      Categories: Network;FileTransfer;
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: GlobalShare-Setup-${version}.${ext}
+
+# Installation par utilisateur (aucun droit administrateur) : les mises à jour
+# s'installent donc sans invite UAC.
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: GlobalShare
+  artifactName: GlobalShare-Setup-${version}.${ext}

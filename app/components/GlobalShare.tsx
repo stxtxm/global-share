@@ -800,7 +800,11 @@ export default function GlobalShare() {
   // Partage du salon : feuille système sur mobile, presse-papiers ailleurs.
   const copyRoomLink = useCallback(async () => {
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-    const link = `${window.location.origin}${basePath}/?room=${encodeURIComponent(roomId)}`;
+    // L'application de bureau tourne sur un serveur local : le lien partagé doit
+    // rester l'adresse web publique (NEXT_PUBLIC_SHARE_BASE), pas 127.0.0.1.
+    const base = (process.env.NEXT_PUBLIC_SHARE_BASE || `${window.location.origin}${basePath}`)
+      .replace(/\/+$/, '');
+    const link = `${base}/?room=${encodeURIComponent(roomId)}`;
     const shareData = { title: 'GlobalShare', text: `Rejoins le salon ${roomId}`, url: link };
     try {
       if (typeof navigator !== 'undefined' && navigator.share) {

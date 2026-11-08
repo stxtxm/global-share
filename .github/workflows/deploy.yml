@@ -66,6 +66,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          # Les tests ne lancent pas Electron : inutile de télécharger le binaire.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       - name: Unit tests
         run: npm run test:unit
@@ -89,6 +92,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          # Le site statique n'a pas besoin du binaire Electron (voir release.yml).
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       - name: Lint
         run: npm run lint

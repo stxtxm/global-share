@@ -100,6 +100,34 @@ npm run test:protocol
 SOCKET_URL=https://global-share-socket.sitizstorm.workers.dev npm run test:protocol
 ```
 
+## Applications de bureau (Linux / Windows)
+
+Le même frontend est empaqueté pour le bureau via `desktop/` et
+[`electron-builder.yml`](./electron-builder.yml) :
+
+| Fichier | Distribution |
+| --- | --- |
+| `.rpm` | Fedora, RHEL/Rocky/Alma, openSUSE |
+| `.deb` | Debian, Ubuntu, Mint |
+| `.AppImage` | toutes les distributions |
+| `GlobalShare-Setup-<version>.exe` | Windows 10/11 x64 |
+
+Les applications se mettent à jour depuis les releases GitHub
+(`electron-updater`). Une release se publie en poussant un tag :
+
+```bash
+npm run dist:linux   # ou npm run dist:win
+```
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+Le workflow [`.github/workflows/release.yml`](./.github/workflows/release.yml)
+construit et publie les paquets. Détails, particularités de mise à jour selon le
+format et limites : [docs/DESKTOP.md](./docs/DESKTOP.md).
+
 ## Variables d'environnement
 
 - `NEXT_PUBLIC_SOCKET_URL` : URL du Worker. Par défaut `http://localhost:3001`

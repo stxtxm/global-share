@@ -26,6 +26,10 @@
 # production
 /build
 
+# electron-builder (rpm/deb/AppImage/exe)
+/dist/
+/desktop/node_modules/
+
 # misc
 .DS_Store
 *.pem
