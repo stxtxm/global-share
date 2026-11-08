@@ -13,6 +13,7 @@ directories:
 # les dépendances Next.js ne servent qu'au build de l'export statique.
 files:
   - main.js
+  - preload.js
   - updater.js
   - package.json
 

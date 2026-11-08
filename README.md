@@ -138,6 +138,9 @@ format et limites : [docs/DESKTOP.md](./docs/DESKTOP.md).
 - P2P direct quand le réseau le permet, relais sinon
 - Envoi de fichiers, de photos (capture) et de dossiers (zip côté client)
 - Salons partageables par lien `?room=CODE`
+- Onglet **Téléchargements** : fichiers reçus conservés et rouverts depuis
+  l'application (dossier `~/Téléchargements/GlobalShare` sur le bureau,
+  IndexedDB sur le web et le mobile)
 - Interface mobile, wake lock pendant le transfert, PWA installable
 
 ## Liens

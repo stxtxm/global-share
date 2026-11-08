@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell } = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -54,6 +54,81 @@ const MIME_TYPES = {
 
 let mainWindow = null;
 let staticServer = null;
+
+// Les fichiers reçus atterrissent dans un sous-dossier dédié : l'onglet
+// Téléchargements peut ainsi les rouvrir sans redemander ni chemin ni blob.
+const DOWNLOAD_FOLDER = 'GlobalShare';
+
+function downloadsDir() {
+  let base;
+  try {
+    base = app.getPath('downloads');
+  } catch {
+    base = app.getPath('home');
+  }
+  return path.join(base, DOWNLOAD_FOLDER);
+}
+
+// Même règle que app/lib/downloads.ts : pas de chemin, pas de caractère de
+// contrôle, un nom toujours exploitable par le système de fichiers.
+function safeFileName(name) {
+  const last = String(name || '').split(/[\\/]/).pop() || '';
+  const cleaned = last.replace(/[\u0000-\u001f\u007f]/g, '').replace(/^\.+/, '').trim();
+  return (cleaned || 'fichier').slice(0, 120);
+}
+
+function freeFileName(dir, name) {
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let target = path.join(dir, name);
+  for (let index = 1; fs.existsSync(target); index += 1) {
+    target = path.join(dir, `${base} (${index})${ext}`);
+  }
+  return target;
+}
+
+function registerDownloadHandlers() {
+  ipcMain.handle('globalshare:save-download', async (_event, payload) => {
+    try {
+      const bytes = payload?.bytes;
+      if (!bytes || typeof bytes.byteLength !== 'number') {
+        return { error: 'Fichier vide : rien à enregistrer.' };
+      }
+      const dir = downloadsDir();
+      await fs.promises.mkdir(dir, { recursive: true });
+      const target = freeFileName(dir, safeFileName(payload?.name));
+      await fs.promises.writeFile(target, Buffer.from(bytes));
+      return { path: target };
+    } catch (error) {
+      return { error: `Enregistrement impossible : ${String(error?.message || error)}` };
+    }
+  });
+
+  const insideDownloads = (filePath) => {
+    const resolved = path.resolve(String(filePath || ''));
+    const root = path.resolve(downloadsDir());
+    if (resolved === root || resolved.startsWith(root + path.sep)) return resolved;
+    return null;
+  };
+
+  ipcMain.handle('globalshare:open-download', async (_event, filePath) => {
+    const resolved = insideDownloads(filePath);
+    if (!resolved) return 'Fichier en dehors du dossier de téléchargements.';
+    if (!fs.existsSync(resolved)) return "Ce fichier n'existe plus sur le disque.";
+    // openPath renvoie un message d'erreur vide quand le système a bien ouvert
+    // le fichier : on le remonte tel quel à l'interface.
+    return shell.openPath(resolved);
+  });
+
+  ipcMain.handle('globalshare:reveal-download', async (_event, filePath) => {
+    const resolved = insideDownloads(filePath);
+    if (!resolved) return 'Fichier en dehors du dossier de téléchargements.';
+    if (!fs.existsSync(resolved)) return "Ce fichier n'existe plus sur le disque.";
+    shell.showItemInFolder(resolved);
+    return '';
+  });
+}
 
 // L'export Next.js est servi par un petit serveur HTTP local plutôt qu'en
 // file:// : les chemins absolus (/_next/...), les blobs téléchargés et le
@@ -143,6 +218,8 @@ function createWindow(port) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Seul pont autorisé : enregistrer/ouvrir les fichiers reçus.
+      preload: path.join(__dirname, 'preload.js'),
       spellcheck: true,
     },
   });
@@ -227,6 +304,7 @@ function buildMenu() {
 
 async function start() {
   app.setAppUserModelId(APP_ID);
+  registerDownloadHandlers();
 
   if (!fs.existsSync(path.join(WEB_ROOT, 'index.html'))) {
     dialog.showErrorBox(

@@ -12,6 +12,19 @@ import {
   sha256Hex,
   HASH_MAX_BYTES,
 } from './TransferManager';
+import {
+  DOWNLOAD_LIMITS,
+  clearDownloads as clearStoredDownloads,
+  deleteDownload as deleteStoredDownload,
+  getDownloadBlob,
+  loadDownloads,
+  putDownload,
+  sanitizeFileName,
+  toPublicDownloads,
+  viewerKind,
+  type DownloadRecord,
+  type StoredDownload,
+} from '../lib/downloads';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -95,6 +108,14 @@ const formatSpeed = (bps: number): string => {
   if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
   return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
 };
+// Date de réception, dans le format court français (12 nov. 15:04).
+const formatDate = (ms: number): string =>
+  new Date(ms).toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 const getSocketUrl = (): string => {
   if (typeof window !== 'undefined') {
     if (process.env.NEXT_PUBLIC_SOCKET_URL) return process.env.NEXT_PUBLIC_SOCKET_URL;
@@ -194,6 +215,27 @@ function IconDownload({ className = 'gs-icon' }: IconProps) {
   );
 }
 
+function IconOpen({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 11 13" />
+      <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
+function IconTrash({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
 function IconDevices({ className = 'gs-icon' }: IconProps) {
   return (
     <svg {...iconProps} className={className}>
@@ -213,17 +255,26 @@ interface PeerInfo {
 interface Toast {
   id: number; type: 'info' | 'success' | 'error' | 'warning'; message: string;
 }
-interface ReceivedFile {
-  id: number; name: string; blob: Blob; size: number;
-  /** URL du blob, créée une fois et conservée tant que la page vit. */
-  url: string;
-  integrity: IntegrityStatus;
-}
-
 declare global {
   interface Window {
     globalShare?: {
-      onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void;
+      onFileSaved?: (
+        blob: Blob,
+        name: string,
+        integrity: IntegrityStatus,
+        from?: string
+      ) => void;
+    };
+    /** Pont exposé par Electron (desktop/preload.js) ; absent sur le web. */
+    globalshareDesktop?: {
+      isDesktop?: boolean;
+      saveDownload: (payload: {
+        name: string;
+        mime: string;
+        bytes: ArrayBuffer;
+      }) => Promise<{ path?: string; error?: string }>;
+      openDownload: (filePath: string) => Promise<string>;
+      revealDownload: (filePath: string) => Promise<string>;
     };
   }
 }
@@ -238,8 +289,10 @@ export default function GlobalShare() {
   const [myName, setMyName] = useState(() => detectDevice());
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [transfers, setTransfers] = useState<TransferState[]>([]);
-  // Blobs reçus conservés pour proposer un téléchargement sur geste explicite.
-  const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
+  // Onglet actif : le salon en cours, ou l'historique des fichiers reçus.
+  const [tab, setTab] = useState<'room' | 'downloads'>('room');
+  // Historique des téléchargements, conservé sur l'appareil (voir lib/downloads).
+  const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -266,7 +319,11 @@ export default function GlobalShare() {
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
   const toastIdRef = useRef(0);
-  const receivedFileIdRef = useRef(0);
+  const downloadIdRef = useRef(0);
+  // Blobs de la session : ouvrir un fichier juste reçu n'attend pas IndexedDB.
+  const downloadBlobRef = useRef<Map<string, Blob>>(new Map());
+  // Noms des pairs par identifiant : l'expéditeur n'envoie que son id.
+  const peerNamesRef = useRef<Record<string, string>>({});
   const iceServersRef = useRef<RTCIceServer[]>(BASE_ICE_SERVERS);
   const turnValidUntilRef = useRef(0);
 
@@ -286,6 +343,27 @@ export default function GlobalShare() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 6000);
   }, []);
 
+  // Rechargement de l'historique conservé (IndexedDB) au démarrage.
+  useEffect(() => {
+    let cancelled = false;
+    void loadDownloads().then(rows => {
+      if (cancelled) return;
+      rows.forEach(row => {
+        if (row.blob) downloadBlobRef.current.set(row.id, row.blob);
+      });
+      setDownloads(toPublicDownloads(rows));
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Les pairs ne sont connus que par leur id : on garde leur nom sous la main
+  // pour étiqueter les fichiers reçus dans l'historique.
+  useEffect(() => {
+    peerNamesRef.current = Object.fromEntries(
+      Object.entries(peers).map(([id, peer]) => [id, peer.name])
+    );
+  }, [peers]);
+
   // ---- Initialisation du TransferManager ----
   useEffect(() => {
     const socket = socketRef.current;
@@ -302,7 +380,8 @@ export default function GlobalShare() {
         onComplete: (t) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
           fileRefs.current.delete(t.id);
-          showToast('success', `Fichier reçu : ${t.file.name}`);
+          // Le message d'enregistrement est émis par saveFile, qui connaît le
+          // nom de l'expéditeur et sait où le fichier a été rangé.
         },
         onCancel: (t, reason) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
@@ -786,16 +865,119 @@ export default function GlobalShare() {
     a.remove();
   }, []);
 
-  const saveFile = useCallback((blob: Blob, name: string, integrity: IntegrityStatus) => {
-    const id = ++receivedFileIdRef.current;
-    const url = URL.createObjectURL(blob);
-    setReceivedFiles(prev => [{ id, name, blob, size: blob.size, url, integrity }, ...prev]);
-    if (integrity === 'mismatch') {
-      showToast('error', `Fichier corrompu pendant le transfert : ${name}. Renvoyez-le.`);
+  // ---- Téléchargements ----
+  // L'expéditeur n'envoie que son identifiant : on rétablit son nom d'appareil.
+  const resolveSender = useCallback((from?: string) => {
+    if (!from) return 'Un appareil';
+    // Un pair déjà parti n'est plus dans la liste : mieux vaut un libellé
+    // lisible qu'un identifiant de socket dans l'historique.
+    return peerNamesRef.current[from] || 'Un appareil';
+  }, []);
+
+  const openDownload = useCallback(async (record: DownloadRecord) => {
+    const bridge = typeof window === 'undefined' ? undefined : window.globalshareDesktop;
+    // Bureau : le fichier est déjà sur le disque, l'ouvrir ne demande rien à
+    // la page. Le processus principal vérifie qu'il est bien dans son dossier.
+    if (bridge && record.path) {
+      const error = await bridge.openDownload(record.path);
+      if (error) showToast('error', error);
       return;
     }
-    downloadUrl(url, name);
+    let blob = downloadBlobRef.current.get(record.id);
+    if (!blob) {
+      blob = (await getDownloadBlob(record.id)) ?? undefined;
+      if (blob) downloadBlobRef.current.set(record.id, blob);
+    }
+    if (!blob) {
+      showToast('warning', "Ce fichier n'est plus conservé sur cet appareil.");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    // Images, PDF, vidéos et textes s'affichent dans un onglet ; pour le reste
+    // (zip, apk…), un téléchargement est le seul comportement possible.
+    if (viewerKind(record.mime, record.name) === 'none') {
+      downloadUrl(url, record.name);
+      return;
+    }
+    const opened = window.open(url, '_blank');
+    if (!opened) downloadUrl(url, record.name);
   }, [downloadUrl, showToast]);
+
+  const revealDownload = useCallback(async (record: DownloadRecord) => {
+    if (!record.path) return;
+    const error = await window.globalshareDesktop?.revealDownload(record.path);
+    if (error) showToast('error', error);
+  }, [showToast]);
+
+  const removeDownload = useCallback(async (record: DownloadRecord) => {
+    downloadBlobRef.current.delete(record.id);
+    setDownloads(prev => prev.filter(item => item.id !== record.id));
+    await deleteStoredDownload(record.id);
+  }, []);
+
+  const clearDownloadHistory = useCallback(async () => {
+    downloadBlobRef.current.clear();
+    setDownloads([]);
+    await clearStoredDownloads();
+  }, []);
+
+  // ---- Enregistrement des fichiers reçus ----
+  // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
+  // et renvoie le chemin, ce qui permet de rouvrir le fichier tel quel. Sur le
+  // web et le mobile, le blob est conservé dans IndexedDB (borné) et le
+  // téléchargement est déclenché immédiatement, comme avant.
+  const saveFile = useCallback(async (
+    blob: Blob,
+    name: string,
+    integrity: IntegrityStatus,
+    from?: string
+  ) => {
+    const id = `d-${Date.now().toString(36)}-${++downloadIdRef.current}`;
+    const record: StoredDownload = {
+      id,
+      name: sanitizeFileName(name),
+      size: blob.size,
+      mime: blob.type || 'application/octet-stream',
+      from: resolveSender(from),
+      receivedAt: Date.now(),
+      integrity,
+    };
+    const bridge = typeof window === 'undefined' ? undefined : window.globalshareDesktop;
+
+    if (integrity === 'mismatch') {
+      // Fichier corrompu : il reste visible dans l'historique pour que
+      // l'utilisateur sache quoi renvoyer, mais rien n'est écrit ni ouvert.
+      setDownloads(prev => [record, ...prev].slice(0, DOWNLOAD_LIMITS.maxItems));
+      await putDownload(record);
+      showToast('error', `Fichier corrompu pendant le transfert : ${record.name}. Renvoyez-le.`);
+      return;
+    }
+
+    if (bridge) {
+      try {
+        const saved = await bridge.saveDownload({
+          name: record.name,
+          mime: record.mime,
+          bytes: await blob.arrayBuffer(),
+        });
+        if (saved?.error) {
+          showToast('warning', saved.error);
+        } else if (saved?.path) {
+          record.path = saved.path;
+          showToast('success', `Enregistré dans Téléchargements/GlobalShare : ${record.name}`);
+        }
+      } catch {
+        showToast('warning', "Enregistrement impossible : le fichier reste dans l'onglet Téléchargements.");
+      }
+    } else {
+      record.blob = blob;
+      downloadBlobRef.current.set(id, blob);
+      downloadUrl(URL.createObjectURL(blob), record.name);
+    }
+
+    setDownloads(prev => [record, ...prev].slice(0, DOWNLOAD_LIMITS.maxItems));
+    await putDownload(record);
+  }, [downloadUrl, resolveSender, showToast]);
 
   // Partage du salon : feuille système sur mobile, presse-papiers ailleurs.
   const copyRoomLink = useCallback(async () => {
@@ -820,14 +1002,8 @@ export default function GlobalShare() {
   }, [roomId, showToast]);
 
   useEffect(() => {
-    if (step === 'room') {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = { onFileSaved: saveFile };
-    } else {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
-    }
-    return () => {
-      (window as unknown as { globalShare?: { onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void } }).globalShare = undefined;
-    };
+    window.globalShare = step === 'room' ? { onFileSaved: saveFile } : undefined;
+    return () => { window.globalShare = undefined; };
   }, [step, saveFile]);
 
   // ---- Écran d accueil ----
@@ -943,6 +1119,28 @@ export default function GlobalShare() {
         </div>
       </header>
 
+      <nav className="gs-tabs" role="tablist" aria-label="Sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'room'}
+          className={`gs-tab${tab === 'room' ? ' is-active' : ''}`}
+          onClick={() => setTab('room')}
+        >
+          Salon
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'downloads'}
+          className={`gs-tab${tab === 'downloads' ? ' is-active' : ''}`}
+          onClick={() => setTab('downloads')}
+        >
+          Téléchargements
+          {downloads.length > 0 && <span className="gs-tab-count">{downloads.length}</span>}
+        </button>
+      </nav>
+
       {toasts.length > 0 && (
         <div className="gs-toasts" aria-live="polite">
           {toasts.map(t => (
@@ -985,8 +1183,96 @@ export default function GlobalShare() {
       )}
 
       <main className={`gs-main${activeTransfers.length > 0 ? ' gs-main--tracking' : ''}`}>
+        {/* Onglet Téléchargements : les fichiers reçus, rouverts depuis l'app */}
+        {tab === 'downloads' && (
+          <section className="gs-section" aria-label="Fichiers téléchargés">
+            <div className="gs-section-head">
+              <h2 className="gs-section-title">Fichiers reçus</h2>
+              <div className="gs-section-tools">
+                <span className="gs-count">{downloads.length}</span>
+                {downloads.length > 0 && (
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn--ghost gs-btn--sm"
+                    onClick={() => void clearDownloadHistory()}
+                  >
+                    Tout supprimer
+                  </button>
+                )}
+              </div>
+            </div>
+            {downloads.length === 0 ? (
+              <div className="gs-empty">
+                <span className="gs-empty-icon" aria-hidden="true"><IconDownload /></span>
+                <strong>Aucun fichier reçu</strong>
+                <span>
+                  Les fichiers reçus restent ici et s&apos;ouvrent d&apos;un appui, même après
+                  avoir quitté le salon.
+                </span>
+              </div>
+            ) : (
+              <div className="gs-list">
+                {downloads.map((f, i) => (
+                  <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
+                    <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
+                    <div className="gs-file-meta">
+                      <div className="gs-file-name" title={f.name}>{f.name}</div>
+                      <div className="gs-file-sub">
+                        <span>{formatBytes(f.size)}</span>
+                        <span>De {f.from}</span>
+                        <span>{formatDate(f.receivedAt)}</span>
+                        <span
+                          className={`gs-pill ${f.integrity === 'verified'
+                            ? 'gs-pill--ok'
+                            : f.integrity === 'mismatch'
+                              ? 'gs-pill--bad'
+                              : 'gs-pill--warn'}`}
+                        >
+                          {f.integrity === 'verified'
+                            ? 'intégrité vérifiée'
+                            : f.integrity === 'mismatch'
+                              ? 'fichier corrompu'
+                              : 'intégrité non vérifiée'}
+                        </span>
+                      </div>
+                      <div className="gs-file-actions">
+                        <button
+                          type="button"
+                          className="gs-dl"
+                          onClick={() => void openDownload(f)}
+                        >
+                          <IconOpen className="gs-icon gs-icon--sm" />
+                          Ouvrir
+                        </button>
+                        {f.path && (
+                          <button
+                            type="button"
+                            className="gs-dl gs-dl--ghost"
+                            onClick={() => void revealDownload(f)}
+                          >
+                            Dossier
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="gs-dl gs-dl--ghost"
+                          onClick={() => void removeDownload(f)}
+                          aria-label={`Retirer ${f.name} de la liste`}
+                        >
+                          <IconTrash className="gs-icon gs-icon--sm" />
+                          Retirer
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Transferts en cours et terminés */}
-        {transfers.length > 0 && (
+        {tab === 'room' && transfers.length > 0 && (
           <section className="gs-section" aria-label="Transferts">
             <div className="gs-section-head">
               <h2 className="gs-section-title">Transferts</h2>
@@ -1043,51 +1329,8 @@ export default function GlobalShare() {
           </section>
         )}
 
-        {/* Fichiers reçus : bouton requis par Android pour autoriser le téléchargement */}
-        {receivedFiles.length > 0 && (
-          <section className="gs-section" aria-label="Fichiers reçus">
-            <div className="gs-section-head">
-              <h2 className="gs-section-title">Reçus</h2>
-              <span className="gs-count">{receivedFiles.length}</span>
-            </div>
-            <div className="gs-list">
-              {receivedFiles.map((f, i) => (
-                <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
-                  <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
-                  <div className="gs-file-meta">
-                    <div className="gs-file-name" title={f.name}>{f.name}</div>
-                    <div className="gs-file-sub">
-                      <span>{formatBytes(f.size)}</span>
-                      <span
-                        className={`gs-pill ${f.integrity === 'verified'
-                          ? 'gs-pill--ok'
-                          : f.integrity === 'mismatch'
-                            ? 'gs-pill--bad'
-                            : 'gs-pill--warn'}`}
-                      >
-                        {f.integrity === 'verified'
-                          ? 'intégrité vérifiée'
-                          : f.integrity === 'mismatch'
-                            ? 'fichier corrompu'
-                            : 'intégrité non vérifiée'}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="gs-dl"
-                    onClick={() => downloadUrl(f.url, f.name)}
-                  >
-                    <IconDownload className="gs-icon gs-icon--sm" />
-                    Télécharger
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* Liste des pairs */}
+        {tab === 'room' && (
         <section className="gs-section" aria-label="Appareils du salon">
           <div className="gs-section-head">
             <h2 className="gs-section-title">Appareils</h2>
@@ -1131,10 +1374,12 @@ export default function GlobalShare() {
             </div>
           )}
         </section>
+        )}
 
       </main>
 
-      {/* Barre d'action : toujours dans la zone du pouce */}
+      {/* Barre d'action : toujours dans la zone du pouce, seulement dans le salon */}
+      {tab === 'room' && (
       <div className="gs-actionbar">
         {activeTransfers.length > 0 && (
           <div className={`gs-minibar${isTrackingOpen ? ' is-open' : ''}`}>
@@ -1219,6 +1464,7 @@ export default function GlobalShare() {
           </button>
         </div>
       </div>
+      )}
 
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept="*/*" className="hidden" />
       <input

@@ -810,6 +810,83 @@
   background: rgba(167, 139, 250, 0.26);
 }
 
+/* --- Onglets Salon / Téléchargements ------------------------------------- */
+.gs-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 var(--gs-gutter);
+  margin-bottom: 2px;
+}
+
+.gs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--gs-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--gs-dim);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.gs-tab.is-active {
+  color: var(--gs-text);
+  border-color: rgba(167, 139, 250, 0.5);
+  background: rgba(167, 139, 250, 0.14);
+}
+
+.gs-tab:active {
+  transform: scale(0.97);
+}
+
+.gs-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--gs-surface-strong);
+  color: var(--gs-text);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.gs-section-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Actions d'un fichier téléchargé (Ouvrir / Dossier / Retirer). */
+.gs-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gs-file-actions .gs-dl {
+  min-height: 36px;
+}
+
+.gs-dl--ghost {
+  border-color: var(--gs-border);
+  background: transparent;
+  color: var(--gs-dim);
+}
+
+.gs-dl--ghost:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 /* --- Barre d'action (zone du pouce) -------------------------------------- */
 .gs-actionbar {
   position: fixed;

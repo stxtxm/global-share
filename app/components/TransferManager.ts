@@ -664,13 +664,21 @@ export class TransferManager {
       (
         window as unknown as {
           globalShare?: {
-            onFileSaved?: (blob: Blob, name: string, integrity: IntegrityStatus) => void;
+            onFileSaved?: (
+              blob: Blob,
+              name: string,
+              integrity: IntegrityStatus,
+              from?: string
+            ) => void;
           };
         }
       ).globalShare?.onFileSaved?.(
         new Blob([merged], { type: t.file.mime || 'application/octet-stream' }),
         t.file.name,
-        t.integrity
+        t.integrity,
+        // Pour une réception, targetId est l'expéditeur : l'interface y associe
+        // le nom de l'appareil dans l'historique des téléchargements.
+        t.targetId
       );
     } finally {
       this.finishing.delete(t.id);

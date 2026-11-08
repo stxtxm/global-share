@@ -45,6 +45,29 @@ affiche un avertissement au premier téléchargement et l'auto-update ne peut pa
 vérifier l'éditeur. Signer l'exécutable (certificat de signature de code) est
 recommandé pour une diffusion large.
 
+## Onglet « Téléchargements »
+
+Les fichiers reçus restent accessibles dans l'onglet **Téléchargements** de
+l'application (`Salon | Téléchargements`) et se rouvrent d'un appui, sans
+repasser par un transfert :
+
+| Contexte | Enregistrement | Bouton **Ouvrir** |
+| --- | --- | --- |
+| Bureau (rpm/deb/AppImage/exe) | `~/Téléchargements/GlobalShare/`, nom dédupliqué (`photo (1).jpg`) | application associée du système (`shell.openPath`) ; bouton **Dossier** pour révéler le fichier |
+| Web / mobile (PWA) | blob dans IndexedDB, 40 fichiers et 128 Mo au total | onglet du navigateur pour images, PDF, vidéos, sons et textes ; sinon téléchargement |
+
+Le pont Electron est [`desktop/preload.js`](../desktop/preload.js) : il expose
+`window.globalshareDesktop` avec `saveDownload`, `openDownload` et
+`revealDownload`. Le processus principal n'accepte d'ouvrir un chemin que s'il
+se trouve dans son dossier de téléchargements, et le nom envoyé par la page est
+assaini avant écriture. Sans ce pont (site, mobile), l'application retombe sur
+`Blob` + `URL.createObjectURL`.
+
+Un fichier dont l'empreinte SHA-256 diffère apparaît avec la pastille « fichier
+corrompu » mais n'est jamais écrit sur le disque. L'historique survit à la
+fermeture de l'application ; **Tout supprimer** vide la liste et les blobs
+conservés, sans effacer les fichiers déjà enregistrés dans le dossier.
+
 ## Publier une version
 
 Le tag est la source de vérité de la version :
@@ -80,6 +103,9 @@ npm run dist:win      # installateur Windows (à lancer sous Windows)
 
 Les artefacts sortent dans `dist/`. Construire un `.rpm` depuis Debian/Ubuntu
 demande l'outillage RPM : `sudo apt install rpm`.
+
+Les helpers de l'historique (nommage sûr, déduplication, purge, types ouvrables
+dans le navigateur) sont couverts par `npm run test:unit`.
 
 Pour lancer l'application sans la packager (elle lit `out/`, l'auto-update est
 désactivée) :
