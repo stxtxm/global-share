@@ -128,6 +128,10 @@ Le workflow [`.github/workflows/release.yml`](./.github/workflows/release.yml)
 construit et publie les paquets. Détails, particularités de mise à jour selon le
 format et limites : [docs/DESKTOP.md](./docs/DESKTOP.md).
 
+Les notes de version sont tenues dans [CHANGELOG.md](./CHANGELOG.md) : y ajouter
+l'entrée sous `[Non publié]` avant de pousser le tag, puis la renommer avec le
+numéro et la date de la version.
+
 ## Variables d'environnement
 
 - `NEXT_PUBLIC_SOCKET_URL` : URL du Worker. Par défaut `http://localhost:3001`
