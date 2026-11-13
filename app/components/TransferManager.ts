@@ -50,6 +50,11 @@ export interface TransferState {
   integrity: IntegrityStatus;
   /** Réémission de l'EOF tant que l'autre partie n'a pas acquitté. */
   eofTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Position de reprise inconnue : on a demandé au destinataire combien
+   * d'octets il possède et on n'émet rien avant sa réponse.
+   */
+  awaitingResync: boolean;
 }
 
 export interface TransferInitPayload {
@@ -110,6 +115,13 @@ const EOF_RETRY_MS = 2000;
 // Au-delà, lire tout le fichier en mémoire serait risqué sur un téléphone.
 export const HASH_MAX_BYTES = 64 * 1024 * 1024;
 
+/** Conservation des chunks reçus, pour survivre à un onglet tué. */
+export interface ChunkStore {
+  save: (transferId: string, seq: number, bytes: Uint8Array) => void;
+  load: (transferId: string) => Promise<Map<number, Uint8Array>>;
+  clear: (transferId: string) => void;
+}
+
 /** SHA-256 hexadécimal, ou null si l'API WebCrypto n'est pas disponible. */
 export async function sha256Hex(data: Uint8Array | ArrayBuffer): Promise<string | null> {
   try {
@@ -135,6 +147,9 @@ export class TransferManager {
   private nextTransferId = 0;
   private finishing = new Set<string>();
 
+  /** Écriture des chunks reçus sur l'appareil (facultatif). */
+  public chunkStore: ChunkStore | null = null;
+
   /**
    * Transport direct optionnel (canal WebRTC). Renvoie true quand le chunk est
    * réellement parti par ce canal ; false fait retomber l'émission sur le
@@ -153,7 +168,10 @@ export class TransferManager {
 
   /** Identité courante : socket.id n'est disponible qu'après la connexion. */
   get selfId(): string {
-    return this.socket.id ?? this.myId;
+    // Identité stable de session, pas `socket.id` : elle survit à une
+    // reconnexion, sinon les ACK d'un transfert repris viseraient une socket
+    // qui n'existe plus.
+    return this.myId;
   }
 
   constructor(
@@ -211,20 +229,72 @@ export class TransferManager {
       hash,
       integrity: 'unknown',
       eofTimer: null,
+      awaitingResync: false,
     };
     this.transfers.set(id, t);
-    this._emit('transfer-init', {
-      transferId: t.id,
-      initiator: this.selfId,
-      target: t.targetId,
-      direction: 'send',
-      file: { name: file.name, size: file.size, mime: file.mime },
-      chunkSize: t.chunkSize,
-      method: t.method,
-      hash: t.hash,
-    });
+    this._announce(t, false);
     this.onUpdate(t);
     return t;
+  }
+
+  /**
+   * Réinstalle un envoi interrompu après un rechargement : le fichier n'est
+   * plus en mémoire, l'utilisateur le réassocie avant la reprise.
+   */
+  restoreSend(meta: {
+    id: string;
+    file: TransferFileMeta;
+    chunkSize: number;
+    targetId: string;
+    targetName: string;
+    hash?: string;
+    createdAt: number;
+  }): TransferState {
+    const existing = this.transfers.get(meta.id);
+    if (existing) return existing;
+    const t: TransferState = {
+      id: meta.id,
+      direction: 'send',
+      targetId: meta.targetId,
+      targetName: meta.targetName,
+      file: meta.file,
+      method: 'relay',
+      transport: 'relay',
+      chunkSize: meta.chunkSize > 0 ? meta.chunkSize : CHUNK_SIZE_DEFAULT,
+      status: 'interrupted',
+      progress: 0,
+      confirmed: 0,
+      speed: 0,
+      attempts: 0,
+      createdAt: meta.createdAt,
+      lastActivity: Date.now(),
+      offset: 0,
+      nextSeq: 0,
+      pending: new Map(),
+      ackedSeqs: new Set(),
+      window: null,
+      buffer: new Map(),
+      ackTimers: new Map(),
+      hash: meta.hash,
+      integrity: 'unknown',
+      eofTimer: null,
+      awaitingResync: true,
+      error: 'Fichier à resélectionner',
+    };
+    this.transfers.set(t.id, t);
+    this.onUpdate(t);
+    return t;
+  }
+
+  /** Reprend un envoi restauré : le destinataire fixe la position exacte. */
+  reopenSend(id: string): boolean {
+    const t = this.transfers.get(id);
+    if (!t || t.direction !== 'send' || t.status !== 'interrupted') return false;
+    // Le fichier est revenu, mais la position ne l'est pas : on la redemande
+    // au destinataire avant d'émettre quoi que ce soit.
+    t.awaitingResync = true;
+    this._resume(t);
+    return true;
   }
 
   startReceive(
@@ -262,6 +332,7 @@ export class TransferManager {
       hash,
       integrity: 'unknown',
       eofTimer: null,
+      awaitingResync: false,
     };
     this.transfers.set(id, t);
     this.onUpdate(t);
@@ -272,6 +343,7 @@ export class TransferManager {
     const t = this.transfers.get(id);
     if (!t) return;
     this._setStatus(t, 'cancelled', reason);
+    this.chunkStore?.clear(t.id);
     this._emit('transfer-cancel', {
       transferId: t.id,
       reason,
@@ -283,15 +355,20 @@ export class TransferManager {
   }
 
   /**
-   * Annule les transferts qui visent un pair précis (départ du salon, perte de
-   * réseau). L'événement `user-left` porte l'identifiant du pair, pas celui du
-   * transfert : le passer à `cancel()` ne trouvait rien et la ligne restait
-   * bloquée sur « En cours ».
+   * Met en attente les transferts qui visent un pair précis (départ du salon,
+   * perte de réseau). L'événement `user-left` porte l'identifiant du pair, pas
+   * celui du transfert. On n'annule pas : un appareil qui se verrouille ou
+   * change de réseau revient, et la reprise doit pouvoir repartir de là.
    */
-  cancelForPeer(peerId: string, reason: string): void {
-    Array.from(this.transfers.values())
-      .filter((t) => t.targetId === peerId)
-      .forEach((t) => this.cancel(t.id, reason));
+  interruptForPeer(peerId: string, reason: string): void {
+    for (const t of this.transfers.values()) {
+      if (t.targetId === peerId) this._interrupt(t, reason);
+    }
+  }
+
+  /** Même chose pour tous les transferts : la connexion au serveur est tombée. */
+  interruptAll(reason: string): void {
+    for (const t of this.transfers.values()) this._interrupt(t, reason);
   }
 
   pause(id: string): void {
@@ -312,19 +389,28 @@ export class TransferManager {
   resume(id: string): void {
     const t = this.transfers.get(id);
     if (!t) return;
-    if (t.status === 'cancelled' || t.status === 'failed' || t.status === 'completed') return;
     if (t.status !== 'paused' && t.status !== 'interrupted') return;
-    this._setStatus(t, 'transferring', 'Reprise du transfert');
-    if (t.direction !== 'send') return;
-    // Les minuteurs d'acquittement ont été coupés à la pause (ou perdus lors
-    // d'une déconnexion) : on relance l'émission des chunks encore en attente,
-    // sinon un ACK perdu juste avant la pause laissait un trou définitif.
-    for (const [seq, chunk] of t.pending) {
-      if (t.ackedSeqs.has(seq)) continue;
-      this._transmitChunk(t, seq, chunk);
-      this._startAckTimeout(t, seq, chunk.length);
+    this._resume(t);
+  }
+
+  /** Reprise automatique après une reconnexion ou un retour au premier plan. */
+  resumeInterrupted(): void {
+    for (const t of this.transfers.values()) {
+      if (t.status === 'interrupted') this._resume(t);
     }
-    if (t.offset >= t.file.size && t.pending.size === 0) this.sendEof(t.id);
+  }
+
+  /**
+   * Un pair vient de (re)apparaître : on lui redemande où il en est. Sans ça,
+   * un destinataire rechargé ignorait les chunks déjà en vol, l'expéditeur les
+   * renvoyait indéfiniment et plus rien n'avançait.
+   */
+  reannounceFor(peerId: string): void {
+    for (const t of this.transfers.values()) {
+      if (t.direction !== 'send' || t.targetId !== peerId) continue;
+      if (t.status === 'interrupted' || t.status === 'paused') this._resume(t);
+      else if (t.status === 'transferring') this._announce(t, true);
+    }
   }
 
   get(id: string): TransferState | undefined {
@@ -339,17 +425,18 @@ export class TransferManager {
     return this.transfers.has(id);
   }
 
-  sendChunk(transferId: string, seq: number, chunk: Uint8Array): void {
+  /** Renvoie true quand le chunk est réellement accepté et émis. */
+  sendChunk(transferId: string, seq: number, chunk: Uint8Array): boolean {
     const t = this.transfers.get(transferId);
-    if (!t || t.direction !== 'send') return;
-    if (t.status !== 'transferring') return;
-    if (!t.pending.has(seq)) {
-      t.pending.set(seq, chunk);
-      t.offset += chunk.length;
-      t.lastActivity = Date.now();
-      this._transmitChunk(t, seq, chunk);
-      this._startAckTimeout(t, seq, chunk.length);
-    }
+    if (!t || t.direction !== 'send') return false;
+    if (t.status !== 'transferring') return false;
+    if (t.pending.has(seq)) return false;
+    t.pending.set(seq, chunk);
+    t.offset += chunk.length;
+    t.lastActivity = Date.now();
+    this._transmitChunk(t, seq, chunk);
+    this._startAckTimeout(t, seq, chunk.length);
+    return true;
   }
 
   sendEof(transferId: string): void {
@@ -376,11 +463,23 @@ export class TransferManager {
     file: { name: string; size: number; mime?: string };
     method: 'p2p' | 'relay';
     hash?: string;
+    chunkSize?: number;
+    /** L'expéditeur reprend un transfert déjà annoncé. */
+    resume?: boolean;
   }): void {
     const known = this.transfers.get(payload.transferId);
     if (known) {
       if (known.direction === 'receive') known.targetId = payload.initiator;
-      this.onUpdate(known);
+      // L'expéditeur reprend : le transfert redevient actif côté réception.
+      if (known.status === 'interrupted') this._resume(known);
+      else this.onUpdate(known);
+      return;
+    }
+    if (payload.resume) {
+      // Nous ne connaissons plus ce transfert (onglet tué, page rechargée) :
+      // les chunks déjà reçus sont sur l'appareil, on les recharge et on dit
+      // à l'expéditeur où reprendre.
+      void this._restoreReceive(payload);
       return;
     }
     const t = this.startReceive(
@@ -418,7 +517,11 @@ export class TransferManager {
       t.transport = via;
       this.onStatus(t);
     }
-    t.buffer.set(payload.seq, new Uint8Array(payload.chunk));
+    const bytes = new Uint8Array(payload.chunk);
+    t.buffer.set(payload.seq, bytes);
+    // Conservé tout de suite : un onglet tué par le système doit pouvoir
+    // reprendre exactement là où il s'est arrêté.
+    this.chunkStore?.save(t.id, payload.seq, bytes);
     t.confirmed += payload.size;
     t.lastActivity = Date.now();
     this._sendAck(t, payload.seq, payload.size);
@@ -477,8 +580,7 @@ export class TransferManager {
     this.onComplete(t);
   }
 
-  onTransferCancel(payload: { transferId: string; reason: string; target: string }): void {
-    if (payload.target !== this.selfId) return;
+  onTransferCancel(payload: { transferId: string; reason: string; target: string }): void {    if (payload.target !== this.selfId) return;
     const t = this.transfers.get(payload.transferId);
     if (!t) return;
     this._clearEofTimer(t);
@@ -490,6 +592,21 @@ export class TransferManager {
       target: t.targetId,
     });
     this.onCancel(t, payload.reason ?? 'Cancelled by peer');
+  }
+
+  /**
+   * Le destinataire indique combien d'octets il possède déjà : l'envoi
+   * reprend exactement à cet endroit, sans rien renvoyer d'inutile.
+   */
+  onTransferResync(payload: {
+    transferId: string;
+    target: string;
+    haveBytes?: number;
+  }): void {
+    if (payload.target !== this.selfId) return;
+    const t = this.transfers.get(payload.transferId);
+    if (!t || t.direction !== 'send') return;
+    this._seekTo(t, typeof payload.haveBytes === 'number' ? payload.haveBytes : 0);
   }
 
   onTransferEnd(payload: {
@@ -528,8 +645,124 @@ export class TransferManager {
     }
   }
 
-  private _setStatus(t: TransferState, status: TransferStatus, reason?: string): void {
-    if (t.status === status) return;
+  private _interrupt(t: TransferState, reason: string): void {
+    if (t.status !== 'transferring' && t.status !== 'pending') return;
+    if (t.direction === 'send') {
+      for (const timer of t.ackTimers.values()) clearTimeout(timer);
+      t.ackTimers.clear();
+      this._clearEofTimer(t);
+    }
+    this._setStatus(t, 'interrupted', reason);
+  }
+
+  private _resume(t: TransferState): void {
+    if (t.awaitingResync) {
+      // On ignore où en est le destinataire : on le lui redemande et on
+      // n'émet pas un octet avant sa réponse, sinon on repartirait de zéro.
+      this._announce(t, true);
+      return;
+    }
+    this._setStatus(t, 'transferring', 'Reprise du transfert');
+    if (t.direction !== 'send') return;
+    // Le destinataire doit savoir que ce transfert repart : s'il ne le connaît
+    // plus, il répond `transfer-resync` et l'envoi reprend à zéro.
+    this._announce(t, true);
+    // Les minuteurs ont été coupés à l'interruption : on relance l'émission des
+    // chunks encore en attente, sinon un ACK perdu laissait un trou définitif.
+    for (const [seq, chunk] of t.pending) {
+      if (t.ackedSeqs.has(seq)) continue;
+      this._transmitChunk(t, seq, chunk);
+      this._startAckTimeout(t, seq, chunk.length);
+    }
+    if (t.offset >= t.file.size && t.pending.size === 0) this.sendEof(t.id);
+  }
+
+  /** Annonce (ou réannonce) l'envoi au destinataire. */
+  private _announce(t: TransferState, resume: boolean): void {
+    this._emit('transfer-init', {
+      transferId: t.id,
+      initiator: this.selfId,
+      target: t.targetId,
+      direction: 'send',
+      file: { name: t.file.name, size: t.file.size, mime: t.file.mime },
+      chunkSize: t.chunkSize,
+      method: t.method,
+      hash: t.hash,
+      ...(resume ? { resume: true } : {}),
+    });
+  }
+
+  /**
+   * Recharge les chunks conservés d'un transfert que cet onglet ne connaît
+   * plus, puis indique à l'expéditeur la position exacte de reprise.
+   */
+  private async _restoreReceive(payload: {
+    transferId: string;
+    initiator: string;
+    target: string;
+    file: TransferFileMeta;
+    method: 'p2p' | 'relay';
+    hash?: string;
+    chunkSize?: number;
+  }): Promise<void> {
+    const stored = this.chunkStore
+      ? await this.chunkStore.load(payload.transferId).catch(() => null)
+      : null;
+    const t = this.startReceive(
+      payload.file,
+      payload.initiator,
+      payload.method,
+      payload.transferId,
+      payload.hash
+    );
+    if (payload.chunkSize && payload.chunkSize > 0) t.chunkSize = payload.chunkSize;
+    stored?.forEach((bytes, seq) => t.buffer.set(seq, bytes));
+    t.confirmed = this._prefixBytes(t);
+    this._updateReceiverProgress(t);
+    this._emit('transfer-resync', {
+      transferId: t.id,
+      target: t.targetId,
+      haveBytes: t.confirmed,
+    });
+  }
+
+  /** Octets reçus sans trou depuis le début du fichier. */
+  private _prefixBytes(t: TransferState): number {
+    let bytes = 0;
+    let seq = 0;
+    while (bytes < t.file.size) {
+      const chunk = t.buffer.get(seq);
+      if (!chunk) break;
+      bytes += chunk.byteLength;
+      seq += 1;
+    }
+    return Math.min(bytes, t.file.size);
+  }
+
+  /** Repositionne un envoi au premier octet manquant chez le destinataire. */
+  private _seekTo(t: TransferState, bytes: number): void {
+    for (const timer of t.ackTimers.values()) clearTimeout(timer);
+    t.ackTimers.clear();
+    this._clearEofTimer(t);
+    t.pending.clear();
+    t.ackedSeqs.clear();
+    const clamped = Math.max(0, Math.min(bytes, t.file.size));
+    // La reprise se fait toujours sur une frontière de chunk.
+    const aligned = Math.floor(clamped / t.chunkSize) * t.chunkSize;
+    t.awaitingResync = false;
+    t.offset = aligned;
+    t.nextSeq = aligned / t.chunkSize;
+    t.confirmed = aligned;
+    t.progress = t.file.size > 0 ? Math.min(100, Math.round((aligned / t.file.size) * 100)) : 0;
+    t.speed = 0;
+    t.status = 'transferring';
+    t.error = undefined;
+    t.lastActivity = Date.now();
+    this._announce(t, false);
+    this.onUpdate(t);
+  }
+
+  private _setStatus(t: TransferState, status: TransferStatus, reason?: string): void {    if (t.status === status) return;
     t.status = status;
     if (reason) t.error = reason;
     t.lastActivity = Date.now();
@@ -669,6 +902,7 @@ export class TransferManager {
         t.integrity = digest !== null && digest === t.hash.toLowerCase() ? 'verified' : 'mismatch';
       }
       t.buffer.clear();
+      this.chunkStore?.clear(t.id);
       this._setStatus(
         t,
         'completed',

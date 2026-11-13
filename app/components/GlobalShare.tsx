@@ -25,6 +25,8 @@ import {
   type DownloadRecord,
   type StoredDownload,
 } from '../lib/downloads';
+import { keepScreenAwake, releaseScreenWakeLock } from '../lib/wake-lock';
+import { clearChunks, deleteSend, loadChunks, loadSends, saveChunk, saveSend } from '../lib/resume-store';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -123,6 +125,31 @@ const getSocketUrl = (): string => {
     return window.location.origin;
   }
   return process.env.NEXT_PUBLIC_SOCKET_URL || '';
+};
+
+// Identité de session de l'onglet : conservée dans sessionStorage, elle survit
+// aux reconnexions (et à un rechargement) sans être partagée entre deux onglets.
+// C'est elle que visent les pairs, jamais `socket.id`, qui change à chaque
+// reconnexion.
+const SESSION_KEY = 'globalshare-session-id';
+// Dernier salon rejoint : un onglet restauré après avoir été tué y retourne
+// sans que l'utilisateur ait à retaper le code.
+const LAST_ROOM_KEY = 'globalshare-last-room';
+const getSessionId = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const existing = window.sessionStorage.getItem(SESSION_KEY);
+    if (existing) return existing;
+    const id = (
+      globalThis.crypto?.randomUUID?.() ??
+      `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+    ).replace(/-/g, '').slice(0, 20);
+    window.sessionStorage.setItem(SESSION_KEY, id);
+    return id;
+  } catch {
+    // Stockage refusé (navigation privée stricte) : identité éphémère suffit.
+    return `s${Date.now().toString(36)}`;
+  }
 };
 
 // Libellés des états de transfert, pour ne pas afficher l'identifiant brut.
@@ -318,6 +345,11 @@ export default function GlobalShare() {
   const sendLoopRunningRef = useRef(false);
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
+  // Identité stable du salon : les transferts la visent, pas `socket.id`.
+  const mySessionIdRef = useRef('');
+  // Reprise d'un envoi après rechargement : le fichier d'origine est redemandé.
+  const resumeInputRef = useRef<HTMLInputElement>(null);
+  const resumeTargetRef = useRef<string | null>(null);
   const toastIdRef = useRef(0);
   const downloadIdRef = useRef(0);
   // Blobs de la session : ouvrir un fichier juste reçu n'attend pas IndexedDB.
@@ -336,6 +368,35 @@ export default function GlobalShare() {
     const id = setInterval(() => setRenderTime(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // ---- Écran maintenu allumé pendant un transfert ----
+  // Un téléphone qui s'éteint gèle la page : la socket tombe et plus rien ne
+  // circule. La Wake Lock empêche au moins l'extinction automatique ; la reprise
+  // automatique couvre le verrouillage manuel et les coupures réseau.
+  const hasActiveTransfers = transfers.some(
+    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused'
+  );
+  useEffect(() => {
+    if (!hasActiveTransfers) {
+      void releaseScreenWakeLock();
+      return;
+    }
+    void keepScreenAwake();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Le navigateur relâche le verrou dès que la page passe en arrière-plan :
+      // on le redemande au retour, sinon l'écran s'éteint au milieu du transfert.
+      void keepScreenAwake();
+      const socket = socketRef.current;
+      if (socket && !socket.connected) socket.connect();
+      managerRef.current?.resumeInterrupted();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      void releaseScreenWakeLock();
+    };
+  }, [hasActiveTransfers]);
 
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
@@ -370,7 +431,7 @@ export default function GlobalShare() {
     if (!socket) return;
     const manager = new TransferManager(
       socket,
-      socket.id ?? 'unknown',
+      mySessionIdRef.current || getSessionId(),
       {
         onUpdate: (t) => setTransfers(prev => {
           const idx = prev.findIndex(x => x.id === t.id);
@@ -380,17 +441,20 @@ export default function GlobalShare() {
         onComplete: (t) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
           fileRefs.current.delete(t.id);
+          void deleteSend(t.id);
           // Le message d'enregistrement est émis par saveFile, qui connaît le
           // nom de l'expéditeur et sait où le fichier a été rangé.
         },
         onCancel: (t, reason) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
           fileRefs.current.delete(t.id);
+          void deleteSend(t.id);
           showToast('info', `Transfert annulé : ${t.file.name} (${reason})`);
         },
         onError: (t, error) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
           fileRefs.current.delete(t.id);
+          void deleteSend(t.id);
           showToast('error', `Échec du transfert : ${t.file.name} — ${error}`);
         },
         onStatus: (t) => setTransfers(prev => prev.map(x => x.id === t.id ? t : x)),
@@ -421,12 +485,38 @@ export default function GlobalShare() {
     s.on('transfer-eof-ack', (p) => manager.onTransferEofAck(p));
     s.on('transfer-cancel', (p) => manager.onTransferCancel(p));
     s.on('transfer-end', (p) => manager.onTransferEnd(p));
+    s.on('transfer-resync', (p) => manager.onTransferResync(p));
+
+    // Les chunks reçus sont écrits au fil de l'eau : un onglet tué par le
+    // système reprend à l'octet près, sans rien retélécharger.
+    manager.chunkStore = {
+      save: (transferId, seq, bytes) => saveChunk(transferId, seq, bytes),
+      load: (transferId) => loadChunks(transferId),
+      clear: (transferId) => clearChunks(transferId),
+    };
+
+    // Envois interrompus par un onglet tué : on les réinstalle pour que
+    // l'utilisateur réassocie le fichier et reprenne au bon endroit.
+    void loadSends().then(rows => {
+      rows.forEach(row => {
+        if (fileRefs.current.has(row.id)) return;
+        manager.restoreSend({
+          id: row.id,
+          file: { name: row.name, size: row.size, mime: row.mime },
+          chunkSize: row.chunkSize,
+          targetId: row.targetId,
+          targetName: row.targetName,
+          hash: row.hash,
+          createdAt: row.createdAt,
+        });
+      });
+    });
 
     return () => {
       manager.clear();
       s.off('transfer-init'); s.off('transfer-chunk');
       s.off('transfer-ack'); s.off('transfer-eof'); s.off('transfer-eof-ack');
-      s.off('transfer-cancel'); s.off('transfer-end');
+      s.off('transfer-cancel'); s.off('transfer-end'); s.off('transfer-resync');
     };
   }, [showToast, socketEpoch]);
 
@@ -478,8 +568,10 @@ export default function GlobalShare() {
         // Le transport (canal direct ou relais) est choisi par le
         // TransferManager : sendChunk avance l'offset, arme le suivi des ACK et
         // réémet en cas de perte, quel que soit le chemin emprunté.
-        manager.sendChunk(sendT.id, sendT.nextSeq, chunk);
-        sendT.nextSeq++;
+        // La séquence n'est consommée que si le chunk est réellement accepté :
+        // sinon une pause ou une coupure laissait un trou définitif dans le
+        // fichier, et la reprise ne pouvait plus aboutir.
+        if (manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) sendT.nextSeq++;
         const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
         transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
       } finally {
@@ -630,9 +722,14 @@ export default function GlobalShare() {
   }, []);
 
   // ---- Jointour / Rejoint / Quitter ----
-  const joinRoom = useCallback((roomOverride?: string) => {
+  const joinRoom = useCallback((roomOverride?: string, nameOverride?: string) => {
     const effectiveRoomId = (roomOverride ?? roomId).trim();
-    if (!effectiveRoomId || !myName) return;
+    const effectiveName = (nameOverride ?? myName).trim();
+    if (!effectiveRoomId || !effectiveName) return;
+    // Identité stable : elle ne dépend pas de la socket, donc un appareil qui
+    // se reconnecte retrouve les mêmes transferts.
+    const sessionId = mySessionIdRef.current || getSessionId();
+    mySessionIdRef.current = sessionId;
     if (socketRef.current) {
       try { socketRef.current.disconnect(); } catch { /* ignore */ }
       socketRef.current = null;
@@ -670,15 +767,27 @@ export default function GlobalShare() {
       console.log('Connected to server');
       if (connectDeadlineTimeoutRef.current) { clearTimeout(connectDeadlineTimeoutRef.current); connectDeadlineTimeoutRef.current = null; }
       setConnectionStatus('connected');
-      socket.emit('join-room', { roomId: effectiveRoomId, name: myName });
+      socket.emit('join-room', { roomId: effectiveRoomId, name: effectiveName, sessionId });
+      try {
+        window.sessionStorage.setItem(
+          LAST_ROOM_KEY,
+          JSON.stringify({ roomId: effectiveRoomId, name: effectiveName })
+        );
+      } catch {
+        // Stockage refusé : on ne pourra simplement pas rejoindre tout seul.
+      }
       setStep('room');
+      // Retour en ligne : les transferts interrompus repartent d'eux-mêmes, le
+      // temps que le pair se réenregistre dans le salon.
+      setTimeout(() => managerRef.current?.resumeInterrupted(), 600);
     });
     socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
       setConnectionStatus('disconnected');
-      // Les identifiants changent à la reconnexion : les canaux directs
-      // deviennent caducs et seront renégociés sur les nouveaux ids.
+      // Le canal direct est caduc : il sera renégocié avec les mêmes
+      // identités. Le transfert, lui, est conservé et reprendra au retour.
       Object.keys(peersRef.current).forEach(destroyPeer);
+      managerRef.current?.interruptAll('Connexion interrompue');
       if (reason === 'io server disconnect') socket.connect();
     });
     socket.on('connect_error', () => {
@@ -690,25 +799,31 @@ export default function GlobalShare() {
       }
     });
     socket.on('room-users', (users: { id: string; name: string }[]) => {
-      const selfId = socket.id ?? '';
+      // Identité stable, pas `socket.id` : après une reconnexion les deux côtés
+      // doivent encore désigner le même initiateur.
+      const selfId = mySessionIdRef.current || socket.id || '';
       const next: Record<string, PeerInfo> = {};
       users.forEach(u => {
         next[u.id] = { id: u.id, name: u.name, status: 'connected', method: 'relay' };
         // Règle déterministe pour que les deux côtés ne s'offrent pas la
         // connexion en même temps : l'id le plus petit propose.
         void ensureP2P(u.id, selfId < u.id);
+        // Un appareil déjà connu qui revient : son transfert reprend seul, et
+        // on lui redemande jusqu'où il en est s'il a perdu son état.
+        setTimeout(() => managerRef.current?.reannounceFor(u.id), 600);
       });
       setPeers(prev => ({ ...prev, ...next }));
     });
     socket.on('user-joined', ({ id, name }) => {
       setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
-      void ensureP2P(id, (socket.id ?? '') < id);
+      void ensureP2P(id, (mySessionIdRef.current || socket.id || '') < id);
+      setTimeout(() => managerRef.current?.reannounceFor(id), 600);
     });
     socket.on('user-left', (id) => {
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
       setActivePeerId(prev => (prev === id ? null : prev));
       destroyPeer(id);
-      managerRef.current?.cancelForPeer(id, "L'appareil s'est déconnecté");
+      managerRef.current?.interruptForPeer(id, "L'appareil s'est déconnecté");
     });
     // Signalisation WebRTC : le worker ne fait que la transmettre, la connexion
     // directe se négocie entre les deux navigateurs.
@@ -724,7 +839,35 @@ export default function GlobalShare() {
     socket.on('ice-candidate', onSignal);
   }, [roomId, myName, ensureP2P, destroyPeer]);
 
+  // Onglet tué par le système puis restauré : on rejoint le dernier salon tout
+  // seul, sinon le pair d'en face attendrait un code que personne ne retape.
+  const autoJoinedRef = useRef(false);
+  useEffect(() => {
+    if (autoJoinedRef.current || typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('room')) return;
+    let stored: { roomId?: string; name?: string } | null = null;
+    try {
+      stored = JSON.parse(window.sessionStorage.getItem(LAST_ROOM_KEY) ?? 'null');
+    } catch {
+      stored = null;
+    }
+    const storedRoom = stored?.roomId;
+    if (!storedRoom) return;
+    const storedName = stored?.name;
+    autoJoinedRef.current = true;
+    queueMicrotask(() => {
+      if (storedName) setMyName(storedName);
+      setRoomId(storedRoom);
+      joinRoom(storedRoom, storedName);
+    });
+  }, [joinRoom]);
+
   const exitRoom = useCallback(() => {
+    try {
+      window.sessionStorage.removeItem(LAST_ROOM_KEY);
+    } catch {
+      // ignore
+    }
     Object.keys(peersRef.current).forEach(destroyPeer);
     peersRef.current = {};
     setPeers({});
@@ -764,9 +907,23 @@ export default function GlobalShare() {
     );
     if (t) {
       fileRefs.current.set(t.id, file);
+      // Trace de l'envoi : après un rechargement, l'app saura quel fichier
+      // redemander et à quel appareil il était destiné.
+      void saveSend({
+        id: t.id,
+        name: file.name,
+        size: file.size,
+        mime: file.type || 'application/octet-stream',
+        hash: hash ?? undefined,
+        chunkSize: t.chunkSize,
+        targetId,
+        targetName: peers[targetId]?.name ?? 'Appareil',
+        createdAt: t.createdAt,
+        updatedAt: Date.now(),
+      });
       showToast('info', `Préparation de l envoi : ${file.name}`);
     }
-  }, [showToast]);
+  }, [showToast, peers]);
 
   // ---- Sélection de fichiers ----
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -837,6 +994,32 @@ export default function GlobalShare() {
       if (cameraInputRef.current) cameraInputRef.current.value = '';
     }
   }, [startSending, activePeerId]);
+
+  // Reprise d'un envoi dont le fichier a été perdu avec l'onglet : on vérifie
+  // qu'il s'agit bien des mêmes octets avant de repartir où l'on s'était
+  // arrêté, plutôt que de tout renvoyer.
+  const handleResumeSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const id = resumeTargetRef.current;
+    resumeTargetRef.current = null;
+    if (resumeInputRef.current) resumeInputRef.current.value = '';
+    if (!file || !id) return;
+    const transfer = managerRef.current?.get(id);
+    if (!transfer) return;
+    if (file.size !== transfer.file.size) {
+      showToast('error', `Ce fichier ne correspond pas : ${formatBytes(transfer.file.size)} attendus.`);
+      return;
+    }
+    if (transfer.hash && file.size <= HASH_MAX_BYTES) {
+      const digest = await sha256Hex(await file.arrayBuffer());
+      if (digest && digest !== transfer.hash.toLowerCase()) {
+        showToast('error', "Le contenu du fichier a changé : reprenez avec l'original.");
+        return;
+      }
+    }
+    fileRefs.current.set(id, file);
+    managerRef.current?.reopenSend(id);
+  }, [showToast]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -1321,6 +1504,30 @@ export default function GlobalShare() {
                         {t.status === 'paused' ? '▶ Reprendre' : '⏸ Pause'}
                       </button>
                     )}
+                    {t.direction === 'send' && t.status === 'interrupted' && !fileRefs.current.has(t.id) && (
+                      <button
+                        type="button"
+                        className="gs-btn gs-btn--primary gs-btn--sm"
+                        style={{ flexShrink: 0 }}
+                        onClick={() => {
+                          resumeTargetRef.current = t.id;
+                          resumeInputRef.current?.click();
+                        }}
+                      >
+                        Choisir le fichier
+                      </button>
+                    )}
+                    {t.status === 'interrupted' && (
+                      <button
+                        type="button"
+                        className="gs-btn gs-btn--ghost gs-btn--sm"
+                        style={{ flexShrink: 0 }}
+                        title={t.error ?? 'Transfert interrompu'}
+                        onClick={() => managerRef.current?.cancel(t.id, 'Annulé')}
+                      >
+                        Annuler
+                      </button>
+                    )}
                     <span>{formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}</span>
                   </div>
                 </div>
@@ -1476,6 +1683,7 @@ export default function GlobalShare() {
         webkitdirectory=""
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />
+      <input type="file" ref={resumeInputRef} onChange={handleResumeSelect} accept="*/*" className="hidden" />
     </div>
   );
 }

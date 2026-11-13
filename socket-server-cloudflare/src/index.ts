@@ -21,6 +21,8 @@ interface Client {
   ws: WebSocket;
   name?: string;
   room?: string;
+  /** Identité stable fournie par le client, conservée d'une socket à l'autre. */
+  peerId?: string;
   alive: boolean;
   closed: boolean;
   pendingBinary: PendingBinary | null;
@@ -30,6 +32,11 @@ interface Client {
 const PING_INTERVAL_MS = 25_000;
 const MAX_ROOM_LENGTH = 64;
 const MAX_NAME_LENGTH = 64;
+// Un appareil qui se verrouille ou change de réseau perd sa socket quelques
+// instants. On laisse ce délai avant d'annoncer son départ au salon : revenir
+// dans ce laps de temps n'interrompt donc aucun transfert.
+const REJOIN_GRACE_MS = 30_000;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{6,64}$/;
 
 // The GitHub Pages origin and local development origins. Add any custom
 // frontend domain here before deploying it.
@@ -171,7 +178,10 @@ export default {
 
 export class GlobalRoom {
   private sockets = new Map<string, Client>();
+  /** Identité stable -> socket courante : le routage suit les reconnexions. */
+  private bySession = new Map<string, Client>();
   private rooms = new Map<string, Set<string>>();
+  private pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   async fetch(request: Request): Promise<Response> {
@@ -347,7 +357,7 @@ export class GlobalRoom {
     if (eventName === 'transfer-init' || eventName === 'transfer-chunk' ||
       eventName === 'transfer-ack' || eventName === 'transfer-eof' ||
       eventName === 'transfer-eof-ack' || eventName === 'transfer-cancel' ||
-      eventName === 'transfer-end') {
+      eventName === 'transfer-end' || eventName === 'transfer-resync') {
       this.handleTransferEvent(client, eventName, payload);
       return;
     }
@@ -355,7 +365,11 @@ export class GlobalRoom {
 
   private handleJoinRoom(client: Client, payload: unknown): void {
     if (!payload || typeof payload !== 'object') return;
-    const { roomId, name } = payload as { roomId?: unknown; name?: unknown };
+    const { roomId, name, sessionId } = payload as {
+      roomId?: unknown;
+      name?: unknown;
+      sessionId?: unknown;
+    };
 
     if (typeof roomId !== 'string' || typeof name !== 'string') return;
     const cleanRoom = roomId.trim().slice(0, MAX_ROOM_LENGTH);
@@ -364,6 +378,33 @@ export class GlobalRoom {
 
     if (client.room && client.room !== cleanRoom) {
       this.leaveRoom(client);
+    }
+
+    // Identité stable entre deux connexions : un téléphone verrouillé perd sa
+    // socket mais garde son identité, donc les transferts retrouvent le bon
+    // pair au retour au lieu d'être annulés.
+    if (typeof sessionId === 'string' && SESSION_ID_PATTERN.test(sessionId)) {
+      const previous = this.bySession.get(sessionId);
+      if (previous && previous !== client) {
+        // Même identité sur deux sockets (onglet dupliqué) : la plus récente
+        // prend le relais, sans annoncer de départ au salon.
+        this.leaveRoom(previous, true);
+        previous.closed = true;
+        try {
+          previous.ws.close(1000, 'replaced');
+        } catch {
+          // ignore
+        }
+        this.sockets.delete(previous.id);
+      }
+      client.peerId = sessionId;
+      this.bySession.set(sessionId, client);
+      // Revenu avant l'expiration du délai : le salon n'a jamais vu le départ.
+      const pendingLeave = this.pendingLeaves.get(sessionId);
+      if (pendingLeave) {
+        clearTimeout(pendingLeave);
+        this.pendingLeaves.delete(sessionId);
+      }
     }
 
     client.room = cleanRoom;
@@ -378,16 +419,20 @@ export class GlobalRoom {
 
     const others = Array.from(room)
       .filter((id) => id !== client.id)
-      .map((id) => ({
-        id,
-        name: this.sockets.get(id)?.name ?? 'Appareil',
-      }));
+      .map((id) => {
+        const peer = this.sockets.get(id);
+        // Les pairs sont désignés par leur identité stable, pas par leur socket.
+        return {
+          id: peer ? this.peerIdOf(peer) : id,
+          name: peer?.name ?? 'Appareil',
+        };
+      });
 
     this.sendEvent(client, 'room-users', others);
     this.broadcastEvent(
       cleanRoom,
       'user-joined',
-      { id: client.id, name: cleanName },
+      { id: this.peerIdOf(client), name: cleanName },
       client.id
     );
   }
@@ -397,12 +442,12 @@ export class GlobalRoom {
     const targetId = (payload as { target?: unknown }).target;
     if (typeof targetId !== 'string') return;
 
-    const target = this.sockets.get(targetId);
+    const target = this.resolve(targetId);
     if (!target) return;
 
     this.sendEvent(target, eventName, {
       ...(payload as Record<string, unknown>),
-      caller: client.id,
+      caller: this.peerIdOf(client),
     });
   }
 
@@ -410,9 +455,12 @@ export class GlobalRoom {
     if (!payload || typeof payload !== 'object') return;
     const targetId = (payload as { target?: unknown }).target;
     if (typeof targetId !== 'string') return;
-    const target = this.sockets.get(targetId);
+    const target = this.resolve(targetId);
     if (!target) return;
-    this.sendEvent(target, eventName, { ...(payload as Record<string, unknown>), from: client.id });
+    this.sendEvent(target, eventName, {
+      ...(payload as Record<string, unknown>),
+      from: this.peerIdOf(client),
+    });
   }
 
   private handleRelayText(client: Client, payload: unknown): void {
@@ -424,11 +472,11 @@ export class GlobalRoom {
     };
     if (typeof targetId !== 'string') return;
 
-    const target = this.sockets.get(targetId);
+    const target = this.resolve(targetId);
     if (!target) return;
 
     this.sendEvent(target, 'relay-data', {
-      from: client.id,
+      from: this.peerIdOf(client),
       data: data ?? null,
       meta: meta ?? null,
     });
@@ -488,7 +536,7 @@ export class GlobalRoom {
     const targetId = (payload as { target?: unknown }).target;
     if (typeof targetId !== 'string') return;
 
-    const target = this.sockets.get(targetId);
+    const target = this.resolve(targetId);
     if (!target) return;
 
     if (eventName === 'relay-data') {
@@ -498,7 +546,7 @@ export class GlobalRoom {
         [
           'relay-data',
           {
-            from: client.id,
+            from: this.peerIdOf(client),
             data: { _placeholder: true, num: 0 },
             meta,
           },
@@ -513,7 +561,7 @@ export class GlobalRoom {
         target,
         [
           eventName,
-          { ...(payload as Record<string, unknown>), caller: client.id },
+          { ...(payload as Record<string, unknown>), caller: this.peerIdOf(client) },
         ],
         attachments
       );
@@ -524,12 +572,28 @@ export class GlobalRoom {
     if (client.closed) return;
     client.closed = true;
 
-    this.leaveRoom(client);
     this.sockets.delete(client.id);
+    const peerId = client.peerId;
+    const roomId = client.room;
+    client.room = undefined;
+
+    if (roomId) {
+      const room = this.rooms.get(roomId);
+      if (room) {
+        room.delete(client.id);
+        if (room.size === 0) this.rooms.delete(roomId);
+      }
+    }
+
+    if (peerId) {
+      if (this.bySession.get(peerId) === client) this.bySession.delete(peerId);
+      if (roomId) this.scheduleLeave(roomId, peerId);
+    }
+
     this.stopPingTimerIfIdle();
   }
 
-  private leaveRoom(client: Client): void {
+  private leaveRoom(client: Client, silent = false): void {
     const roomId = client.room;
     if (!roomId) return;
 
@@ -538,12 +602,39 @@ export class GlobalRoom {
       room.delete(client.id);
       if (room.size === 0) {
         this.rooms.delete(roomId);
-      } else {
-        this.broadcastEvent(roomId, 'user-left', client.id);
+      } else if (!silent) {
+        this.broadcastEvent(roomId, 'user-left', this.peerIdOf(client));
       }
     }
 
     client.room = undefined;
+  }
+
+  /**
+   * Annonce le départ du salon seulement si l'appareil n'est pas revenu dans le
+   * délai : une coupure brève (verrouillage, changement de réseau) ne doit pas
+   * faire annuler les transferts en cours côté pair.
+   */
+  private scheduleLeave(roomId: string, peerId: string): void {
+    const existing = this.pendingLeaves.get(peerId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.pendingLeaves.delete(peerId);
+      if (this.bySession.has(peerId)) return;
+      this.broadcastEvent(roomId, 'user-left', peerId);
+    }, REJOIN_GRACE_MS);
+
+    this.pendingLeaves.set(peerId, timer);
+  }
+
+  /** Socket courante d'une identité stable (ou identifiant de socket brut). */
+  private resolve(targetId: string): Client | undefined {
+    return this.bySession.get(targetId) ?? this.sockets.get(targetId);
+  }
+
+  private peerIdOf(client: Client): string {
+    return client.peerId ?? client.id;
   }
 
   private sendRaw(client: Client, data: string): void {
