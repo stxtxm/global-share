@@ -26,14 +26,19 @@ servi sous le préfixe `/global-share` (`basePath` dans `next.config.ts`).
 
 Le workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) :
 
-1. déploie d'abord le Worker Cloudflare (`worker`) ;
+1. déploie le Worker Cloudflare (`worker`) et lance les tests unitaires
+   (`test`), en parallèle ;
 2. installe les dépendances (`npm ci`) ;
 3. lance `npm run lint` et `npx tsc --noEmit` ;
 4. construit l'export statique avec `NEXT_PUBLIC_SOCKET_URL` ;
 5. publie `out/` sur GitHub Pages.
 
-Le site ne peut donc jamais être déployé avant le Worker : si le job `worker`
-échoue, la publication Pages est bloquée.
+Le Worker est donc toujours déployé avant le site. En revanche un échec du job
+`worker` **ne bloque pas** la publication : une panne Cloudflare (jeton expiré,
+API indisponible) ne doit pas empêcher de publier un client statique, qui n'a
+besoin d'aucune nouvelle version du Worker. Le job reste rouge et doit être
+relancé. Seul le job `test` conditionne la publication : un test unitaire en
+échec empêche le déploiement.
 
 Il se déclenche à **chaque push sur `main`** (donc au merge d'une pull request)
 et manuellement depuis l'onglet **Actions**. GitHub Pages doit être configuré
