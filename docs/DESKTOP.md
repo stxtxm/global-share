@@ -41,11 +41,22 @@ un fichier corrompu. Empreinte de la clé :
 [`electron-builder.yml`](../electron-builder.yml)) :
 
 - vérification 8 s après le démarrage, puis toutes les 6 h ;
-- entrée **Aide → Rechercher des mises à jour…** pour une vérification manuelle ;
-- le téléchargement démarre après accord, avec la barre de progression de la
-  barre des tâches ;
-- l'installation se fait au redémarrage (« Redémarrer et installer ») ou à la
-  fermeture de l'application.
+- entrée **Aide → Rechercher des mises à jour…** ou bouton de mise à jour dans
+  la barre supérieure de l'application ;
+- l'encart in-app affiche la version disponible, le téléchargement avec barre de
+  progression (pourcentage, octets transférés, débit), puis le bouton
+  **Installer et redémarrer** ; la barre du système d'exploitation suit aussi
+  le téléchargement ;
+- l'installation se fait depuis l'encart (mot de passe admin sur rpm/deb), ou
+  à la fermeture pour AppImage/Windows ;
+- les erreurs s'affichent dans l'encart avec un bouton **Réessayer** ; une
+  vérification de fond qui échoue reste silencieuse.
+
+Le pont [`desktop/preload.js`](../desktop/preload.js) expose
+`getUpdateState`, `onUpdateState`, `checkForUpdates`, `downloadUpdate`,
+`installUpdate` et `dismissUpdate`. L'état est normalisé des deux côtés
+([`app/lib/update.ts`](../app/lib/update.ts) et `desktop/updater.js`) : la
+progression est toujours un nombre entre 0 et 100, jamais `null`/`NaN`.
 
 Deux fichiers de métadonnées accompagnent les paquets et **doivent** être
 publiés dans la release : `latest.yml` (Windows) et `latest-linux.yml` (Linux).

@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, dialog } = require('electron');
+const { app, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -9,28 +9,128 @@ const path = require('node:path');
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 8_000;
 
+const STATUSES = new Set([
+  'idle',
+  'checking',
+  'available',
+  'downloading',
+  'downloaded',
+  'installing',
+  'up-to-date',
+  'unsupported',
+  'error',
+]);
+
 let getWindow = () => null;
 let checking = false;
 let downloading = false;
 let installing = false;
 let manualCheck = false;
-let promptedVersion = null;
+let dismissedVersion = null;
+let installerPath = null;
 
-function messageBox(options) {
-  const window = getWindow();
-  return window && !window.isDestroyed()
-    ? dialog.showMessageBox(window, options)
-    : dialog.showMessageBox(options);
+function initialState() {
+  return {
+    status: 'idle',
+    currentVersion: app.getVersion(),
+    version: null,
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0,
+    requiresAdmin: linuxPackageType() !== null,
+    message: '',
+  };
 }
 
+let state = initialState();
+
+// ---------------------------------------------------------------------------
+// Normalisation : electron-updater peut fournir des champs absents ou non
+// numériques. On garantit à l'interface des nombres finis, jamais `null`.
+// ---------------------------------------------------------------------------
+function finite(value, fallback = 0) {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function bytes(value) {
+  return Math.max(0, Math.round(finite(value)));
+}
+
+function percent(value) {
+  return Math.min(100, Math.max(0, Math.round(finite(value))));
+}
+
+function versionOf(info) {
+  const value = info && (info.version || (info.updateInfo && info.updateInfo.version));
+  return typeof value === 'string' && value ? value : app.getVersion();
+}
+
+function errorText(error, fallback) {
+  if (typeof error === 'string') return error || fallback;
+  const value = error instanceof Error ? error.message : error && error.message;
+  return typeof value === 'string' && value ? value : fallback;
+}
+
+function publish(patch = {}) {
+  const next = {
+    ...state,
+    ...patch,
+    currentVersion: app.getVersion(),
+    status: STATUSES.has(patch.status) ? patch.status : state.status,
+    version: patch.version === undefined ? state.version : patch.version || app.getVersion(),
+    percent: percent(patch.percent === undefined ? state.percent : patch.percent),
+    transferred: bytes(patch.transferred === undefined ? state.transferred : patch.transferred),
+    total: bytes(patch.total === undefined ? state.total : patch.total),
+    bytesPerSecond: bytes(
+      patch.bytesPerSecond === undefined ? state.bytesPerSecond : patch.bytesPerSecond,
+    ),
+    requiresAdmin:
+      patch.requiresAdmin === undefined
+        ? linuxPackageType() !== null
+        : Boolean(patch.requiresAdmin),
+    message:
+      patch.message === undefined
+        ? state.message
+        : typeof patch.message === 'string'
+          ? patch.message
+          : '',
+  };
+  state = next;
+  const window = getWindow();
+  if (window && !window.isDestroyed()) {
+    window.webContents.send('globalshare:update-state', state);
+  }
+  return state;
+}
+
+// 2 = barre indéterminée sous Windows/Linux ; -1 = aucune barre.
 function setProgress(value) {
   const window = getWindow();
-  if (window && !window.isDestroyed()) window.setProgressBar(value);
+  if (!window || window.isDestroyed()) return;
+  const number = Number(value);
+  // -1 conserve sa signification : retirer la barre. Toute autre valeur
+  // invalide devient indéterminée (2) plutôt que d'être passée à Electron.
+  const progress = !Number.isFinite(number)
+    ? 2
+    : number < 0
+      ? -1
+      : number > 1
+        ? 2
+        : Math.min(1, number);
+  window.setProgressBar(progress);
 }
 
-// Type du paquet Linux installé, écrit par electron-builder dans
-// resources/package-type. Un AppImage (et Windows) renvoie null : sa mise à
-// jour s'installe toute seule, sans mot de passe.
+function sendUpdateState() {
+  const window = getWindow();
+  if (window && !window.isDestroyed()) window.webContents.send('globalshare:update-state', state);
+}
+
+// ---------------------------------------------------------------------------
+// Installation des paquets Linux (rpm/deb). Un AppImage et Windows s'installent
+// seuls via electron-updater, sans élévation.
+// ---------------------------------------------------------------------------
 function linuxPackageType() {
   if (process.platform !== 'linux' || process.env.APPIMAGE) return null;
   try {
@@ -53,23 +153,18 @@ function hasCommand(command) {
   });
 }
 
-// electron-updater 6 installe les rpm/deb avec un spawnSync sous pkexec : le
-// processus principal reste gelé pendant la saisie du mot de passe (le bureau
-// propose alors de forcer la fermeture) et un échec n'est pas remonté.
-// Le téléchargement reste celui d'electron-updater ; l'installation est faite
-// ici, sans bloquer, avec les erreurs du gestionnaire de paquets affichées.
-function installCommand(type, installerPath) {
-  if (type === 'deb') return ['dpkg', ['-i', installerPath]];
-  if (hasCommand('dnf')) return ['dnf', ['install', '--nogpgcheck', '-y', installerPath]];
-  if (hasCommand('yum')) return ['yum', ['install', '--nogpgcheck', '-y', installerPath]];
-  return ['rpm', ['-Uvh', '--replacepkgs', '--replacefiles', '--nodeps', installerPath]];
+function installCommand(type, installer) {
+  if (type === 'deb') return ['dpkg', ['-i', installer]];
+  if (hasCommand('dnf')) return ['dnf', ['install', '--nogpgcheck', '-y', installer]];
+  if (hasCommand('yum')) return ['yum', ['install', '--nogpgcheck', '-y', installer]];
+  return ['rpm', ['-Uvh', '--replacepkgs', '--replacefiles', '--nodeps', installer]];
 }
 
 function elevatedCommand([command, args]) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) return [command, args];
-  // pkexec ouvre la boîte de mot de passe de la session (polkit), sans shell.
-  // Les arguments doivent être dépliés : un tableau imbriqué serait converti
-  // en une seule chaîne « install,--nogpgcheck,… » que dnf refuse.
+  // pkexec ouvre la boîte de mot de passe de la session, sans shell. Les
+  // arguments doivent être dépliés (un tableau imbriqué serait joint en une
+  // seule chaîne que dnf refuse).
   return hasCommand('pkexec') ? ['pkexec', [command, ...args]] : null;
 }
 
@@ -87,201 +182,227 @@ function runCommand([command, args]) {
   });
 }
 
-function reportError(error, alwaysShow) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[updater] ${message}`);
-  if (!alwaysShow) return;
-  void messageBox({
-    type: 'error',
-    title: 'Mise à jour impossible',
-    message: 'La mise à jour a échoué.',
-    detail: `${message}\n\nVous pouvez retélécharger GlobalShare depuis les releases GitHub.`,
-    buttons: ['Fermer'],
-    noLink: true,
-  });
-}
-
-function reportInstallFailure(detail, installerPath) {
-  console.error(`[updater] ${detail}`);
-  void messageBox({
-    type: 'error',
-    title: 'Mise à jour impossible',
-    message: "L'installation de la mise à jour a échoué.",
-    detail:
-      (installerPath ? `Le paquet téléchargé est conservé ici :\n${installerPath}\n\n` : '') +
-      detail +
-      '\n\nVous pouvez aussi installer la nouvelle version depuis les releases GitHub.',
-    buttons: ['Fermer'],
-    noLink: true,
-  });
-}
-
-async function installLinuxPackage(info, installerPath) {
-  const type = linuxPackageType();
-  const command = elevatedCommand(installCommand(type, installerPath));
-  if (!command) {
-    reportInstallFailure(
-      "pkexec est introuvable : le mot de passe administrateur ne peut pas être demandé.",
-      installerPath,
-    );
-    return;
-  }
-
-  installing = true;
-  setProgress(2); // barre indéterminée pendant l'installation
-  const result = await runCommand(command);
-  installing = false;
-  setProgress(-1);
-
-  if (!result.ok) {
-    reportInstallFailure(result.output || "Le gestionnaire de paquets a refusé l'installation.", installerPath);
-    return;
-  }
-
-  // Le paquet installé remplace l'application : on relance la nouvelle version.
-  app.relaunch();
-  app.exit(0);
-}
-
-async function promptInstall(info, installerPath) {
-  downloading = false;
-  setProgress(-1);
-  const isPackage = linuxPackageType() !== null;
-
-  const { response } = await messageBox({
-    type: 'info',
-    title: 'Mise à jour prête',
-    message: `GlobalShare ${info.version} est téléchargée.`,
-    detail: isPackage
-      ? "L'installation demande le mot de passe administrateur dans la fenêtre du système, puis GlobalShare redémarre. " +
-        '« Plus tard » n’installe rien maintenant.'
-      : 'GlobalShare va redémarrer pour utiliser la nouvelle version.',
-    buttons: ['Installer et redémarrer', 'Plus tard'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (response !== 0) return;
-
-  if (!isPackage) {
-    // AppImage et Windows : electron-updater sait installer sans élévation.
-    setImmediate(() => autoUpdater.quitAndInstall());
-    return;
-  }
-
-  if (!installerPath) {
-    reportInstallFailure("Le fichier téléchargé est introuvable.", null);
-    return;
-  }
-
-  await installLinuxPackage(info, installerPath);
-}
-
-async function promptDownload(info) {
-  if (downloading || installing || info.version === promptedVersion) return;
-  promptedVersion = info.version;
-
-  const { response } = await messageBox({
-    type: 'info',
-    title: 'Mise à jour disponible',
-    message: `GlobalShare ${info.version} est disponible.`,
-    detail:
-      `Vous utilisez la version ${app.getVersion()}. ` +
-      'La mise à jour se télécharge en arrière-plan ; vous choisirez ensuite de l’installer.',
-    buttons: ['Télécharger', 'Plus tard'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  if (response !== 0) return;
-
-  downloading = true;
-  try {
-    const files = await autoUpdater.downloadUpdate();
-    const installerPath = Array.isArray(files) ? files[0] : undefined;
-    await promptInstall(info, installerPath);
-  } catch (error) {
-    downloading = false;
-    promptedVersion = null;
-    reportError(error, true);
-  }
-}
-
+// ---------------------------------------------------------------------------
+// Actions exposées à l'interface
+// ---------------------------------------------------------------------------
 function checkForUpdates(options = {}) {
   const manual = Boolean(options.manual);
 
-  if (!app.isPackaged) {
-    if (manual) {
-      void messageBox({
-        type: 'info',
-        title: 'Mise à jour',
-        message: 'Les mises à jour ne sont vérifiées que dans la version installée.',
-        buttons: ['Fermer'],
-        noLink: true,
-      });
-    }
-    return;
+  if (manual) {
+    dismissedVersion = null;
+    // La vérification depuis le menu doit rendre l'encart visible dans l'app,
+    // y compris en développement où l'on affiche pourquoi elle est désactivée.
+    const window = getWindow();
+    if (window && !window.isDestroyed()) window.webContents.send('globalshare:update-open');
   }
-  if (checking) return;
+  if (!app.isPackaged) {
+    publish({
+      status: 'unsupported',
+      message: 'Les mises à jour ne sont vérifiées que dans la version installée.',
+    });
+    return Promise.resolve(state);
+  }
+  if (checking) return Promise.resolve(state);
 
   checking = true;
   manualCheck = manual;
-  autoUpdater
+  publish({ status: 'checking', message: '', percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 });
+
+  return autoUpdater
     .checkForUpdates()
-    .catch((error) => reportError(error, manual))
+    .catch((error) => {
+      // En arrière-plan, un réseau indisponible ne doit pas afficher d'erreur.
+      publish({
+        status: manual ? 'error' : state.status === 'checking' ? 'idle' : state.status,
+        message: manual ? errorText(error, 'La vérification a échoué.') : '',
+        percent: 0,
+      });
+    })
     .finally(() => {
       checking = false;
     });
 }
 
+async function downloadUpdate() {
+  if (downloading || installing || !app.isPackaged) return state;
+
+  downloading = true;
+  dismissedVersion = null;
+  publish({
+    status: 'downloading',
+    message: 'Téléchargement de la mise à jour…',
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0,
+  });
+  setProgress(0);
+
+  try {
+    const files = await autoUpdater.downloadUpdate();
+    installerPath = Array.isArray(files) && files.length ? files[0] : typeof files === 'string' ? files : null;
+    // L'événement update-downloaded publie normalement cet état ; ce garde-fou
+    // couvre les versions d'electron-updater qui ne l'émettent pas.
+    if (state.status === 'downloading') {
+      setProgress(-1);
+      publish({ status: 'downloaded', percent: 100, message: 'Mise à jour téléchargée.' });
+    }
+  } catch (error) {
+    setProgress(-1);
+    publish({
+      status: 'error',
+      message: errorText(error, 'Le téléchargement de la mise à jour a échoué.'),
+      percent: 0,
+    });
+  } finally {
+    downloading = false;
+  }
+  return state;
+}
+
+async function installUpdate() {
+  if (installing || downloading || state.status !== 'downloaded') return state;
+
+  const type = linuxPackageType();
+  if (!type) {
+    // AppImage / Windows : aucune élévation nécessaire.
+    installing = true;
+    publish({ status: 'installing', message: 'Redémarrage et installation…' });
+    setImmediate(() => autoUpdater.quitAndInstall());
+    return state;
+  }
+
+  if (!installerPath || !fs.existsSync(installerPath)) {
+    publish({ status: 'error', message: 'Le paquet téléchargé est introuvable. Relancez le téléchargement.' });
+    return state;
+  }
+  const command = elevatedCommand(installCommand(type, installerPath));
+  if (!command) {
+    publish({
+      status: 'error',
+      message: 'pkexec est introuvable : le mot de passe administrateur ne peut pas être demandé.',
+    });
+    return state;
+  }
+
+  installing = true;
+  publish({ status: 'installing', message: 'Installation en cours…', percent: 0 });
+  // Valeur > 1 : barre indéterminée pendant la saisie du mot de passe.
+  setProgress(2);
+  const result = await runCommand(command);
+  installing = false;
+  setProgress(-1);
+
+  if (!result.ok) {
+    publish({
+      status: 'error',
+      message: (result.output || 'Le gestionnaire de paquets a refusé l’installation.').slice(-1500),
+    });
+    return state;
+  }
+
+  app.relaunch();
+  app.exit(0);
+  return state;
+}
+
+function dismissUpdate() {
+  if (state.status === 'available' || state.status === 'downloaded') {
+    dismissedVersion = state.version;
+  }
+  publish({ status: 'idle', message: '', percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 });
+  return state;
+}
+
+function registerIpc() {
+  ipcMain.handle('globalshare:update-state', () => publish({}));
+  ipcMain.handle('globalshare:update-check', () => checkForUpdates({ manual: true }));
+  ipcMain.handle('globalshare:update-download', () => downloadUpdate());
+  ipcMain.handle('globalshare:update-install', () => installUpdate());
+  ipcMain.handle('globalshare:update-dismiss', () => dismissUpdate());
+}
+registerIpc();
+
 function initAutoUpdater(resolveWindow) {
   getWindow = resolveWindow;
   if (!app.isPackaged) return;
 
-  // Le téléchargement est déclenché par l'utilisateur, l'installation aussi.
+  // Le téléchargement et l'installation sont déclenchés depuis l'interface.
   autoUpdater.autoDownload = false;
-  // Sur rpm/deb, l'installation à la fermeture d'electron-updater gèle le
-  // processus sur la boîte de mot de passe : cette voie est désactivée, c'est
-  // installLinuxPackage() qui s'en charge.
+  // Sur rpm/deb, l'installation à la fermeture gèlerait sur le mot de passe :
+  // c'est installUpdate() qui s'en charge avec un processus non bloquant.
   autoUpdater.autoInstallOnAppQuit = linuxPackageType() === null;
   autoUpdater.allowPrerelease = false;
 
   autoUpdater.on('update-available', (info) => {
-    if (manualCheck) manualCheck = false;
-    void promptDownload(info);
+    const availableVersion = versionOf(info);
+    manualCheck = false;
+    if (availableVersion === dismissedVersion) return;
+    publish({
+      status: 'available',
+      version: availableVersion,
+      message: `Version ${availableVersion} disponible (${app.getVersion()} installée).`,
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0,
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
-    if (!manualCheck) return;
     manualCheck = false;
-    void messageBox({
-      type: 'info',
-      title: 'Mise à jour',
-      message: 'GlobalShare est à jour.',
-      detail: `Version installée : ${app.getVersion()}.`,
-      buttons: ['Fermer'],
-      noLink: true,
+    publish({
+      status: 'up-to-date',
+      message: `GlobalShare est à jour (version ${app.getVersion()}).`,
+      percent: 0,
     });
   });
 
   autoUpdater.on('download-progress', (progress) => {
-    setProgress(Math.min(1, Math.max(0, progress.percent / 100)));
+    const info = progress && typeof progress === 'object' ? progress : {};
+    publish({
+      status: 'downloading',
+      percent: info.percent,
+      transferred: info.transferred,
+      total: info.total,
+      bytesPerSecond: info.bytesPerSecond,
+      message: 'Téléchargement de la mise à jour…',
+    });
+    // Une progression absente/invalide affiche une barre indéterminée plutôt
+    // qu'un 0 % trompeur : le téléchargement continue, on ne sait juste pas où.
+    const rawPercent = Number(info.percent);
+    setProgress(Number.isFinite(rawPercent) ? percent(rawPercent) / 100 : 2);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    downloading = false;
+    setProgress(-1);
+    publish({
+      status: 'downloaded',
+      version: versionOf(info),
+      percent: 100,
+      message: `${versionOf(info)} est prête à installer.`,
+    });
   });
 
   autoUpdater.on('error', (error) => {
-    // Une vérification périodique échoue en silence ; dès que l'utilisateur a
-    // demandé le téléchargement ou l'installation, l'erreur est affichée.
+    // Une vérification périodique échoue en silence ; dès que l'utilisateur est
+    // impliqué (vérification manuelle, téléchargement, installation), on affiche.
     const visible = manualCheck || downloading || installing;
     downloading = false;
     installing = false;
-    reportError(error, visible);
     manualCheck = false;
+    setProgress(-1);
+    publish({
+      status: visible ? 'error' : state.status === 'checking' ? 'idle' : state.status,
+      message: visible ? errorText(error, 'La mise à jour a échoué.') : '',
+      percent: 0,
+    });
   });
 
-  // Une vérification au démarrage, puis toutes les six heures pour une
-  // application qui reste ouverte longtemps.
+  // Vérification au démarrage, puis toutes les six heures.
   setTimeout(() => checkForUpdates(), FIRST_CHECK_DELAY_MS);
   setInterval(() => checkForUpdates(), CHECK_INTERVAL_MS).unref?.();
 }
 
-module.exports = { checkForUpdates, initAutoUpdater };
+module.exports = { checkForUpdates, initAutoUpdater, sendUpdateState };

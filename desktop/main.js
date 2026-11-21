@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 
-const { checkForUpdates, initAutoUpdater } = require('./updater');
+const { checkForUpdates, initAutoUpdater, sendUpdateState } = require('./updater');
 
 // Identifiant Windows (raccourcis, notifications) : doit rester identique à
 // `appId` dans electron-builder.yml.
@@ -245,6 +245,9 @@ function createWindow(port) {
     openExternal(url);
   });
 
+  // L'interface demande l'état au montage ; ce renvoi couvre le cas où une
+  // mise à jour a changé d'état pendant un rechargement de la page.
+  window.webContents.on('did-finish-load', () => sendUpdateState());
   void window.loadURL(`${origin}/`);
   return window;
 }

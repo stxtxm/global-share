@@ -27,6 +27,8 @@ import {
 } from '../lib/downloads';
 import { keepScreenAwake, releaseScreenWakeLock } from '../lib/wake-lock';
 import { clearChunks, deleteSend, loadChunks, loadSends, saveChunk, saveSend } from '../lib/resume-store';
+import type { DesktopUpdateBridge } from '../lib/update';
+import { UpdateBanner, UpdateTrigger } from './UpdateManager';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -302,7 +304,7 @@ declare global {
       }) => Promise<{ path?: string; error?: string }>;
       openDownload: (filePath: string) => Promise<string>;
       revealDownload: (filePath: string) => Promise<string>;
-    };
+    } & DesktopUpdateBridge;
   }
 }
 
@@ -328,6 +330,9 @@ export default function GlobalShare() {
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
   const [trackingOpen, setTrackingOpen] = useState(false);
+  // Encart de mise à jour : ouvert depuis le bouton de la barre supérieure,
+  // depuis le menu Aide d'Electron, ou automatiquement quand une maj arrive.
+  const [updateOpen, setUpdateOpen] = useState(false);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -1199,7 +1204,9 @@ export default function GlobalShare() {
             <span className="gs-brand-mark"><IconBolt /></span>
             <span>GlobalShare</span>
           </Link>
+          <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
         </header>
+        <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
         <main className="gs-welcome-main">
           <div className="gs-hero">
             <h1>Partagez un fichier, pas un compte</h1>
@@ -1286,6 +1293,7 @@ export default function GlobalShare() {
           <IconShare className="gs-icon gs-icon--sm" />
         </button>
         <div className="gs-topbar-right">
+          <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
           <span className={`gs-status gs-status--${connectionStatus}`} role="status">
             <span className="gs-dot" aria-hidden="true" />
             {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
@@ -1301,6 +1309,8 @@ export default function GlobalShare() {
           </button>
         </div>
       </header>
+
+      <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
 
       <nav className="gs-tabs" role="tablist" aria-label="Sections">
         <button

@@ -1,8 +1,8 @@
 'use strict';
 
-// Pont minimal entre la page et le processus principal. Le contexte reste
-// isolé et la page n'obtient aucun accès Node : seulement trois appels, dont
-// deux vérifient que le chemin demandé est bien dans le dossier de l'app.
+// Pont entre la page et le processus principal. Le contexte reste isolé et la
+// page n'obtient aucun accès Node : seulement les opérations nécessaires, dont
+// les chemins de fichiers sont vérifiés côté main.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('globalshareDesktop', {
@@ -10,4 +10,24 @@ contextBridge.exposeInMainWorld('globalshareDesktop', {
   saveDownload: (payload) => ipcRenderer.invoke('globalshare:save-download', payload),
   openDownload: (filePath) => ipcRenderer.invoke('globalshare:open-download', filePath),
   revealDownload: (filePath) => ipcRenderer.invoke('globalshare:reveal-download', filePath),
+
+  // Mises à jour : l'état est poussé par le main, les actions sont demandées
+  // par l'interface. Les callbacks sont sans argument côté page.
+  getUpdateState: () => ipcRenderer.invoke('globalshare:update-state'),
+  checkForUpdates: () => ipcRenderer.invoke('globalshare:update-check'),
+  downloadUpdate: () => ipcRenderer.invoke('globalshare:update-download'),
+  installUpdate: () => ipcRenderer.invoke('globalshare:update-install'),
+  dismissUpdate: () => ipcRenderer.invoke('globalshare:update-dismiss'),
+  onUpdateState: (listener) => {
+    const channel = 'globalshare:update-state';
+    const wrapped = (_event, value) => listener(value);
+    ipcRenderer.on(channel, wrapped);
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  },
+  onUpdateOpen: (listener) => {
+    const channel = 'globalshare:update-open';
+    const wrapped = () => listener();
+    ipcRenderer.on(channel, wrapped);
+    return () => ipcRenderer.removeListener(channel, wrapped);
+  },
 });

@@ -37,6 +37,26 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
   1.0.6 ne s'installe plus avec `rpm -i` sur ces systèmes : utilisez `dnf
   install` ou cette version.
 
+## [1.0.8] — 2026-11-21
+
+### Ajouté
+
+- **Mise à jour in-app** dans l'application de bureau : un bouton dans la barre
+  supérieure ouvre un encart qui affiche la version disponible, le
+  téléchargement avec barre de progression (pourcentage, octets transférés,
+  débit), puis le bouton d'installation. Les erreurs s'affichent dans l'encart
+  avec un bouton **Réessayer**, et la vérification depuis **Aide → Rechercher
+  des mises à jour…** ouvre l'encart.
+
+### Corrigé
+
+- Progression de mise à jour `null`/`NaN` : l'état est normalisé côté bureau et
+  côté interface. La barre du système passe en mode indéterminé au lieu
+  d'afficher 0 % ou de planter, et la version disponible ne peut plus être
+  `null`.
+- Le message d'erreur de la mise à jour était effacé dès que l'interface
+  relisait l'état.
+
 ## [1.0.6] — 2026-11-08
 
 ### Corrigé
@@ -124,7 +144,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.7...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/stxtxm/global-share/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/stxtxm/global-share/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/stxtxm/global-share/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/stxtxm/global-share/compare/v1.0.4...v1.0.5

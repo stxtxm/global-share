@@ -109,6 +109,159 @@
   min-width: 0;
 }
 
+/* --- Mise à jour in-app --------------------------------------------------- */
+.gs-update-trigger {
+  position: relative;
+}
+
+.gs-update-trigger.is-active {
+  color: var(--gs-accent);
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.12);
+}
+
+.gs-update-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gs-success);
+  box-shadow: 0 0 0 2px var(--gs-bg);
+}
+
+.gs-update {
+  margin: 10px var(--gs-gutter) 0;
+  padding: 12px;
+  border-radius: var(--gs-radius-sm);
+  border: 1px solid rgba(167, 139, 250, 0.32);
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.11), rgba(34, 211, 238, 0.06));
+  animation: gs-toast-in 0.24s ease-out;
+}
+
+.gs-update--error {
+  border-color: rgba(251, 113, 133, 0.45);
+  background: rgba(251, 113, 133, 0.09);
+}
+
+.gs-update--downloading,
+.gs-update--installing {
+  border-color: rgba(34, 211, 238, 0.32);
+}
+
+.gs-update-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.gs-update-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(167, 139, 250, 0.15);
+  color: var(--gs-accent);
+}
+
+.gs-update--error .gs-update-icon {
+  color: var(--gs-danger);
+  background: rgba(251, 113, 133, 0.16);
+}
+
+.gs-update-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.gs-update-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.gs-update-detail {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: var(--gs-dim);
+  overflow-wrap: anywhere;
+}
+
+.gs-update-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--gs-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gs-update-close:hover {
+  color: var(--gs-text);
+  background: var(--gs-surface-strong);
+}
+
+.gs-update-bar {
+  height: 6px;
+  margin-top: 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.gs-update-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--gs-accent), var(--gs-accent-2));
+  transition: width 0.25s ease;
+}
+
+.gs-update-bar-fill.is-indeterminate {
+  width: 38% !important;
+  animation: gs-update-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes gs-update-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(360%); }
+}
+
+.gs-update-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.gs-update-meta {
+  margin-right: auto;
+  font-size: 0.72rem;
+  color: var(--gs-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gs-update-bar-fill.is-indeterminate {
+    animation: none;
+    width: 100% !important;
+    opacity: 0.5;
+  }
+}
+
 .gs-brand {
   display: inline-flex;
   align-items: center;
