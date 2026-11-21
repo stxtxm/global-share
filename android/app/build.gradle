@@ -12,6 +12,11 @@ def releaseKeystore = System.getenv("ANDROID_KEYSTORE_FILE")
 android {
     namespace = "io.github.stxtxm.globalshare"
     compileSdk = rootProject.ext.compileSdkVersion
+    // AGP 8 ne génère plus BuildConfig par défaut : UpdateManager lit la
+    // version de l'application depuis BuildConfig.VERSION_NAME.
+    buildFeatures {
+        buildConfig = true
+    }
     defaultConfig {
         applicationId "io.github.stxtxm.globalshare"
         minSdkVersion rootProject.ext.minSdkVersion
