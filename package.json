@@ -1,6 +1,6 @@
 {
   "name": "global-share",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -14,9 +14,15 @@
     "build:desktop": "node scripts/build-desktop.mjs",
     "dist": "npm run build:desktop && electron-builder",
     "dist:linux": "npm run build:desktop && electron-builder --linux rpm deb AppImage",
-    "dist:win": "npm run build:desktop && electron-builder --win nsis"
+    "dist:win": "npm run build:desktop && electron-builder --win nsis",
+    "build:android": "npm run build:desktop && cap sync android",
+    "apk": "npm run build:android && cd android && ./gradlew assembleRelease",
+    "apk:debug": "npm run build:android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "jszip": "^3.10.1",
     "lightningcss": "^1.33.0",
     "next": "16.0.10",

@@ -137,6 +137,21 @@ Le workflow [`.github/workflows/release.yml`](./.github/workflows/release.yml)
 construit et publie les paquets. Détails, particularités de mise à jour selon le
 format et limites : [docs/DESKTOP.md](./docs/DESKTOP.md).
 
+## Application Android (APK)
+
+Un APK Capacitor embarque le même frontend, avec un service avant-plan et un
+wake lock pour poursuivre les transferts écran verrouillé, et une mise à jour
+in-app depuis les releases GitHub (APK signé + empreinte SHA-256). Le workflow
+[`.github/workflows/android.yml`](./.github/workflows/android.yml) publie l'APK
+sur chaque tag ; la signature demande quatre secrets de dépôt décrits dans
+[docs/ANDROID.md](./docs/ANDROID.md). Le Play Store n'est pas visé : le
+self-update par APK en est exclu par sa politique.
+
+```bash
+npm run apk:debug   # build local non signé (SDK Android 36 requis)
+npm run apk         # build signé (variables ANDROID_KEY_*)
+```
+
 Les notes de version sont tenues dans [CHANGELOG.md](./CHANGELOG.md) : y ajouter
 l'entrée sous `[Non publié]` avant de pousser le tag, puis la renommer avec le
 numéro et la date de la version.

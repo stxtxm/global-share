@@ -24,18 +24,17 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
-## [1.0.7] — 2026-11-21
+## [1.0.9] — 2026-11-21
 
-### Corrigé
+### Ajouté
 
-- **Installation du paquet rpm sur Fedora 45 et plus récent** : `rpm` applique
-  désormais la vérification des signatures par défaut et refuse le paquet avec
-  « le paquet … n'est pas vérifié : pas de signature ». Les `.rpm` publiés sont
-  signés par la clé GlobalShare ; la clé publique
-  (`desktop/resources/RPM-GPG-KEY-globalshare`) est jointe à la release et
-  s'importe une fois avec `sudo rpm --import <url>`. Le paquet non signé de la
-  1.0.6 ne s'installe plus avec `rpm -i` sur ces systèmes : utilisez `dnf
-  install` ou cette version.
+- **Application Android** : un APK Capacitor embarque le même frontend, avec
+  service avant-plan, notification permanente, wake lock CPU/Wi-Fi et reprise
+  des transferts écran verrouillé.
+- **Mise à jour in-app dans l'APK** depuis les releases GitHub, avec
+  vérification SHA-256 et installation après consentement « sources inconnues ».
+- Workflow `Build Android APK` : publie l'APK signé et son empreinte dans la
+  release du tag. Voir [`docs/ANDROID.md`](./docs/ANDROID.md) pour les secrets.
 
 ## [1.0.8] — 2026-11-21
 
@@ -56,6 +55,19 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
   `null`.
 - Le message d'erreur de la mise à jour était effacé dès que l'interface
   relisait l'état.
+
+## [1.0.7] — 2026-11-21
+
+### Corrigé
+
+- **Installation du paquet rpm sur Fedora 45 et plus récent** : `rpm` applique
+  désormais la vérification des signatures par défaut et refuse le paquet avec
+  « le paquet … n'est pas vérifié : pas de signature ». Les `.rpm` publiés sont
+  signés par la clé GlobalShare ; la clé publique
+  (`desktop/resources/RPM-GPG-KEY-globalshare`) est jointe à la release et
+  s'importe une fois avec `sudo rpm --import <url>`. Le paquet non signé de la
+  1.0.6 ne s'installe plus avec `rpm -i` sur ces systèmes : utilisez `dnf
+  install` ou cette version.
 
 ## [1.0.6] — 2026-11-08
 
@@ -144,7 +156,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.8...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.9...HEAD
+[1.0.9]: https://github.com/stxtxm/global-share/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/stxtxm/global-share/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/stxtxm/global-share/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/stxtxm/global-share/compare/v1.0.5...v1.0.6

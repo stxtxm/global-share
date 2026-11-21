@@ -1,0 +1,103 @@
+name: Build Android APK
+
+# Le tag est la source de vérité : le workflow produit un APK signé et l'ajoute
+# à la release GitHub. Le fichier .apk.sha256 permet à la mise à jour in-app de
+# vérifier le téléchargement avant installation.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de la version à publier (ex. v1.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 'android-release-${{ github.ref }}'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync version with tag
+        env:
+          RELEASE_TAG: ${{ env.TAG }}
+        run: node scripts/set-version.mjs
+
+      - name: Build web assets and sync Capacitor
+        run: npm run build:android
+        env:
+          NEXT_PUBLIC_SOCKET_URL: https://global-share-socket.sitizstorm.workers.dev
+          NEXT_PUBLIC_SHARE_BASE: https://stxtxm.github.io/global-share
+          NEXT_PUBLIC_TURN_URLS: ${{ vars.TURN_URLS }}
+          NEXT_PUBLIC_TURN_USERNAME: ${{ vars.TURN_USERNAME }}
+          NEXT_PUBLIC_TURN_CREDENTIAL: ${{ vars.TURN_CREDENTIAL }}
+
+      - name: Decode signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 absent : voir docs/ANDROID.md."
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/globalshare.jks"
+
+      - name: Build signed APK
+        run: cd android && ./gradlew assembleRelease --no-daemon
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/globalshare.jks
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      # La release est créée par le workflow desktop : on l'attend avant
+      # l'upload pour que les deux workflows puissent tourner en parallèle.
+      - name: Attach APK to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${TAG#v}"
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK" || { echo "::error::APK introuvable"; exit 1; }
+          mv "$APK" "GlobalShare-$VERSION.apk"
+          sha256sum "GlobalShare-$VERSION.apk" | cut -d' ' -f1 > "GlobalShare-$VERSION.apk.sha256"
+
+          for attempt in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then break; fi
+            sleep 10
+          done
+          gh release view "$TAG" >/dev/null 2>&1 || {
+            echo "::error::Release $TAG introuvable après 5 minutes"; exit 1;
+          }
+          gh release upload "$TAG" \
+            "GlobalShare-$VERSION.apk" "GlobalShare-$VERSION.apk.sha256" --clobber

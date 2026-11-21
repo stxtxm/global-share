@@ -20,7 +20,8 @@ let stateFetched = false;
 
 function getBridge(): DesktopUpdateBridge | undefined {
   if (typeof window === 'undefined') return undefined;
-  return window.globalshareDesktop;
+  // Sur desktop le pont est exposé par Electron, sur Android par Capacitor.
+  return window.globalshareDesktop ?? window.globalshareMobile;
 }
 
 function applyState(value: unknown) {
@@ -82,10 +83,10 @@ function useOpenRequest(onOpen: () => void) {
   }, [onOpen]);
 }
 
-// Côté serveur, aucun pont Electron n'existe : `useSyncExternalStore` garde le
+// Côté serveur, aucun pont natif n'existe : `useSyncExternalStore` garde le
 // premier rendu client identique au HTML serveur, puis lit le pont au montage.
 const NOOP_SUBSCRIBE = () => () => {};
-function useIsDesktop(): boolean {
+function useHasUpdateHost(): boolean {
   return useSyncExternalStore(
     NOOP_SUBSCRIBE,
     () => Boolean(getBridge()),
@@ -130,7 +131,7 @@ interface TriggerProps {
 /** Petit bouton de la barre supérieure : ouvre l'encart et signale une maj. */
 export function UpdateTrigger({ open, onToggle }: TriggerProps) {
   const state = useUpdateState();
-  const isDesktop = useIsDesktop();
+  const isDesktop = useHasUpdateHost();
   if (!isDesktop) return null;
 
   const badge = state.status === 'available' || state.status === 'downloaded';
@@ -165,7 +166,7 @@ const AUTO_VISIBLE: ReadonlySet<UpdateStatus> = new Set([
 /** Encart in-app : vérification, téléchargement, progression et installation. */
 export function UpdateBanner({ open, onOpenChange }: BannerProps) {
   const state = useUpdateState();
-  const isDesktop = useIsDesktop();
+  const isDesktop = useHasUpdateHost();
   useOpenRequest(() => onOpenChange(true));
 
   if (!isDesktop || (!open && !AUTO_VISIBLE.has(state.status))) return null;
@@ -217,9 +218,11 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       break;
     case 'downloaded':
       title = `${state.version} est prête`;
-      detail = state.requiresAdmin
-        ? 'L’installation demandera le mot de passe administrateur, puis l’application redémarrera.'
-        : 'L’application va redémarrer pour terminer l’installation.';
+      detail = state.message.toLowerCase().includes('sources inconnues')
+        ? state.message
+        : state.requiresAdmin
+          ? 'L’installation demandera le mot de passe administrateur, puis l’application redémarrera.'
+          : 'L’application va redémarrer pour terminer l’installation.';
       buttons.push({ label: 'Installer et redémarrer', primary: true, run: actions.install });
       buttons.push({ label: 'Plus tard', run: close });
       break;

@@ -28,6 +28,13 @@ import {
 import { keepScreenAwake, releaseScreenWakeLock } from '../lib/wake-lock';
 import { clearChunks, deleteSend, loadChunks, loadSends, saveChunk, saveSend } from '../lib/resume-store';
 import type { DesktopUpdateBridge } from '../lib/update';
+// Installe le pont Capacitor dans l'APK avant le premier rendu.
+import '../lib/mobile-bridge';
+import {
+  mobileStartTransfer,
+  mobileStopTransfer,
+  mobileUpdateTransfer,
+} from '../lib/mobile-bridge';
 import { UpdateBanner, UpdateTrigger } from './UpdateManager';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
@@ -402,6 +409,37 @@ export default function GlobalShare() {
       void releaseScreenWakeLock();
     };
   }, [hasActiveTransfers]);
+
+  // Android : le service avant-plan et le wake lock partiel maintiennent le
+  // WebView et le réseau en vie quand l'écran est verrouillé. Sur desktop/web,
+  // les helpers ne font rien (pas de pont natif).
+  const nativeTransferCount = transfers.filter(
+    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused'
+  ).length;
+  const nativeTransferProgress = nativeTransferCount
+    ? Math.round(
+        transfers
+          .filter(t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused')
+          .reduce((sum, t) => sum + t.progress, 0) / nativeTransferCount
+      )
+    : 0;
+  const nativeTransferStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (nativeTransferCount > 0 && !nativeTransferStartedRef.current) {
+      mobileStartTransfer(nativeTransferCount, nativeTransferProgress);
+      nativeTransferStartedRef.current = true;
+    } else if (nativeTransferCount === 0 && nativeTransferStartedRef.current) {
+      mobileStopTransfer();
+      nativeTransferStartedRef.current = false;
+    }
+  }, [nativeTransferCount, nativeTransferProgress]);
+
+  useEffect(() => {
+    if (nativeTransferCount > 0 && nativeTransferStartedRef.current) {
+      mobileUpdateTransfer(nativeTransferCount, nativeTransferProgress);
+    }
+  }, [nativeTransferCount, nativeTransferProgress]);
 
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;

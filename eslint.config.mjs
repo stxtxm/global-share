@@ -22,6 +22,8 @@ const eslintConfig = defineConfig([
     // Paquets Electron produits par electron-builder : ils embarquent une
     // copie de l'export Next.js, inutile à relire.
     "dist/**",
+    // Export Next.js copié par `cap sync` dans le projet Android.
+    "android/app/src/main/assets/**",
   ]),
 ]);
 

@@ -49,3 +49,15 @@ next-env.d.ts
 
 # socket-server (node backend, node_modules churné)
 /socket-server/
+
+# android (Capacitor : le projet source est versionné, pas ses artefacts)
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/captures/
+/android/local.properties
+/android/app/src/main/assets/public/
+/android/app/src/main/assets/capacitor.config.json
+/android/app/src/main/assets/capacitor.plugins.json
+*.jks
+*.keystore

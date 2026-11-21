@@ -87,6 +87,8 @@ export function normalizeUpdateState(input: unknown): UpdateState {
 
 /** Méthodes exposées par desktop/preload.js (absentes sur le web). */
 export interface DesktopUpdateBridge {
+  isDesktop?: boolean;
+  isMobile?: boolean;
   getUpdateState?: () => Promise<unknown>;
   checkForUpdates?: () => Promise<unknown>;
   downloadUpdate?: () => Promise<unknown>;
