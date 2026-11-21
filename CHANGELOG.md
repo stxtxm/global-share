@@ -24,6 +24,19 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.7] — 2026-11-21
+
+### Corrigé
+
+- **Installation du paquet rpm sur Fedora 45 et plus récent** : `rpm` applique
+  désormais la vérification des signatures par défaut et refuse le paquet avec
+  « le paquet … n'est pas vérifié : pas de signature ». Les `.rpm` publiés sont
+  signés par la clé GlobalShare ; la clé publique
+  (`desktop/resources/RPM-GPG-KEY-globalshare`) est jointe à la release et
+  s'importe une fois avec `sudo rpm --import <url>`. Le paquet non signé de la
+  1.0.6 ne s'installe plus avec `rpm -i` sur ces systèmes : utilisez `dnf
+  install` ou cette version.
+
 ## [1.0.6] — 2026-11-08
 
 ### Corrigé
@@ -111,7 +124,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.6...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/stxtxm/global-share/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/stxtxm/global-share/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/stxtxm/global-share/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/stxtxm/global-share/compare/v1.0.3...v1.0.4

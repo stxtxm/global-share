@@ -9,7 +9,7 @@ restent le Worker Cloudflare.
 
 | Fichier produit | Distribution | Mise à jour in-app |
 | --- | --- | --- |
-| `globalshare-<version>-1.x86_64.rpm` | Fedora, RHEL/Rocky/Alma, openSUSE | oui, mot de passe admin (pkexec) |
+| `globalshare-<version>.x86_64.rpm` | Fedora, RHEL/Rocky/Alma, openSUSE | oui, mot de passe admin (pkexec) |
 | `globalshare_<version>_amd64.deb` | Debian, Ubuntu, Mint | oui, mot de passe admin (pkexec) |
 | `GlobalShare-<version>.AppImage` | toutes les distributions (`chmod +x`) | oui, sans mot de passe |
 | `GlobalShare-Setup-<version>.exe` | Windows 10/11 x64 | oui, silencieuse (installation par utilisateur) |
@@ -17,6 +17,23 @@ restent le Worker Cloudflare.
 L'AppImage est le format qui couvre « toutes les distributions » sans dépôt ni
 dépendances ; le `.rpm` et le `.deb` s'intègrent au gestionnaire de paquets de la
 distribution (menu, `/usr/bin/globalshare`, désinstallation propre).
+
+### Installer le paquet rpm (Fedora 45 et plus récent)
+
+Fedora 45 applique désormais la vérification des signatures par défaut : un
+paquet non signé est refusé avec « le paquet … n'est pas vérifié : pas de
+signature ». Les `.rpm` publiés sont donc signés par la clé GlobalShare.
+Importez-la une fois, puis installez le fichier téléchargé :
+
+```bash
+sudo rpm --import https://raw.githubusercontent.com/stxtxm/global-share/main/desktop/resources/RPM-GPG-KEY-globalshare
+sudo dnf install ./globalshare-<version>.x86_64.rpm
+```
+
+`dnf` résout les dépendances (`gtk3`, `nss`, `libXtst`, etc.). Sans l'import de
+la clé, l'installation échoue avec `NOKEY` : c'est le contrôle de signature, pas
+un fichier corrompu. Empreinte de la clé :
+`E70F 1BEA 865B 0674 3E23 D3E7 6230 E511 6CD2 6328`.
 
 ## Mise à jour automatique
 
@@ -85,9 +102,15 @@ alors et :
 2. construit l'export statique (`npm run build:desktop`) ;
 3. fabrique `rpm`, `deb` et `AppImage` sur `ubuntu-latest`, l'installateur `nsis`
    sur `windows-latest` ;
-4. crée la release GitHub et y dépose les paquets, les `.exe` et les
+4. signe les `.rpm` avec la clé `GPG_PRIVATE_KEY` (secret du dépôt) et joint la
+   clé publique `RPM-GPG-KEY-globalshare` à la release ;
+5. crée la release GitHub et y dépose les paquets, les `.exe` et les
    métadonnées `latest*.yml` (+ `.blockmap` pour les téléchargements
    différentiels).
+
+Le secret `GPG_PRIVATE_KEY` doit exister dans **Settings → Secrets and variables
+→ Actions** : sans lui, le job Linux échoue plutôt que de publier un rpm non
+signé, ininstallable sur Fedora 45+.
 
 Relance manuelle : **Actions → Release desktop apps → Run workflow** avec le tag
 existant en paramètre (le workflow recharge les fichiers de la release).
@@ -130,10 +153,10 @@ des valeurs de production surchargeables :
 
 - Seules les architectures x64 (Linux et Windows) sont produites ; ajouter
   `arm64` dans la matrice du workflow pour les couvrir.
-- Paquets Linux non signés : l'auto-update accepte les paquets non vérifiés
-  (`allowUnverifiedLinuxPackages`, valeur par défaut d'`electron-updater`). Si
-  vous signez les paquets, passez cette option à `false` dans
-  `desktop/updater.js`.
+- Les `.rpm` sont signés (Fedora 45 refuse les paquets non signés) ; les `.deb`
+  et AppImage restent non signés. L'auto-update accepte les paquets non
+  vérifiés (`allowUnverifiedLinuxPackages`, valeur par défaut
+  d'`electron-updater`).
 - macOS n'est pas configuré (aucune cible ni signature Apple).
 - La cible `rpm`/`deb` n'est mise à jour que si l'application a été installée
   depuis ce paquet ; une AppImage n'est mise à jour que lancée en AppImage.

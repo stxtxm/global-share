@@ -117,6 +117,10 @@ Le même frontend est empaqueté pour le bureau via `desktop/` et
 | `.AppImage` | toutes les distributions |
 | `GlobalShare-Setup-<version>.exe` | Windows 10/11 x64 |
 
+Le paquet rpm est signé : importez la clé publique une fois avant de
+l'installer (Fedora 45 refuse les paquets non signés), voir
+[docs/DESKTOP.md](./docs/DESKTOP.md#installer-le-paquet-rpm-fedora-45-et-plus-récent).
+
 Les applications se mettent à jour depuis les releases GitHub
 (`electron-updater`). Une release se publie en poussant un tag :
 

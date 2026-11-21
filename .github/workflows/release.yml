@@ -46,7 +46,7 @@ jobs:
 
       - name: Install rpm tooling
         if: matrix.name == 'linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends rpm
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends rpm gnupg
 
       - name: Install dependencies
         run: |
@@ -72,6 +72,30 @@ jobs:
       - name: Package
         run: npx electron-builder ${{ matrix.target }} --publish never
 
+      # Depuis Fedora 45, rpm applique la vérification des signatures par
+      # défaut : un paquet non signé est refusé (« n'est pas vérifié : pas de
+      # signature »). La clé privée vient du secret du dépôt ; la partie
+      # publique est versionnée dans desktop/resources/RPM-GPG-KEY-globalshare.
+      - name: Sign rpm package
+        if: matrix.name == 'linux'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::Secret GPG_PRIVATE_KEY manquant : un rpm non signé ne s'installe plus sur Fedora 45+."
+            exit 1
+          fi
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          KEY_ID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ { print $5; exit }')"
+          for package in dist/*.rpm; do
+            rpmsign --addsign \
+              --define "_gpg_name $KEY_ID" \
+              --define "_gpg_path $GNUPGHOME" \
+              "$package"
+          done
+          cp desktop/resources/RPM-GPG-KEY-globalshare dist/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
@@ -84,6 +108,7 @@ jobs:
             dist/*.exe
             dist/*.yml
             dist/*.blockmap
+            dist/RPM-GPG-KEY-globalshare
 
   publish:
     needs: build
