@@ -24,6 +24,14 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.11] — 2026-11-21
+
+### Corrigé
+
+- Release de test sans changement fonctionnel : elle permet de valider de bout
+  en bout la mise à jour in-app de l'APK (détection de `v1.0.11`, téléchargement,
+  vérification SHA-256, installation).
+
 ## [1.0.10] — 2026-11-21
 
 ### Corrigé
@@ -172,7 +180,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.10...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.11...HEAD
+[1.0.11]: https://github.com/stxtxm/global-share/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/stxtxm/global-share/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/stxtxm/global-share/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/stxtxm/global-share/compare/v1.0.7...v1.0.8
