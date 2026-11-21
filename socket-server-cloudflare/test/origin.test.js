@@ -51,6 +51,8 @@ async function main() {
   // répondaient « Origin not allowed »), il est donc vérifié en priorité.
   await expectAllowed('http://127.0.0.1:51234');
   await expectAllowed('http://localhost:51234');
+  // L'APK Capacitor charge la page depuis https://localhost (sans port).
+  await expectAllowed('https://localhost');
   await expectAllowed('https://stxtxm.github.io');
 
   await expectRefused('https://evil.example');

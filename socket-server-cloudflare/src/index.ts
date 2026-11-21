@@ -46,12 +46,15 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3001',
+  // Capacitor sert l'APK depuis https://localhost, sans port.
+  'https://localhost',
 ]);
 
 // L'application de bureau sert sa page depuis un serveur local sur un port
-// choisi au hasard : toute origine de loopback est donc acceptée, sinon la
-// connexion au salon échoue en « Origin not allowed ».
-const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/;
+// choisi au hasard ; l'APK Capacitor utilise https://localhost sans port.
+// Toute origine de loopback est acceptée, sinon la connexion au salon échoue
+// en « Origin not allowed ».
+const LOOPBACK_ORIGIN = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 
 function isAllowedOrigin(origin: string | null): boolean {
   // Une requête sans Origin ne vient pas d'une page web (client natif, test).

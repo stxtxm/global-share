@@ -93,6 +93,10 @@ jobs:
               --define "_gpg_name $KEY_ID" \
               --define "_gpg_path $GNUPGHOME" \
               "$package"
+            # rpmsign modifie le fichier : electron-builder avait déjà calculé
+            # le sha512 et la taille. Sans cette correction, l'auto-update
+            # échoue avec « sha512 checksum mismatch ».
+            node scripts/fix-release-checksum.mjs dist/latest-linux.yml "$(basename "$package")"
           done
           cp desktop/resources/RPM-GPG-KEY-globalshare dist/
 

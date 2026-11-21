@@ -24,6 +24,22 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.10] — 2026-11-21
+
+### Corrigé
+
+- **Mise à jour desktop sur Fedora** : le `.rpm` est signé après la génération
+  des métadonnées par electron-builder, ce qui change son empreinte et bloquait
+  l'installation avec « sha512 checksum mismatch ». Le workflow recalcule
+  désormais le sha512 et la taille du paquet signé dans `latest-linux.yml`.
+  Les métadonnées de la 1.0.9 ont aussi été corrigées sur la release.
+- **APK Android** : remplacement des icônes et de l'écran de démarrage Capacitor
+  par ceux de GlobalShare.
+- **Connexion depuis l'APK** : Capacitor charge la page depuis `https://localhost`
+  (sans port), une origine refusée par le Worker. Les origines loopback sans
+  port, en HTTP comme en HTTPS, sont désormais acceptées. Correctif **côté
+  Worker** (déployé avec le site).
+
 ## [1.0.9] — 2026-11-21
 
 ### Ajouté
@@ -156,7 +172,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.9...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.10...HEAD
+[1.0.10]: https://github.com/stxtxm/global-share/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/stxtxm/global-share/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/stxtxm/global-share/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/stxtxm/global-share/compare/v1.0.6...v1.0.7
