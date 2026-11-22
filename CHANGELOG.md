@@ -22,6 +22,21 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.22] — 2026-11-22
+
+### Corrigé
+
+- **« Not found » au démarrage de l'application de bureau après une mise à
+  jour « bundle web » (toutes versions)** : le dossier extrait du bundle
+  s'appelle comme la version (`…/web/1.0.21`) et son extname (`​.21`) se
+  confondait avec celui d'un fichier ; le serveur local ne servait donc plus
+  `index.html` sur la racine et la fenêtre restait sur « Not found ». La
+  résolution d'assets se fonde désormais sur le type réel du chemin (dossier →
+  son index.html, fichier → lui-même, navigation interne → index de la racine),
+  indépendamment des points dans les noms de dossiers. Réinstallation du paquet
+  nécessaire une fois (le correctif réside dans l'application elle-même) ;
+  l'application réparée redémarre directement sur le bundle déjà appliqué.
+
 ## [1.0.21] — 2026-11-22
 
 ### Ajouté
@@ -336,7 +351,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.21...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.22...HEAD
+[1.0.22]: https://github.com/stxtxm/global-share/compare/v1.0.21...v1.0.22
 [1.0.21]: https://github.com/stxtxm/global-share/compare/v1.0.20...v1.0.21
 [1.0.20]: https://github.com/stxtxm/global-share/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/stxtxm/global-share/compare/v1.0.18...v1.0.19

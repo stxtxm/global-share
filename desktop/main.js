@@ -162,19 +162,22 @@ function resolveAsset(pathname) {
   // Aucune requête ne doit sortir du dossier de l'application.
   if (target !== WEB_ROOT && !target.startsWith(WEB_ROOT + path.sep)) return null;
 
-  const candidates = [target];
-  if (path.extname(target) === '') candidates.push(path.join(target, 'index.html'));
+  let stat = null;
+  try { stat = fs.statSync(target); } catch { /* absent : navigation ? */ }
 
-  for (const candidate of candidates) {
-    try {
-      if (fs.statSync(candidate).isFile()) return candidate;
-    } catch {
-      // Fichier absent : on essaie le candidat suivant.
-    }
+  // Dossier (la racine « / », ou un sous-dossier comme /_next) : servir sa
+  // page index.html. Attention : un dossier de bundle s'appelle « 1.0.21 » —
+  // son extname est « .21 » et ressemble à une extension ; ne jamais se
+  // fonder sur extname pour décider si une cible est un fichier.
+  if (stat?.isDirectory()) {
+    const index = path.join(target, 'index.html');
+    return fs.existsSync(index) ? index : null;
   }
+  if (stat?.isFile()) return target;
 
-  // Navigation interne (/?room=CODE, /salon) : l'export ne contient qu'une page.
-  if (path.extname(target) === '') {
+  // Navigation interne (/?room=CODE, /salon) : l'export ne contient qu'une
+  // page — tant que la cible absente ne ressemble pas à un fichier statique.
+  if (path.extname(path.basename(target)) === '') {
     const index = path.join(WEB_ROOT, 'index.html');
     if (fs.existsSync(index)) return index;
   }
