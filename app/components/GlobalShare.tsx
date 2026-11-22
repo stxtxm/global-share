@@ -50,7 +50,6 @@ import {
   type RoomHistoryEntry,
 } from '../lib/rooms';
 import { loadSettings as loadAppSettings, saveSettings, type AppSettings, DEFAULT_SETTINGS } from '../lib/settings';
-import Settings from './Settings';
 
 const MAX_IN_FLIGHT_CHUNKS = 24;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
@@ -402,7 +401,6 @@ export default function GlobalShare() {
   // « create » par défaut (créer un salon en un chiffre), « join » (rejoindre
   // avec un code), « rooms » (salons ouverts et récents de cet appareil).
   const [homeView, setHomeView] = useState<'create' | 'join' | 'rooms'>('create');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   // ---- Refs ----
@@ -1431,15 +1429,14 @@ export default function GlobalShare() {
           </Link>
           <div className="gs-topbar-right">
             <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
-            <button 
-              type="button" 
+            <Link 
+              href="/settings"
               className="gs-iconbtn gs-hide-on-mobile"
-              onClick={() => setSettingsOpen(true)}
               aria-label="Paramètres"
               title="Paramètres"
             >
               <IconSettings className="gs-icon" />
-            </button>
+            </Link>
           </div>
         </header>
         <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
@@ -1679,18 +1676,16 @@ export default function GlobalShare() {
             <IconHistory className="gs-icon gs-icon--sm" />
             Salons
           </button>
-          <button
-            type="button"
+          <Link
+            href="/settings"
             className="gs-homenav-item"
-            onClick={() => setSettingsOpen(true)}
             aria-label="Paramètres"
             title="Paramètres"
           >
             <IconSettings className="gs-icon gs-icon--sm" />
             Paramètres
-          </button>
+          </Link>
         </nav>
-        <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} setSettingsOpen={setSettingsOpen} />
       </div>
     );
   }
@@ -1723,15 +1718,14 @@ export default function GlobalShare() {
             <span className="gs-dot" aria-hidden="true" />
             {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
           </span>
-          <button
-            type="button"
+          <Link 
+            href="/settings"
             className="gs-iconbtn gs-hide-on-mobile"
-            onClick={() => setSettingsOpen(true)}
             aria-label="Paramètres"
             title="Paramètres"
           >
             <IconSettings className="gs-icon" />
-          </button>
+          </Link>
           <button
             type="button"
             className="gs-iconbtn"
@@ -2125,16 +2119,15 @@ export default function GlobalShare() {
             <IconCamera />
             <span>Photo</span>
           </button>
-          <button
-            type="button"
+          <Link
+            href="/settings"
             className="gs-action"
-            onClick={() => setSettingsOpen(true)}
             aria-label="Paramètres"
             title="Paramètres"
           >
             <IconSettings />
             <span>Paramètres</span>
-          </button>
+          </Link>
         </div>
       </div>
       )}
@@ -2150,7 +2143,6 @@ export default function GlobalShare() {
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />
       <input type="file" ref={resumeInputRef} onChange={handleResumeSelect} accept="*/*" className="hidden" />
-      <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} setSettingsOpen={setSettingsOpen} />
     </div>
   );
 }

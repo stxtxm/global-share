@@ -23,6 +23,16 @@ export interface AppSettings {
   theme: 'system' | 'light' | 'dark';
   
   /**
+   * Default language for the application
+   * - 'fr': French (default)
+   * - 'en': English
+   * - 'es': Spanish
+   * - 'de': German
+   * - 'it': Italian
+   */
+  language: 'fr' | 'en' | 'es' | 'de' | 'it';
+  
+  /**
    * Accent color for UI elements (buttons, progress bars, etc.)
    * Format: HEX color code (e.g., '#a78bfa')
    */
@@ -152,6 +162,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   // Appearance
   theme: 'system',
+  language: 'fr',
   accentColor: '#a78bfa',
   
   // Display
@@ -351,4 +362,20 @@ export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
 export function applyAccentColor(color: string): void {
   if (typeof document === 'undefined') return;
   document.documentElement.style.setProperty('--gs-accent', color);
+}
+
+/**
+ * Apply language to the HTML document.
+ * 
+ * @param {string} lang - Language code ('fr', 'en', 'es', 'de', 'it')
+ * 
+ * @example
+ * ```typescript
+ * applyLanguage('fr');
+ * // <html lang="fr">
+ * ```
+ */
+export function applyLanguage(lang: string): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = lang;
 }
