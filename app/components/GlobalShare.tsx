@@ -49,8 +49,10 @@ import {
   type LiveRoom,
   type RoomHistoryEntry,
 } from '../lib/rooms';
+import { loadSettings as loadAppSettings, saveSettings, type AppSettings, DEFAULT_SETTINGS } from '../lib/settings';
+import Settings from './Settings';
 
-const MAX_IN_FLIGHT_CHUNKS = 8;
+const MAX_IN_FLIGHT_CHUNKS = 16;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
 // perte — on peut démultiplier la taille des blocs et la profondeur du pipeline
 // sans risque, pour un débit proche de celui du Wi-Fi lui-même.
@@ -324,6 +326,15 @@ function IconHistory({ className = 'gs-icon' }: IconProps) {
   );
 }
 
+function IconSettings({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
@@ -391,6 +402,8 @@ export default function GlobalShare() {
   // « create » par défaut (créer un salon en un chiffre), « join » (rejoindre
   // avec un code), « rooms » (salons ouverts et récents de cet appareil).
   const [homeView, setHomeView] = useState<'create' | 'join' | 'rooms'>('create');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -533,6 +546,19 @@ export default function GlobalShare() {
   }, [peers]);
 
   // ---- Initialisation du TransferManager ----
+  // Les mises à jour de progression (un appel par chunk reçu, par ack reçu)
+  // sont regroupées : au-delà de quelques centaines de blocs/s, un re-rendu
+  // React par événement consommait tout le CPU du téléphone à la place du
+  // transfert. Un rafraîchissement groupé à ~5 Hz suffit pour l'affichage ;
+  // débuts comme fins de transfert restent immédiats.
+  const transfersSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncTransfers = useCallback(() => {
+    if (transfersSyncTimerRef.current !== null) return;
+    transfersSyncTimerRef.current = setTimeout(() => {
+      transfersSyncTimerRef.current = null;
+      setTransfers(managerRef.current?.getAll() ?? []);
+    }, 200);
+  }, []);
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket) return;
@@ -540,11 +566,12 @@ export default function GlobalShare() {
       socket,
       mySessionIdRef.current || getSessionId(),
       {
-        onUpdate: (t) => setTransfers(prev => {
-          const idx = prev.findIndex(x => x.id === t.id);
-          if (idx >= 0) { const next = [...prev]; next[idx] = t; return next; }
-          return [...prev, t];
-        }),
+        onUpdate: (t) => {
+          // Nouveau transfert : ajout immédiat. Sinon, rafraîchissement groupé
+          // (voir syncTransfers) : un setState par chunk saturait le rendu.
+          setTransfers(prev => (prev.some(x => x.id === t.id) ? prev : [...prev, t]));
+          syncTransfers();
+        },
         onComplete: (t) => {
           setTransfers(prev => prev.filter(x => x.id !== t.id));
           fileRefs.current.delete(t.id);
@@ -564,7 +591,7 @@ export default function GlobalShare() {
           void deleteSend(t.id);
           showToast('error', `Échec du transfert : ${t.file.name} — ${error}`);
         },
-        onStatus: (t) => setTransfers(prev => prev.map(x => x.id === t.id ? t : x)),
+        onStatus: () => syncTransfers(),
         onSendDone: () => {},
       }
     );
@@ -624,6 +651,10 @@ export default function GlobalShare() {
       s.off('transfer-init'); s.off('transfer-chunk');
       s.off('transfer-ack'); s.off('transfer-eof'); s.off('transfer-eof-ack');
       s.off('transfer-cancel'); s.off('transfer-end'); s.off('transfer-resync');
+      if (transfersSyncTimerRef.current !== null) {
+        clearTimeout(transfersSyncTimerRef.current);
+        transfersSyncTimerRef.current = null;
+      }
     };
   }, [showToast, socketEpoch]);
 
@@ -1381,6 +1412,15 @@ export default function GlobalShare() {
           </Link>
           <div className="gs-topbar-right">
             <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
+            <button 
+              type="button" 
+              className="gs-iconbtn gs-hide-on-mobile"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Paramètres"
+              title="Paramètres"
+            >
+              <IconSettings className="gs-icon" />
+            </button>
           </div>
         </header>
         <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
@@ -1620,7 +1660,18 @@ export default function GlobalShare() {
             <IconHistory className="gs-icon gs-icon--sm" />
             Salons
           </button>
+          <button
+            type="button"
+            className="gs-homenav-item"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Paramètres"
+            title="Paramètres"
+          >
+            <IconSettings className="gs-icon gs-icon--sm" />
+            Paramètres
+          </button>
         </nav>
+        <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} setSettingsOpen={setSettingsOpen} />
       </div>
     );
   }
@@ -1653,6 +1704,15 @@ export default function GlobalShare() {
             <span className="gs-dot" aria-hidden="true" />
             {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
           </span>
+          <button
+            type="button"
+            className="gs-iconbtn gs-hide-on-mobile"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Paramètres"
+            title="Paramètres"
+          >
+            <IconSettings className="gs-icon" />
+          </button>
           <button
             type="button"
             className="gs-iconbtn"
@@ -2046,6 +2106,16 @@ export default function GlobalShare() {
             <IconCamera />
             <span>Photo</span>
           </button>
+          <button
+            type="button"
+            className="gs-action"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Paramètres"
+            title="Paramètres"
+          >
+            <IconSettings />
+            <span>Paramètres</span>
+          </button>
         </div>
       </div>
       )}
@@ -2061,6 +2131,7 @@ export default function GlobalShare() {
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />
       <input type="file" ref={resumeInputRef} onChange={handleResumeSelect} accept="*/*" className="hidden" />
+      <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} setSettingsOpen={setSettingsOpen} />
     </div>
   );
 }

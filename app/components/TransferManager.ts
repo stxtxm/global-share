@@ -109,7 +109,11 @@ export interface TransferEndPayload {
   target: string;
 }
 
-export const CHUNK_SIZE_DEFAULT = 64 * 1024;
+// 128 Ko : le contenu circule en binaire (Relais) ou via le canal direct, le
+// coût par chunk est devenu négligeable, mais chaque chunk reste un aller-
+// retour d'acquittement — doubler la taille double le débit potentiel sur un
+// réseau à forte latence, avec deux fois moins d'événements à traiter.
+export const CHUNK_SIZE_DEFAULT = 128 * 1024;
 // Sans réémission, un seul paquet d'EOF perdu bloquait le transfert pour de bon.
 const EOF_RETRY_MS = 2000;
 // Au-delà, lire tout le fichier en mémoire serait risqué sur un téléphone.

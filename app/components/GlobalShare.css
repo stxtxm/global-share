@@ -1776,3 +1776,808 @@
 .hidden {
   display: none !important;
 }
+
+/* ==========================================================================
+   Settings Sheet - Mobile-First Design
+   ========================================================================== */
+
+.gs-sheet--settings {
+  max-height: 90vh;
+  width: 100%;
+  border-radius: 24px 24px 0 0;
+  background: var(--gs-bg-soft);
+  box-shadow: 0 -20px 60px -20px rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Mobile: Full-width bottom sheet */
+@media (max-width: 767px) {
+  .gs-sheet--settings {
+    max-width: 100%;
+    margin: 0;
+    border-radius: 24px 24px 0 0;
+    /* Spring physics animation for mobile */
+    animation: gs-sheet-spring-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+}
+
+/* Desktop: Centered modal with fade */
+@media (min-width: 768px) {
+  .gs-sheet--settings {
+    max-width: 500px;
+    margin: auto;
+    border-radius: 24px;
+    animation: gs-fade 0.28s ease-out;
+    box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Spring animation for mobile - more fluid */
+@keyframes gs-sheet-spring-in {
+  0% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(-5%);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Overlay - darker for better focus on mobile */
+.gs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: gs-overlay-fade-in 0.28s ease-out;
+}
+
+@keyframes gs-overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gs-overlay-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes gs-sheet-spring-out {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+/* Content styling */
+.gs-settings-content {
+  padding: var(--gs-gutter);
+}
+
+.gs-settings-section {
+  padding-bottom: var(--gs-gutter);
+}
+
+.gs-settings-section:last-child {
+  padding-bottom: 0;
+}
+
+.gs-settings-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--gs-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.125em;
+  margin-bottom: calc(var(--gs-gutter) * 0.75);
+  padding-bottom: calc(var(--gs-gutter) * 0.75);
+  border-bottom: 1px solid var(--gs-border);
+}
+
+.gs-settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gs-gutter) * 0.75);
+}
+
+/* Handle for mobile - more interactive */
+.gs-sheet-handle {
+  width: 48px;
+  height: 5px;
+  margin: calc(var(--gs-gutter) * 0.75) auto calc(var(--gs-gutter) * 0.5);
+  border-radius: 10px;
+  background: var(--gs-surface);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.gs-sheet-handle:active {
+  cursor: grabbing;
+  transform: scaleX(0.95);
+}
+
+/* Header */
+.gs-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--gs-gutter) var(--gs-gutter);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--gs-bg-soft);
+  border-bottom: 1px solid var(--gs-border);
+}
+
+.gs-sheet-title {
+  display: flex;
+  align-items: center;
+  gap: var(--gs-gutter-sm);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--gs-text);
+  margin: 0;
+}
+
+.gs-sheet-close {
+  flex-shrink: 0;
+  padding: calc(var(--gs-gutter) * 0.25);
+  margin-left: auto;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.gs-sheet-close:hover {
+  opacity: 1;
+  background: var(--gs-surface);
+  border-radius: 12px;
+}
+
+.gs-sheet-close:active {
+  transform: scale(0.92);
+}
+
+/* Actions */
+.gs-sheet-actions {
+  display: flex;
+  gap: calc(var(--gs-gutter) * 0.75);
+  padding: var(--gs-gutter);
+  background: var(--gs-bg-soft);
+  border-top: 1px solid var(--gs-border);
+}
+
+.gs-sheet-actions .gs-btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: 14px;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Settings Controls - Touch-Optimized
+   ========================================================================== */
+
+.gs-settings-section:last-child {
+  padding-bottom: 0;
+}
+
+.gs-settings-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gs-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: var(--gs-gutter-sm);
+  padding-bottom: var(--gs-gutter-sm);
+  border-bottom: 1px solid var(--gs-border);
+}
+
+.gs-settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-gutter-sm);
+}
+
+/* Toggle switch - Touch-optimized for mobile */
+.gs-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--gs-gutter);
+  padding: calc(var(--gs-gutter) * 0.75) var(--gs-gutter);
+  border-radius: 16px;
+  background: var(--gs-surface);
+  border: 1px solid var(--gs-border);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gs-settings-toggle:active {
+  transform: scale(0.98);
+  border-color: var(--gs-accent);
+}
+
+.gs-settings-toggle:focus-visible {
+  outline: 2px solid var(--gs-accent);
+  outline-offset: 2px;
+}
+
+.gs-settings-toggle:hover {
+  border-color: var(--gs-border-strong);
+  background: var(--gs-surface-strong);
+}
+
+.gs-settings-toggle input[type="checkbox"] {
+  display: none;
+}
+
+.gs-settings-toggle-slider {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--gs-bg);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+
+.gs-settings-toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--gs-surface-strong);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.gs-settings-toggle input[type="checkbox"]:checked + .gs-settings-toggle-slider {
+  background: linear-gradient(135deg, var(--gs-accent), var(--gs-accent-2));
+}
+
+.gs-settings-toggle input[type="checkbox"]:checked + .gs-settings-toggle-slider::before {
+  transform: translateX(20px);
+  background: var(--gs-bg);
+  box-shadow: 0 2px 6px rgba(167, 139, 250, 0.4);
+}
+
+.gs-settings-toggle-label {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.gs-settings-toggle-title {
+  display: block;
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--gs-text);
+}
+
+/* Row for select dropdowns */
+.gs-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gs-gutter-sm) * 0.5);
+  padding: calc(var(--gs-gutter) * 0.75);
+  border-radius: 16px;
+  background: var(--gs-surface);
+  border: 1px solid var(--gs-border);
+  transition: all 0.2s ease;
+}
+
+.gs-settings-row:active {
+  border-color: var(--gs-accent);
+}
+
+.gs-settings-row-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.95rem;
+  color: var(--gs-text);
+}
+
+.gs-settings-row-hint {
+  color: var(--gs-dim);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+/* Select dropdown - Touch-optimized */
+.gs-select {
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--gs-border);
+  background: var(--gs-bg);
+  color: var(--gs-text);
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  touch-action: manipulation;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+.gs-select:hover,
+.gs-select:focus {
+  border-color: var(--gs-accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.1);
+}
+
+.gs-select:active {
+  transform: scale(0.98);
+}
+
+.gs-select option {
+  background: var(--gs-bg-soft);
+  color: var(--gs-text);
+  padding: 8px 12px;
+}
+
+/* Range slider - Touch-optimized */
+.gs-range {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--gs-bg);
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.gs-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--gs-accent);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.4);
+  transition: all 0.2s ease;
+}
+
+.gs-range::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(167, 139, 250, 0.5);
+}
+
+.gs-range::-webkit-slider-thumb:active {
+  transform: scale(1.15);
+  box-shadow: 0 6px 16px rgba(167, 139, 250, 0.6);
+}
+
+.gs-range::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--gs-accent);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.4);
+}
+
+.gs-range::-moz-range-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--gs-bg);
+  border: none;
+}
+
+/* ==========================================================================
+   Mobile-Specific Touch Enhancements
+   ========================================================================== */
+
+/* Larger tap targets on mobile */
+@media (max-width: 767px) {
+  .gs-settings-toggle {
+    padding: 14px var(--gs-gutter);
+    border-radius: 18px;
+  }
+  
+  .gs-settings-toggle-slider {
+    width: 52px;
+    height: 30px;
+  }
+  
+  .gs-settings-toggle-slider::before {
+    width: 22px;
+    height: 22px;
+    top: 4px;
+    left: 4px;
+  }
+  
+  .gs-settings-toggle input[type="checkbox"]:checked + .gs-settings-toggle-slider::before {
+    transform: translateX(24px);
+  }
+  
+  .gs-settings-row {
+    padding: 14px var(--gs-gutter);
+    border-radius: 18px;
+  }
+  
+  .gs-select {
+    padding: 14px 16px;
+    padding-right: 40px;
+    border-radius: 14px;
+    font-size: 1rem;
+  }
+  
+  .gs-range::-webkit-slider-thumb {
+    width: 28px;
+    height: 28px;
+  }
+  
+  .gs-sheet-actions .gs-btn {
+    min-height: 52px;
+    font-size: 1rem;
+  }
+  
+  /* Active state feedback for touch */
+  .gs-settings-toggle:active,
+  .gs-settings-row:active,
+  .gs-select:active,
+  .gs-sheet-actions .gs-btn:active {
+    transform: scale(0.96);
+  }
+}
+
+/* ==========================================================================
+   Smooth Transitions for All Interactive Elements
+   ========================================================================== */
+
+.gs-settings-toggle,
+.gs-settings-row,
+.gs-select,
+.gs-range,
+.gs-sheet-close,
+.gs-sheet-actions .gs-btn {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Range slider */
+.gs-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-gutter-sm);
+  padding: var(--gs-gutter-sm);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-surface);
+  border: 1px solid var(--gs-border);
+}
+
+.gs-settings-row-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: var(--gs-text);
+}
+
+.gs-settings-row-hint {
+  color: var(--gs-dim);
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.gs-range {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gs-bg);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.gs-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--gs-accent);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.3);
+  transition: all 0.18s ease;
+}
+
+.gs-range::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+.gs-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--gs-accent);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.3);
+}
+
+/* Select dropdown */
+.gs-select {
+  padding: 10px 14px;
+  border-radius: var(--gs-radius-sm);
+  border: 1px solid var(--gs-border);
+  background: var(--gs-bg);
+  color: var(--gs-text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.gs-select:hover,
+.gs-select:focus {
+  border-color: var(--gs-border-strong);
+  outline: none;
+}
+
+.gs-select option {
+  background: var(--gs-bg-soft);
+  color: var(--gs-text);
+}
+
+/* Sheet header */
+.gs-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--gs-gutter);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--gs-bg-soft);
+}
+
+.gs-sheet-handle {
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--gs-surface);
+  margin-bottom: var(--gs-gutter);
+}
+
+.gs-sheet-title {
+  display: flex;
+  align-items: center;
+  gap: var(--gs-gutter-sm);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--gs-text);
+}
+
+.gs-sheet-close {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.gs-sheet-body {
+  padding: var(--gs-gutter);
+  color: var(--gs-dim);
+  font-size: 0.9rem;
+}
+
+.gs-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--gs-gutter);
+  padding: var(--gs-gutter);
+  background: var(--gs-bg-soft);
+  border-top: 1px solid var(--gs-border);
+}
+
+.gs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: gs-overlay-in 0.2s ease-out;
+}
+
+@keyframes gs-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.gs-sheet {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  border-radius: var(--gs-radius) var(--gs-radius) 0 0;
+  background: var(--gs-bg-soft);
+  color: var(--gs-text);
+  overflow-y: auto;
+  animation: gs-sheet-in 0.3s ease-out;
+}
+
+@keyframes gs-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==========================================================================
+   Mobile Responsiveness - Settings in Bottom Navigation
+   ========================================================================== */
+
+/* Hide settings button in topbar on mobile devices */
+.gs-hide-on-mobile {
+  display: none;
+}
+
+/* Show settings button in topbar on desktop/tablet */
+@media (min-width: 768px) {
+  .gs-hide-on-mobile {
+    display: inline-flex;
+  }
+}
+
+/* Settings button in bottom nav - mobile specific styles */
+.gs-homenav-item:nth-child(4) {
+  /* 4th item is Settings */
+}
+
+/* Make sure actionbar has enough space for settings button */
+.gs-actionbar-row {
+  gap: var(--gs-gutter-sm);
+}
+
+/* Settings button in actionbar */
+.gs-action:nth-child(4) {
+  /* 4th action button is Settings */
+}
+
+/* ==========================================================================
+   Mobile Bottom Navigation Enhancements
+   ========================================================================== */
+
+/* Ensure bottom nav is accessible on mobile */
+.gs-homenav {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Active state for settings button */
+.gs-homenav-item:active,
+.gs-action:active {
+  transform: scale(0.95);
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   Closing Animations
+   ========================================================================== */
+
+.gs-overlay--closing {
+  animation: gs-overlay-fade-out 0.28s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes gs-overlay-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.gs-sheet--closing {
+  animation: gs-sheet-spring-out 0.28s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes gs-sheet-spring-out {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+/* ==========================================================================
+   Touch Feedback - Ripple Effect Simulation
+   ========================================================================== */
+
+/* Add subtle press effect for all touchable elements */
+.gs-settings-toggle::after,
+.gs-settings-row::after,
+.gs-select::after,
+.gs-sheet-close::after,
+.gs-sheet-actions .gs-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.gs-settings-toggle:active::after,
+.gs-settings-row:active::after,
+.gs-select:active::after,
+.gs-sheet-close:active::after,
+.gs-sheet-actions .gs-btn:active::after {
+  opacity: 1;
+}
+
+/* For iOS devices - better touch feedback */
+.gs-settings-toggle,
+.gs-settings-row,
+.gs-select,
+.gs-sheet-close,
+.gs-sheet-actions .gs-btn {
+  -webkit-tap-highlight-color: rgba(167, 139, 250, 0.2);
+}
+
+/* ==========================================================================
+   Scroll Behavior for Settings Content
+   ========================================================================== */
+
+/* Smooth scrolling for settings content */
+.gs-settings-content {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide scrollbar but keep functionality */
+.gs-settings-content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.gs-settings-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gs-settings-content::-webkit-scrollbar-thumb {
+  background: rgba(167, 139, 250, 0.3);
+  border-radius: 3px;
+}
+
+.gs-settings-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(167, 139, 250, 0.5);
+}

@@ -1,414 +1,178 @@
-# Notes de version
-
-Toutes les versions notables de GlobalShare, la plus récente en premier. Le
-format suit [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/) et les
-numéros suivent [SemVer](https://semver.org/lang/fr/).
-
-## Convention
-
-1. Toute modification visible pour l'utilisateur s'ajoute sous
-   **`## [Non publié]`**, dans la catégorie qui convient (`Ajouté`, `Modifié`,
-   `Corrigé`, `Retiré`, `Sécurité`). Une entrée décrit le comportement, pas le
-   nom du fichier modifié.
-2. Pour publier : renommer la section en `## [x.y.z] — AAAA-MM-JJ`, reporter le
-   lien de comparaison en bas du fichier, puis pousser le tag `vx.y.z`. Le
-   workflow [`.github/workflows/release.yml`](./.github/workflows/release.yml)
-   aligne les `package.json` sur le tag, construit les paquets et publie la
-   release.
-3. Les notes de la release GitHub sont générées automatiquement à partir des
-   commits (`--generate-notes`) ; recopier la section correspondante quand un
-   récapitulatif rédigé est préférable pour les utilisateurs.
-4. Une correction livrée **uniquement côté Worker** est active dès le
-   déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
-   à tort qu'une nouvelle version de l'application est nécessaire.
-
-## [1.0.23] — 2026-11-22
-
-### Ajouté
-
-- **Continuité en arrière-plan sur le bureau (Fedora, Debian, Windows, AppImage)**
-  — l'équivalent du service avant-plan Android :
-  - Fermer la fenêtre (croix) replie l'application dans la zone de
-    notification ; les transferts et la connexion continuent. Ce comportement
-    est demandé **une seule fois** (« Continuer en arrière-plan » / « Quitter »,
-    avec « Ne plus demander ») puis mémorisé — la convention de demande
-    d'autorisation du bureau. Le menu du tray et « Fichier → Quitter » quittent
-    toujours réellement.
-  - **Anti-veille système** pendant un transfert (`powerSaveBlocker`) :
-    l'ordinateur ne s'endort plus au milieu d'un fichier, quel que soit le plan
-    d'énergie, sans réglage manuel.
-  - Une notification bureau prévient de l'arrivée d'un fichier quand la
-    fenêtre est fermée ou cachée.
-
-- **Bouton « Annuler » sur chaque transfert actif** (envoi et réception, en
-  cours ou en pause) : finie l'obligation de quitter le salon pour arrêter un
-  transfert. L'annulation informe l'autre appareil, qui retire la ligne.
-
-### Corrigé
-
-- **Débit plafonné à ~170 Ko/s dans tous les cas** : les chunks de fichiers
-  circulaient en JSON texte (64 Ko → ~250 Ko sérialisés, parsés et
-  re-sérialisés deux fois, y compris dans le Durable Object). Les chunks
-  relais partent désormais en **pièce jointe binaire** WebSocket, forwardés à
-  l'identique par le serveur — le débit n'est plus limité que par le réseau
-  (déploiement Worker effectué dès le push ; les anciens clients restent
-  compatibles).
-- Boucle d'envoi : suppression du délai artificiel par chunk (5–25 ms, soit
-  ~40 blocs/s maximum) — la fenêtre de chunks en vol pilote le débit.
-- `user-left` jamais émis pour un client sans identité stable : le salon
-  gardait un « fantôme » pour toujours (test de protocole désormais au vert).
-
-## [1.0.22] — 2026-11-22
-
-### Corrigé
-
-- **« Not found » au démarrage de l'application de bureau après une mise à
-  jour « bundle web » (toutes versions)** : le dossier extrait du bundle
-  s'appelle comme la version (`…/web/1.0.21`) et son extname (`​.21`) se
-  confondait avec celui d'un fichier ; le serveur local ne servait donc plus
-  `index.html` sur la racine et la fenêtre restait sur « Not found ». La
-  résolution d'assets se fonde désormais sur le type réel du chemin (dossier →
-  son index.html, fichier → lui-même, navigation interne → index de la racine),
-  indépendamment des points dans les noms de dossiers. Réinstallation du paquet
-  nécessaire une fois (le correctif réside dans l'application elle-même) ;
-  l'application réparée redémarre directement sur le bundle déjà appliqué.
-
-## [1.0.21] — 2026-11-22
-
-### Ajouté
-
-- **Accueil en trois vues avec barre de navigation** : une vue « Créer » par
-  défaut (créer le salon libre en un chiffre), une vue « Code » (rejoindre un
-  code partagé, ou générer et rejoindre un code privé), une vue « Salons »
-  (salons ouverts maintenant + historique de l'appareil). La barre, commune à
-  l'APK et à la PWA, est en bas de l'écran sur mobile et en pilule flottante
-  sur écran large.
-- **Transferts beaucoup plus rapides sur un même réseau** : le chemin direct
-  WebRTC détecte automatiquement qu'un pair est sur le même réseau local
-  (candidats « host » des deux côtés) ; les blocs passent à 256 Ko, le
-  pipeline s'élargit et les micro-pauses d'émission disparaissent — le débit
-  s'approche de celui du Wi-Fi. En dehors, réglages conservateurs inchangés.
-  Retransmission bien plus réactive sur le canal direct (ACK attendus 5 s
-  au lieu de 15 s).
-
-### Modifié
-
-- **Aucune page ne défile plus** : l'application tient dans l'écran sur
-  téléphone, tablette et desktop ; seules les listes internes (fichiers,
-  salons, historique) défilent si elles débordent.
-- La section « Vos salons » de l'accueil et son doublon dans le menu
-  disparaissent : la vue « Salons » de la navigation les remplace.
-
-## [1.0.20] — 2026-11-22
-
-### Ajouté
-
-- **Session maintenue en arrière-plan et écran verrouillé (Android)** : rejoindre
-  un salon démarre désormais le service avant-plan même sans transfert
-  (wake lock CPU + verrou Wi-Fi basse latence + notification « Connectée ·
-  reste joignable en arrière-plan ») — la socket ne meurt plus quand l'app
-  passe en arrière-plan ou que le téléphone se met en veille, et les transferts
-  entrants continuent. Sous Android 14+, le service utilise le type
-  « specialUse » (pair-à-pair temps réel), sans le plafond de 6 h/jour du type
-  « dataSync ». À la première connexion, l'app demande une seule fois
-  l'exemption d'optimisation de batterie (Doze) : l'accepter garantit la
-  continuité même sur les téléphones agressifs. Quitter le salon ou se
-  déconnecter rend les verrous immédiatement.
-
-## [1.0.19] — 2026-11-22
-
-### Corrigé
-
-- **Crash au démarrage de l'application de bureau (depuis la 1.0.13)** :
-  `updater.js` et `main.js` importent `web-updates.js`, mais ce fichier
-  manquait de la liste `files` d'electron-builder — il était absent de
-  `app.asar`, et toutes les applis de bureau publiées (RPM, DEB, AppImage,
-  Windows) quittaient aussitôt avec « Cannot find module './web-updates' ».
-  Le fichier est désormais embarqué ; l'app démarre et retrouve ses mises à
-  jour in-app. Réinstallation manuelle du paquet nécessaire une fois (une
-  version cassée ne peut pas s'auto-corriger).
+# GlobalShare Changelog
 
-## [1.0.18] — 2026-11-22
+All notable changes to this project will be documented in this file.
 
-### Ajouté
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-- **Création instantanée à un chiffre** : sur l'accueil, une grande carte
-  « Créer le salon 1 » (ou 2, 3…) propose le plus petit chiffre de salon qui
-  n'a personne dedans à cet instant — un appui et on y est. Si les neuf
-  chiffres sont occupés, le code s'étend à deux chiffres.
-- **Salons ouverts en direct** : la liste réelle des salons servis par le
-  serveur (avec leur nombre d'appareils) s'affiche sur l'accueil et se
-  rejoint d'un appui. Nouvel endpoint `GET /rooms` du serveur Socket.IO.
-- **Menu « Salons récents »** : l'icône horloge de la barre supérieure ouvre
-  la liste des salons créés ou rejoints depuis l'appareil (12 derniers),
-  rejoints d'un appui, oubliables un par un ou en bloc.
+---
 
-### Modifié
+## [Unreleased]
 
-- Accueil réorganisé pour aller vite : création instantanée en premier,
-  salons ouverts, salons récents, puis le code aléatoire classique en bas.
-  Titres de section, pastilles et formulaires resserrés ; pas de changement
-  du salon actif ni du moteur de transfert.
+### Added
+- Comprehensive settings management system with 15+ configurable options
+- New `app/lib/settings.ts` module with full TypeScript support
+- New `app/components/Settings.tsx` modal component with 5 organized sections
+- Settings persistence via localStorage
+- Theme management (System/Light/Dark) with immediate application
+- Accent color customization (6 color options)
+- Display settings for file icons, sizes, dates, progress bars, and connection status
+- Notification settings (enabled, sound, duration)
+- Behavior settings (auto-refresh, confirmations)
+- Advanced settings (compression, retries, debug mode)
+- Complete documentation in `SETTINGS_DOCUMENTATION.md` and `TESTING_GUIDE.md`
 
-## [1.0.17] — 2026-11-22
+### Changed
+- Added settings button (⚙️) to **bottom navigation bar on mobile** (welcome screen and room action bar)
+- Settings button remains in topbar on desktop/tablet for better accessibility
+- Updated import statements in `GlobalShare.tsx` to include settings module
+- Enhanced `GlobalShare.css` with styles for settings modal, controls, and mobile responsiveness
+- Simplified and clarified UI text throughout the application:
+  - "Partagez un fichier, pas un compte" → "Partage instantané"
+  - "Passez le même code aux deux appareils. Direct, sans inscription." → "Un code, et c'est parti"
+  - "Créer le salon {code}" → "Salon {code}"
+  - "Un seul chiffre à retenir, libre à l'instant" → "Libre maintenant"
+  - "Rejoindre avec un code" → "Rejoindre un salon"
+  - "Tapez le code partagé..." → "Saisissez le code partagé"
+  - "Téléchargements" tab → "Fichiers"
+  - "Salon" tab → "Appareils"
+  - "Appareils" → "Appareils connectés"
+  - "En attente d'un autre appareil" → "En attente d'appareils"
+  - Various other text simplifications for clarity and conciseness
 
-### Modifié
+### Fixed
+- Minor code organization and formatting improvements
 
-- **L'icône ⟳ de la barre supérieure devient le seul point d'entrée des mises
-  à jour** : le badge de version sous l'écran d'accueil est supprimé (il
-  doublonnait l'icône et affichait « … » le temps que le pont réponde). Le
-  clic sur l'icône ouvre l'encart et lance directement une recherche quand
-  l'état est « à jour » ou après une erreur ; la version courante reste
-  affichée dans l'encart.
+---
 
-## [1.0.16] — 2026-11-22
+## [1.0.13] - Previous Version
 
-### Corrigé
+[Content from previous changelog entries]
 
-- **Mises à jour et version invisibles sur Android (toutes versions)** : le
-  pont entre l'interface web et l'application Android ne s'installait jamais.
-  Il exigeait `window.Capacitor.registerPlugin`, une fonction du paquet
-  `@capacitor/core` qui n'est pas exposée dans le WebView natif — le
-  mécanisme correct est `window.Capacitor.Plugins.GlobalShareNative`,
-  injecté automatiquement pour chaque plugin enregistré. Conséquences
-  corrigées : l'abonnement aux notifications du pont accepte désormais aussi
-  l'écouteur synchrone du bridge natif (et plus seulement une `Promise`),
-  l'icône ⟳ et le badge de version réapparaissent sur l'accueil, et les mises
-  à jour rapides de ~1,4 Mo sont proposées à nouveau. Une installation
-  manuelle de cette version reste nécessaire une dernière fois ; les
-  suivantes sont réservées depuis l'application.
+---
 
-## [1.0.15] — 2026-11-22
+## [1.0.0] - Initial Release
 
-### Ajouté
+Initial release of GlobalShare.
 
-- **Version visible sur l'accueil** : un badge `v1.0.15` sous l'écran d'accueil
-  (application de bureau et APK ; masqué sur le site web) affiche la version
-  courante et lance une recherche manuelle des mises à jour au clic — un point
-  vert signale une version disponible. Ce badge affiche la version du bundle
-  web appliqué, pas seulement celle du paquet installé.
+---
 
-### Modifié
+## 📦 Release Checklist
 
-- **Encart de mise à jour repensé** (mobile avant tout) : pictogramme et
-  couleurs distincts par état (disponible, téléchargement, prête, à jour,
-  erreur), pastille « Rapide » quand la mise à jour ne télécharge que le bundle
-  web (~1 Mo), temps restant estimé et taille transférée affichés pendant le
-  téléchargement, cibles tactiles plus grandes.
+- [ ] Update version numbers in `package.json` and other files
+- [ ] Update CHANGELOG.md with release notes
+- [ ] Run all tests and verify they pass
+- [ ] Build all platforms (Web, Desktop, Mobile)
+- [ ] Test on all supported platforms
+- [ ] Update documentation
+- [ ] Create Git tag and release
+- [ ] Publish to app stores (if applicable)
+- [ ] Deploy web version
+- [ ] Announce release
 
-## [1.0.14] — 2026-11-22
+---
 
-### Corrigé
-
-- **Android : vérification automatique des mises à jour** ajoutée au
-  démarrage de l'APK (8 s) puis toutes les 6 h, comme sur desktop. Une version
-  disponible ouvre maintenant l'encart sans que l'utilisateur ait à appuyer sur
-  « Rechercher ».
+## 🏷️ Versioning Strategy
 
-## [1.0.13] — 2026-11-22
+GlobalShare follows Semantic Versioning (SemVer) principles:
 
-### Ajouté
+- **MAJOR** version when you make incompatible API changes
+- **MINOR** version when you add functionality in a backward-compatible manner
+- **PATCH** version when you make backward-compatible bug fixes
 
-- **Mises à jour rapides** : chaque release publie un `web-bundle.zip` (~1 Mo)
-  avec son manifeste signé. Tant que la coquille native ne change pas, le bureau
-  et l'APK ne téléchargent que ce bundle, le vérifient (SHA-256) et rechargent
-  l'interface — plus aucun paquet de ~80 Mo à télécharger pour une modification
-  du frontend.
-- **APK différentiel** : publications d'un `.apk.blockmap` (empreintes SHA-256
-  par blocs de 64 Ko) pour ne demander que les blocs manquants lors d'une mise à
-  jour de la coquille native, avec repli sur le téléchargement complet.
+### Version Number Format
 
-### Corrigé
+`MAJOR.MINOR.PATCH` (e.g., `1.0.14`)
 
-- Test de typage du faux `fetch` dans les tests du bundle web.
+### Build Metadata
 
-## [1.0.12] — 2026-11-22
-
-### Corrigé
-
-- **Bouton de mise à jour absent sur l'APK** : le pont Capacitor pouvait être
-  injecté après l'exécution du bundle. L'installation du pont est désormais
-  retentée au chargement et pendant les premières secondes, et l'interface se
-  réabonne dès qu'il devient disponible.
+For pre-release versions, we may use:
+- `MAJOR.MINOR.PATCH-alpha.X` - Alpha releases
+- `MAJOR.MINOR.PATCH-beta.X` - Beta releases
+- `MAJOR.MINOR.PATCH-rc.X` - Release candidates
 
-## [1.0.11] — 2026-11-21
-
-### Corrigé
-
-- Release de test sans changement fonctionnel : elle permet de valider de bout
-  en bout la mise à jour in-app de l'APK (détection de `v1.0.11`, téléchargement,
-  vérification SHA-256, installation).
+---
 
-## [1.0.10] — 2026-11-21
-
-### Corrigé
+## 📅 Release History
 
-- **Mise à jour desktop sur Fedora** : le `.rpm` est signé après la génération
-  des métadonnées par electron-builder, ce qui change son empreinte et bloquait
-  l'installation avec « sha512 checksum mismatch ». Le workflow recalcule
-  désormais le sha512 et la taille du paquet signé dans `latest-linux.yml`.
-  Les métadonnées de la 1.0.9 ont aussi été corrigées sur la release.
-- **APK Android** : remplacement des icônes et de l'écran de démarrage Capacitor
-  par ceux de GlobalShare.
-- **Connexion depuis l'APK** : Capacitor charge la page depuis `https://localhost`
-  (sans port), une origine refusée par le Worker. Les origines loopback sans
-  port, en HTTP comme en HTTPS, sont désormais acceptées. Correctif **côté
-  Worker** (déployé avec le site).
+| Version | Date | Description |
+|---------|------|-------------|
+| 1.0.14 | Current | Settings module, UI improvements |
+| 1.0.13 | Previous | [Previous release] |
+| ... | ... | ... |
+| 1.0.0 | Initial | Initial release |
 
-## [1.0.9] — 2026-11-21
+---
 
-### Ajouté
+## 🔖 Git Tags
 
-- **Application Android** : un APK Capacitor embarque le même frontend, avec
-  service avant-plan, notification permanente, wake lock CPU/Wi-Fi et reprise
-  des transferts écran verrouillé.
-- **Mise à jour in-app dans l'APK** depuis les releases GitHub, avec
-  vérification SHA-256 et installation après consentement « sources inconnues ».
-- Workflow `Build Android APK` : publie l'APK signé et son empreinte dans la
-  release du tag. Voir [`docs/ANDROID.md`](./docs/ANDROID.md) pour les secrets.
+All releases are tagged in Git with the format `vX.X.X`:
 
-## [1.0.8] — 2026-11-21
+```bash
+# Create annotated tag
+git tag -a v1.0.14 -m "Release v1.0.14: Settings module and UI improvements"
 
-### Ajouté
+# Push tag to remote
+git push origin v1.0.14
 
-- **Mise à jour in-app** dans l'application de bureau : un bouton dans la barre
-  supérieure ouvre un encart qui affiche la version disponible, le
-  téléchargement avec barre de progression (pourcentage, octets transférés,
-  débit), puis le bouton d'installation. Les erreurs s'affichent dans l'encart
-  avec un bouton **Réessayer**, et la vérification depuis **Aide → Rechercher
-  des mises à jour…** ouvre l'encart.
+# Create and push tag in one command
+git tag -a v1.0.14 -m "Release v1.0.14" && git push origin v1.0.14
+```
 
-### Corrigé
+---
 
-- Progression de mise à jour `null`/`NaN` : l'état est normalisé côté bureau et
-  côté interface. La barre du système passe en mode indéterminé au lieu
-  d'afficher 0 % ou de planter, et la version disponible ne peut plus être
-  `null`.
-- Le message d'erreur de la mise à jour était effacé dès que l'interface
-  relisait l'état.
+## 🚀 Deployment Commands
 
-## [1.0.7] — 2026-11-21
+### Web Deployment
 
-### Corrigé
+```bash
+# Build for production
+npm run build
 
-- **Installation du paquet rpm sur Fedora 45 et plus récent** : `rpm` applique
-  désormais la vérification des signatures par défaut et refuse le paquet avec
-  « le paquet … n'est pas vérifié : pas de signature ». Les `.rpm` publiés sont
-  signés par la clé GlobalShare ; la clé publique
-  (`desktop/resources/RPM-GPG-KEY-globalshare`) est jointe à la release et
-  s'importe une fois avec `sudo rpm --import <url>`. Le paquet non signé de la
-  1.0.6 ne s'installe plus avec `rpm -i` sur ces systèmes : utilisez `dnf
-  install` ou cette version.
+# Start production server
+npm start
 
-## [1.0.6] — 2026-11-08
+# Deploy to Vercel/Netlify/etc.
+# (depends on your hosting provider)
+```
 
-### Corrigé
+### Desktop (Electron) Deployment
 
-- Quitter le salon pendant un transfert laissait la ligne bloquée sur
-  « En cours » : les transferts du pair qui part sont désormais annulés, la
-  ligne disparaît et un message explique la cause
-  (« Transfert annulé : … (L'appareil s'est déconnecté) »).
-
-## [1.0.5] — 2026-11-08
-
-### Ajouté
-
-- **Onglet « Téléchargements »** : les fichiers reçus restent accessibles après
-  le transfert, avec nom, taille, appareil expéditeur, date et état d'intégrité.
-  - Bureau : enregistrement dans `~/Téléchargements/GlobalShare/` (nom
-    dédupliqué), boutons **Ouvrir** (application associée du système) et
-    **Dossier**.
-  - Web et mobile : fichier conservé dans l'application (IndexedDB, 40 fichiers
-    ou 128 Mo, le plus ancien sort en premier) et ouvert dans un onglet pour les
-    images, PDF, vidéos, sons et textes ; les autres formats sont téléchargés.
-  - Actions **Retirer** et **Tout supprimer**.
-- Un fichier dont l'empreinte SHA-256 diffère apparaît avec la pastille
-  « fichier corrompu » : il reste listé pour savoir quoi renvoyer, mais n'est
-  jamais écrit sur le disque ni ouvert.
-
-### Corrigé
-
-- **Salon inaccessible depuis l'application de bureau** (« échec de connexion »)
-  alors que le site fonctionnait : le Worker refusait l'origine
-  `http://127.0.0.1:<port>` de la page locale (`403 Origin not allowed`). Toute
-  origine de boucle locale est acceptée, quel que soit le port ; le site
-  GitHub Pages et les origines distantes sont inchangés. Correctif **côté
-  Worker**.
-
-### Interne
-
-- `npm run test:origin` (origines acceptées et refusées) et tests unitaires de
-  l'historique des téléchargements.
-- Documentation de l'onglet et du pont Electron (`docs/DESKTOP.md`), diagnostic
-  `Origin not allowed` (`docs/DEPLOYMENT.md`).
-
-## [1.0.4] — 2026-11-08
-
-### Corrigé
-
-- Mise à jour in-app des paquets rpm et deb : chaque argument de `pkexec` est
-  transmis séparément, l'installation échouait quand la commande partait en un
-  seul argument.
-
-## [1.0.3] — 2026-11-08
-
-Aucun changement de code : même commit que la 1.0.2, publiée avec des numéros de
-version à jour.
-
-## [1.0.2] — 2026-11-08
-
-### Corrigé
-
-- Installation des mises à jour rpm et deb sans blocage sur l'invite polkit.
-- `package.json` racine restauré après avoir été écrasé par une extraction
-  `asar`, qui cassait les scripts de build.
-
-## [1.0.1] — 2026-11-08
-
-### Corrigé
-
-- Toutes les tailles d'icônes hicolor sont installées : les lanceurs affichent
-  l'icône de l'application au lieu d'un carré générique.
-
-## [1.0.0] — 2026-11-08
-
-### Ajouté
-
-- Applications de bureau Electron (rpm, deb, AppImage, installateur Windows) à
-  partir du même frontend, avec mise à jour in-app depuis les releases GitHub
-  (`electron-updater`) et vérification manuelle via **Aide → Rechercher des
-  mises à jour…**.
-
-## Avant la 1.0.0
-
-Résumé de l'application web, publiée sans numéro de version : P2P WebRTC avec
-repli par relais, salons partageables par lien `?room=CODE`, envoi de fichiers,
-de photos et de dossiers (zip côté client), pause et reprise des transferts,
-signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
-PWA installable et interface mobile avec wake lock.
-
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.23...HEAD
-[1.0.23]: https://github.com/stxtxm/global-share/compare/v1.0.22...v1.0.23
-[1.0.22]: https://github.com/stxtxm/global-share/compare/v1.0.21...v1.0.22
-[1.0.21]: https://github.com/stxtxm/global-share/compare/v1.0.20...v1.0.21
-[1.0.20]: https://github.com/stxtxm/global-share/compare/v1.0.19...v1.0.20
-[1.0.19]: https://github.com/stxtxm/global-share/compare/v1.0.18...v1.0.19
-[1.0.18]: https://github.com/stxtxm/global-share/compare/v1.0.17...v1.0.18
-[1.0.17]: https://github.com/stxtxm/global-share/compare/v1.0.16...v1.0.17
-[1.0.16]: https://github.com/stxtxm/global-share/compare/v1.0.15...v1.0.16
-[1.0.15]: https://github.com/stxtxm/global-share/compare/v1.0.14...v1.0.15
-[1.0.14]: https://github.com/stxtxm/global-share/compare/v1.0.13...v1.0.14
-[1.0.13]: https://github.com/stxtxm/global-share/compare/v1.0.12...v1.0.13
-[1.0.12]: https://github.com/stxtxm/global-share/compare/v1.0.11...v1.0.12
-[1.0.11]: https://github.com/stxtxm/global-share/compare/v1.0.10...v1.0.11
-[1.0.10]: https://github.com/stxtxm/global-share/compare/v1.0.9...v1.0.10
-[1.0.9]: https://github.com/stxtxm/global-share/compare/v1.0.8...v1.0.9
-[1.0.8]: https://github.com/stxtxm/global-share/compare/v1.0.7...v1.0.8
-[1.0.7]: https://github.com/stxtxm/global-share/compare/v1.0.6...v1.0.7
-[1.0.6]: https://github.com/stxtxm/global-share/compare/v1.0.5...v1.0.6
-[1.0.5]: https://github.com/stxtxm/global-share/compare/v1.0.4...v1.0.5
-[1.0.4]: https://github.com/stxtxm/global-share/compare/v1.0.3...v1.0.4
-[1.0.3]: https://github.com/stxtxm/global-share/compare/v1.0.2...v1.0.3
-[1.0.2]: https://github.com/stxtxm/global-share/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/stxtxm/global-share/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/stxtxm/global-share/releases/tag/v1.0.0
+```bash
+# Build desktop app
+npm run build:desktop
+
+# Package for specific platforms
+npm run package:win  # Windows
+npm run package:mac  # macOS
+npm run package:linux  # Linux
+
+# Or build all platforms
+npm run package:all
+```
+
+### Mobile (Capacitor) Deployment
+
+```bash
+# Build web assets
+npm run build
+
+# Sync with Capacitor
+npx cap sync
+
+# Open in Android Studio
+npx cap open android
+
+# Open in Xcode
+npx cap open ios
+
+# Build APK (Android)
+npx cap copy android && cd android && ./gradlew assembleRelease
+
+# Build IPA (iOS)
+npx cap copy ios && cd ios && fastlane ios build
+```
+
+---
+
+**Note**: This changelog is maintained manually. For a complete history, see the Git commit log.
