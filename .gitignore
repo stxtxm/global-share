@@ -54,5 +54,6 @@ Thumbs.db
 
 # Ignore release builds but keep release notes
 releases/*/
+releases/*.zip
 !releases/**/*.md
 !releases/**/*.txt

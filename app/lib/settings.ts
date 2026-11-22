@@ -337,14 +337,14 @@ export function getSetting<T extends keyof AppSettings>(
  * ```
  */
 export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
-  if (typeof document === 'undefined') return;
-  
+  if (typeof document === 'undefined' || typeof window === 'undefined') return;
+
   const html = document.documentElement;
   if (theme === 'system') {
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    html.classList.toggle('gs-theme--dark', systemDark);
+    html.classList.toggle('gs-theme--light', !systemDark);
   } else {
-    html.classList.toggle('gs-theme--dark', theme === 'dark');
+    html.classList.toggle('gs-theme--light', theme === 'light');
   }
 }
 

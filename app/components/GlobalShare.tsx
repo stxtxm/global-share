@@ -49,7 +49,18 @@ import {
   type LiveRoom,
   type RoomHistoryEntry,
 } from '../lib/rooms';
-import { loadSettings as loadAppSettings, saveSettings, type AppSettings, DEFAULT_SETTINGS } from '../lib/settings';
+import {
+  loadSettings as loadAppSettings,
+  saveSettings as saveAppSettings,
+  resetSettings as resetAppSettings,
+  applyTheme as applyAppTheme,
+  applyAccentColor as applyAppAccentColor,
+  applyLanguage as applyAppLanguage,
+  type AppSettings,
+  DEFAULT_SETTINGS,
+} from '../lib/settings';
+import { ACCENT_SWATCHES, translate as translateSetting } from '../lib/settings-i18n';
+import pkgVersion from '../../package.json';
 
 const MAX_IN_FLIGHT_CHUNKS = 24;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
@@ -219,6 +230,15 @@ function IconBolt({ className = 'gs-icon' }: IconProps) {
   );
 }
 
+function IconArrowLeft({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  );
+}
+
 function IconKey({ className = 'gs-icon' }: IconProps) {
   return (
     <svg {...iconProps} className={className}>
@@ -335,6 +355,310 @@ function IconSettings({ className = 'gs-icon' }: IconProps) {
 }
 
 // ----------------------------------------------------------------------------
+// Réglages : constantes et petits composants internes
+// ----------------------------------------------------------------------------
+
+interface SettingToggleProps {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (value: boolean) => void;
+}
+
+/** Interrupteur stylé, cible tactile 48 px, sans dépendance externe. */
+function SettingToggle({ label, hint, checked, disabled = false, onChange }: SettingToggleProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      className={`gs-setting gs-setting--toggle${checked ? ' is-on' : ''}`}
+      onClick={() => onChange(!checked)}
+    >
+      <div>
+        <strong>{label}</strong>
+        {hint && <small>{hint}</small>}
+      </div>
+      <span className="gs-switch" aria-hidden="true">
+        <span className="gs-switch-knob" />
+      </span>
+    </button>
+  );
+}
+
+interface SettingsPanelBodyProps {
+  appSettings: AppSettings;
+  updateAppSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  resetAllSettings: () => void;
+  /** Version affichée en pied de panneau (accueil) sinon (overlay salon). */
+  showVersion?: boolean;
+}
+
+/**
+ * Corps du panneau de réglages, partagé par la vue accueil (« settings »)
+ * et la page plein écran par-dessus le salon : une seule source pour tout
+ * le contenu, quel que soit le contexte d'affichage. Tous les libellés sont
+ * traduits dans la langue choisie (repli sur le français).
+ */
+function SettingsPanelBody({
+  appSettings,
+  updateAppSetting,
+  resetAllSettings,
+  showVersion = true,
+}: SettingsPanelBodyProps) {
+  const t = (key: string) => translateSetting(appSettings.language, key);
+
+  return (
+    <>
+      {/* ---- Apparence ---- */}
+      <h2 className="gs-list-title">{t('appearance')}</h2>
+      <div className="gs-card gs-card--pad">
+        <div className="gs-setting">
+          <div>
+            <strong>{t('theme')}</strong>
+            <small>{t('themeHint')}</small>
+          </div>
+          <div className="gs-seg" role="group" aria-label={t('theme')}>
+            {(
+              [
+                { value: 'system', key: 'themeSystem' },
+                { value: 'light', key: 'themeLight' },
+                { value: 'dark', key: 'themeDark' },
+              ] as const
+            ).map(option => (
+              <button
+                key={option.value}
+                type="button"
+                className={`gs-seg-btn${appSettings.theme === option.value ? ' is-active' : ''}`}
+                aria-pressed={appSettings.theme === option.value}
+                onClick={() => updateAppSetting('theme', option.value)}
+              >
+                {t(option.key)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="gs-setting">
+          <div>
+            <strong>{t('language')}</strong>
+            <small>{t('languageHint')}</small>
+          </div>
+          <select
+            className="gs-setting-select"
+            value={appSettings.language}
+            onChange={e => updateAppSetting('language', e.target.value as AppSettings['language'])}
+            aria-label={t('language')}
+          >
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="de">Deutsch</option>
+            <option value="it">Italiano</option>
+          </select>
+        </div>
+
+        <div className="gs-setting">
+          <div>
+            <strong>{t('accentColor')}</strong>
+            <small>{t('accentHint')}</small>
+          </div>
+          <div className="gs-swatches" role="group" aria-label={t('accentColor')}>
+            {ACCENT_SWATCHES.map(color => {
+              const label = t(color.labelKey);
+              return (
+                <button
+                  key={color.value}
+                  type="button"
+                  className={`gs-swatch${appSettings.accentColor === color.value ? ' is-active' : ''}`}
+                  style={{ '--swatch': color.value } as React.CSSProperties}
+                  aria-label={label}
+                  title={label}
+                  aria-pressed={appSettings.accentColor === color.value}
+                  onClick={() => updateAppSetting('accentColor', color.value)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ---- Affichage ---- */}
+      <h2 className="gs-list-title">{t('display')}</h2>
+      <div className="gs-card gs-card--pad">
+        <SettingToggle
+          label={t('showFileIcons')}
+          hint={t('showFileIconsHint')}
+          checked={appSettings.showFileIcons}
+          onChange={value => updateAppSetting('showFileIcons', value)}
+        />
+        <SettingToggle
+          label={t('showFileSize')}
+          hint={t('showFileSizeHint')}
+          checked={appSettings.showFileSize}
+          onChange={value => updateAppSetting('showFileSize', value)}
+        />
+        <SettingToggle
+          label={t('showFileDate')}
+          hint={t('showFileDateHint')}
+          checked={appSettings.showFileDate}
+          onChange={value => updateAppSetting('showFileDate', value)}
+        />
+        <SettingToggle
+          label={t('showProgressBar')}
+          hint={t('showProgressBarHint')}
+          checked={appSettings.showProgressBar}
+          onChange={value => updateAppSetting('showProgressBar', value)}
+        />
+        <SettingToggle
+          label={t('showConnectionStatus')}
+          hint={t('showConnectionStatusHint')}
+          checked={appSettings.showConnectionStatus}
+          onChange={value => updateAppSetting('showConnectionStatus', value)}
+        />
+        <div className="gs-setting">
+          <div>
+            <strong>{t('itemsPerPage')}</strong>
+            <small>{t('itemsPerPageHint')}</small>
+          </div>
+          <select
+            className="gs-setting-select"
+            value={appSettings.itemsPerPage}
+            onChange={e => updateAppSetting('itemsPerPage', Number(e.target.value))}
+            aria-label={t('itemsPerPage')}
+          >
+            {[10, 25, 50, 100, 200].map(n => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* ---- Notifications ---- */}
+      <h2 className="gs-list-title">{t('notifications')}</h2>
+      <div className="gs-card gs-card--pad">
+        <SettingToggle
+          label={t('notificationsEnabled')}
+          hint={t('notificationsEnabledHint')}
+          checked={appSettings.notificationsEnabled}
+          onChange={value => updateAppSetting('notificationsEnabled', value)}
+        />
+        <SettingToggle
+          label={t('notificationSound')}
+          hint={t('notificationSoundHint')}
+          checked={appSettings.notificationSound}
+          disabled={!appSettings.notificationsEnabled}
+          onChange={value => updateAppSetting('notificationSound', value)}
+        />
+        <div className="gs-setting">
+          <div>
+            <strong>{t('notificationDuration')}</strong>
+            <small>{t('notificationDurationHint')}</small>
+          </div>
+          <select
+            className="gs-setting-select"
+            value={appSettings.notificationDuration}
+            disabled={!appSettings.notificationsEnabled}
+            onChange={e => updateAppSetting('notificationDuration', Number(e.target.value))}
+            aria-label={t('notificationDuration')}
+          >
+            {[3, 5, 8, 10].map(n => (
+              <option key={n} value={n}>{n} s</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* ---- Comportement ---- */}
+      <h2 className="gs-list-title">{t('behavior')}</h2>
+      <div className="gs-card gs-card--pad">
+        <SettingToggle
+          label={t('autoRefresh')}
+          hint={t('autoRefreshHint')}
+          checked={appSettings.autoRefresh}
+          onChange={value => updateAppSetting('autoRefresh', value)}
+        />
+        <div className="gs-setting">
+          <div>
+            <strong>{t('autoRefreshInterval')}</strong>
+            <small>{t('autoRefreshIntervalHint')}</small>
+          </div>
+          <select
+            className="gs-setting-select"
+            value={appSettings.autoRefreshInterval}
+            disabled={!appSettings.autoRefresh}
+            onChange={e => updateAppSetting('autoRefreshInterval', Number(e.target.value))}
+            aria-label={t('autoRefreshInterval')}
+          >
+            {[10, 30, 60, 120].map(n => (
+              <option key={n} value={n}>{n} s</option>
+            ))}
+          </select>
+        </div>
+        <SettingToggle
+          label={t('confirmDelete')}
+          hint={t('confirmDeleteHint')}
+          checked={appSettings.confirmDelete}
+          onChange={value => updateAppSetting('confirmDelete', value)}
+        />
+        <SettingToggle
+          label={t('confirmOverwrite')}
+          hint={t('confirmOverwriteHint')}
+          checked={appSettings.confirmOverwrite}
+          onChange={value => updateAppSetting('confirmOverwrite', value)}
+        />
+      </div>
+
+      {/* ---- Avancé ---- */}
+      <h2 className="gs-list-title">{t('advanced')}</h2>
+      <div className="gs-card gs-card--pad">
+        <SettingToggle
+          label={t('enableCompression')}
+          hint={t('enableCompressionHint')}
+          checked={appSettings.enableCompression}
+          onChange={value => updateAppSetting('enableCompression', value)}
+        />
+        <div className="gs-setting">
+          <div>
+            <strong>{t('maxRetries')}</strong>
+            <small>{t('maxRetriesHint')}</small>
+          </div>
+          <select
+            className="gs-setting-select"
+            value={appSettings.maxRetries}
+            onChange={e => updateAppSetting('maxRetries', Number(e.target.value))}
+            aria-label={t('maxRetries')}
+          >
+            {[1, 3, 5, 10].map(n => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+        <SettingToggle
+          label={t('debugMode')}
+          hint={t('debugModeHint')}
+          checked={appSettings.debugMode}
+          onChange={value => updateAppSetting('debugMode', value)}
+        />
+      </div>
+
+      <div className="gs-settings-footer">
+        <button
+          type="button"
+          className="gs-btn gs-btn--ghost gs-btn--sm"
+          onClick={resetAllSettings}
+        >
+          {t('resetSettings')}
+        </button>
+        {showVersion && <small>GlobalShare v{pkgVersion?.version ?? 'dev'}</small>}
+      </div>
+    </>
+  );
+}
+
+// ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
 interface PeerInfo {
@@ -399,9 +723,14 @@ export default function GlobalShare() {
   const [roomHistory, setRoomHistory] = useState<RoomHistoryEntry[]>([]);
   // Vue de l'accueil, pilotée par la barre de navigation basse :
   // « create » par défaut (créer un salon en un chiffre), « join » (rejoindre
-  // avec un code), « rooms » (salons ouverts et récents de cet appareil).
-  const [homeView, setHomeView] = useState<'create' | 'join' | 'rooms'>('create');
+  // avec un code), « rooms » (salons ouverts et récents) et « settings »
+  // (réglages de l'application, toujours accessibles depuis la barre basse).
+  const [homeView, setHomeView] = useState<'create' | 'join' | 'rooms' | 'settings'>('create');
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  // Réglages ouverts par-dessus le salon (page plein écran avec retour),
+  // distincts de la vue accueil : quitter le salon n'est jamais nécessaire
+  // pour consulter ou modifier un réglage.
+  const [roomSettingsOpen, setRoomSettingsOpen] = useState(false);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -437,6 +766,117 @@ export default function GlobalShare() {
   const lanPeersRef = useRef<Set<string>>(new Set());
 
   const [renderTime, setRenderTime] = useState(0);
+
+  // ---- Réglages : chargement initial puis application en direct ----
+  // Une seule source de vérité : localStorage (lib/settings). Le thème, la
+  // couleur d'accent et la langue s'appliquent immédiatement, sans recharger.
+  useEffect(() => {
+    const loaded = loadAppSettings();
+    setAppSettings(loaded);
+    applyAppTheme(loaded.theme);
+    applyAppAccentColor(loaded.accentColor);
+    applyAppLanguage(loaded.language);
+  }, []);
+
+  useEffect(() => {
+    applyAppTheme(appSettings.theme);
+    applyAppAccentColor(appSettings.accentColor);
+    applyAppLanguage(appSettings.language);
+  }, [appSettings.theme, appSettings.accentColor, appSettings.language]);
+
+  // Thème « Auto » : ré-appliquer quand l'OS bascule clair/sombre en direct.
+  useEffect(() => {
+    if (appSettings.theme !== 'system' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => applyAppTheme('system');
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+    return undefined;
+  }, [appSettings.theme]);
+
+  // Modifie un réglage, l'applique et persiste : renvoyé au panneau qui rend
+  // les contrôles, pour que toute interaction reste un aller simple vers ici.
+  const updateAppSetting = useCallback(
+    <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+      setAppSettings(prev => {
+        const next = { ...prev, [key]: value };
+        saveAppSettings(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const showToast = useCallback(
+    (type: Toast['type'], message: string) => {
+      // Notifications désactivées : les confirmations et infos passent sous
+      // silence, les erreurs et avertissements restent visibles (sécurité).
+      if (!appSettings.notificationsEnabled && (type === 'success' || type === 'info')) return;
+      const id = ++toastIdRef.current;
+      setToasts(prev => [...prev, { id, type, message }]);
+      const duration = Math.max(2, appSettings.notificationDuration) * 1000;
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
+    },
+    [appSettings.notificationsEnabled, appSettings.notificationDuration]
+  );
+
+  // Petit signal sonore discret à l'arrivée d'un fichier (réglage « Son ») :
+  // WebAudio, aucune ressource externe, jamais bloquant pour le transfert.
+  const notificationAudioRef = useRef<AudioContext | null>(null);
+  const playNotificationSound = useCallback(() => {
+    if (!appSettings.notificationsEnabled || !appSettings.notificationSound) return;
+    try {
+      const Ctx =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = notificationAudioRef.current ?? new Ctx();
+      notificationAudioRef.current = ctx;
+      if (ctx.state === 'suspended') void ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.09);
+      gain.gain.setValueAtTime(0.05, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.32);
+    } catch {
+      /* le son ne doit jamais faire échouer la réception */
+    }
+  }, [appSettings.notificationsEnabled, appSettings.notificationSound]);
+
+  // Réinitialise tous les réglages aux valeurs par défaut, avec toast animé.
+  const resetAllSettings = useCallback(() => {
+    const defaults = resetAppSettings();
+    setAppSettings(defaults);
+    showToast('success', translateSetting(appSettings.language, 'settingsResetToast'));
+  }, [showToast, appSettings.language]);
+
+  const appVersion = pkgVersion?.version ?? 'dev';
+
+  // Réglage « Tentatives » : propagé au gestionnaire de transfert dès
+  // qu'il existe (il est créé après le premier mount).
+  useEffect(() => {
+    if (managerRef.current) managerRef.current.maxRetries = appSettings.maxRetries;
+  }, [appSettings.maxRetries]);
+
+  // Réglage « Rafraîchissement auto » : relit l'historique des salons sur
+  // l'intervalle choisi, pour suivre les listes modifiées ailleurs (autre
+  // onglet, autre session) et remettre le temps écoulé à l'heure.
+  useEffect(() => {
+    if (!appSettings.autoRefresh) return;
+    const interval = Math.max(5, appSettings.autoRefreshInterval) * 1000;
+    const id = setInterval(() => {
+      setRoomHistory(loadRoomHistory());
+      setRenderTime(Date.now());
+    }, interval);
+    return () => clearInterval(id);
+  }, [appSettings.autoRefresh, appSettings.autoRefreshInterval, step]);
 
   // Maintenir un timestamp de rafraîchissement pour l'affichage du temps écoulé
   // (évite d'appeler Date.now() directement pendant le render).
@@ -515,12 +955,6 @@ export default function GlobalShare() {
   useEffect(() => {
     mobileKeepAlive(step === 'room' && connectionStatus !== 'disconnected');
   }, [step, connectionStatus]);
-
-  const showToast = useCallback((type: Toast['type'], message: string) => {
-    const id = ++toastIdRef.current;
-    setToasts(prev => [...prev, { id, type, message }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 6000);
-  }, []);
 
   // Rechargement de l'historique conservé (IndexedDB) au démarrage.
   useEffect(() => {
@@ -1200,7 +1634,14 @@ export default function GlobalShare() {
         const normalized = rel.startsWith(rootFolder + '/') ? rel : `${rootFolder}/${rel}`;
         zip.file(normalized, f);
       }
-      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      // Réglage « Compression » : DEFLATE économise des octets mais coûte du
+      // temps CPU ; désactivé, le dossier part en archive stockée sans
+      // recompression (utile pour des médias déjà compressés sur LAN rapide).
+      const blob = await zip.generateAsync({
+        type: 'blob',
+        compression: appSettings.enableCompression ? 'DEFLATE' : 'STORE',
+        compressionOptions: { level: 6 },
+      });
       const zipName = `${rootFolder}.zip`;
       const zipFile = new File([blob], zipName, { type: 'application/zip' });
       await startSending(targetId, zipFile, 'relay');
@@ -1208,7 +1649,7 @@ export default function GlobalShare() {
       console.error('Folder zip failed', err);
       showToast('error', 'Erreur lors de la compression du dossier');
     }
-  }, [startSending, peers, showToast, activePeerId]);
+  }, [startSending, peers, showToast, activePeerId, appSettings.enableCompression]);
 
   const handleCameraSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1317,16 +1758,28 @@ export default function GlobalShare() {
   }, [showToast]);
 
   const removeDownload = useCallback(async (record: DownloadRecord) => {
+    // Réglage « Confirmer la suppression » : l'entrée quitte la liste (et
+    // l'historique), le fichier déjà enregistré sur le disque n'est pas supprimé.
+    if (appSettings.confirmDelete && !window.confirm(
+      translateSetting(appSettings.language, 'confirmRemoveFile', { name: record.name })
+    )) {
+      return;
+    }
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-  }, []);
+  }, [appSettings.confirmDelete, appSettings.language]);
 
   const clearDownloadHistory = useCallback(async () => {
+    if (appSettings.confirmDelete && !window.confirm(
+      translateSetting(appSettings.language, 'confirmClearHistory')
+    )) {
+      return;
+    }
     downloadBlobRef.current.clear();
     setDownloads([]);
     await clearStoredDownloads();
-  }, []);
+  }, [appSettings.confirmDelete, appSettings.language]);
 
   // ---- Enregistrement des fichiers reçus ----
   // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
@@ -1349,6 +1802,11 @@ export default function GlobalShare() {
       receivedAt: Date.now(),
       integrity,
     };
+    if (appSettings.debugMode) {
+      console.info('[GlobalShare] Fichier reçu', {
+        name: record.name, size: record.size, integrity, from: record.from,
+      });
+    }
     const bridge = typeof window === 'undefined' ? undefined : window.globalshareDesktop;
 
     if (integrity === 'mismatch') {
@@ -1358,6 +1816,17 @@ export default function GlobalShare() {
       await putDownload(record);
       showToast('error', `Fichier corrompu pendant le transfert : ${record.name}. Renvoyez-le.`);
       return;
+    }
+
+    // Réglage « Confirmer l'écrasement » : une entrée du même nom existe déjà.
+    if (appSettings.confirmOverwrite) {
+      const existing = downloads.find(d => d.name === record.name);
+      if (existing && !window.confirm(
+        translateSetting(appSettings.language, 'confirmOverwriteFile', { name: record.name })
+      )) {
+        showToast('info', translateSetting(appSettings.language, 'fileIgnoredToast'));
+        return;
+      }
     }
 
     if (bridge) {
@@ -1384,7 +1853,8 @@ export default function GlobalShare() {
 
     setDownloads(prev => [record, ...prev].slice(0, DOWNLOAD_LIMITS.maxItems));
     await putDownload(record);
-  }, [downloadUrl, resolveSender, showToast]);
+    playNotificationSound();
+  }, [downloadUrl, resolveSender, showToast, playNotificationSound, appSettings.debugMode, appSettings.confirmOverwrite, appSettings.language, downloads]);
 
   // Partage du salon : feuille système sur mobile, presse-papiers ailleurs.
   const copyRoomLink = useCallback(async () => {
@@ -1429,14 +1899,6 @@ export default function GlobalShare() {
           </Link>
           <div className="gs-topbar-right">
             <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
-            <Link 
-              href="/settings"
-              className="gs-iconbtn gs-hide-on-mobile"
-              aria-label="Paramètres"
-              title="Paramètres"
-            >
-              <IconSettings className="gs-icon" />
-            </Link>
           </div>
         </header>
         <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
@@ -1643,6 +2105,23 @@ export default function GlobalShare() {
               )}
             </section>
           )}
+
+          {homeView === 'settings' && (
+            <section className="gs-settings" aria-label={translateSetting(appSettings.language, 'settings')}>
+              <div className="gs-hero gs-hero--tight">
+                <h1>{translateSetting(appSettings.language, 'settingsHeroTitle')}</h1>
+                <p>{translateSetting(appSettings.language, 'settingsHeroSubtitle')}</p>
+              </div>
+
+              <div className="gs-settings-scroll">
+                <SettingsPanelBody
+                  appSettings={appSettings}
+                  updateAppSetting={updateAppSetting}
+                  resetAllSettings={resetAllSettings}
+                />
+              </div>
+            </section>
+          )}
         </main>
 
         <nav className="gs-homenav" aria-label="Navigation de l'accueil">
@@ -1676,15 +2155,15 @@ export default function GlobalShare() {
             <IconHistory className="gs-icon gs-icon--sm" />
             Salons
           </button>
-          <Link
-            href="/settings"
-            className="gs-homenav-item"
-            aria-label="Paramètres"
-            title="Paramètres"
+          <button
+            type="button"
+            className={`gs-homenav-item${homeView === 'settings' ? ' is-active' : ''}`}
+            aria-current={homeView === 'settings' ? 'page' : undefined}
+            onClick={() => setHomeView('settings')}
           >
             <IconSettings className="gs-icon gs-icon--sm" />
-            Paramètres
-          </Link>
+            {translateSetting(appSettings.language, 'settings')}
+          </button>
         </nav>
       </div>
     );
@@ -1718,14 +2197,15 @@ export default function GlobalShare() {
             <span className="gs-dot" aria-hidden="true" />
             {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
           </span>
-          <Link 
-            href="/settings"
+          <button
+            type="button"
             className="gs-iconbtn gs-hide-on-mobile"
-            aria-label="Paramètres"
-            title="Paramètres"
+            onClick={() => setRoomSettingsOpen(true)}
+            aria-label={translateSetting(appSettings.language, 'settings')}
+            title={translateSetting(appSettings.language, 'settings')}
           >
             <IconSettings className="gs-icon" />
-          </Link>
+          </button>
           <button
             type="button"
             className="gs-iconbtn"
@@ -1835,13 +2315,15 @@ export default function GlobalShare() {
               <div className="gs-list">
                 {downloads.map((f, i) => (
                   <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
-                    <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
+                    {appSettings.showFileIcons && (
+                      <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
+                    )}
                     <div className="gs-file-meta">
                       <div className="gs-file-name" title={f.name}>{f.name}</div>
                       <div className="gs-file-sub">
-                        <span>{formatBytes(f.size)}</span>
+                        {appSettings.showFileSize && <span>{formatBytes(f.size)}</span>}
                         <span>De {f.from}</span>
-                        <span>{formatDate(f.receivedAt)}</span>
+                        {appSettings.showFileDate && <span>{formatDate(f.receivedAt)}</span>}
                         <span
                           className={`gs-pill ${f.integrity === 'verified'
                             ? 'gs-pill--ok'
@@ -1911,7 +2393,8 @@ export default function GlobalShare() {
                       <div className="gs-transfer-name">{t.file.name}</div>
                       <div className="gs-transfer-sub">
                         {t.direction === 'send' ? 'Vers ' : 'De '}
-                        <strong>{t.targetName}</strong> · {formatBytes(t.file.size)}
+                        <strong>{t.targetName}</strong>
+                        {appSettings.showFileSize && <> · {formatBytes(t.file.size)}</>}
                         <span
                           className={`gs-tag gs-tag--${t.transport}`}
                           title={t.transport === 'p2p'
@@ -2119,15 +2602,16 @@ export default function GlobalShare() {
             <IconCamera />
             <span>Photo</span>
           </button>
-          <Link
-            href="/settings"
+          <button
+            type="button"
             className="gs-action"
-            aria-label="Paramètres"
-            title="Paramètres"
+            onClick={() => setRoomSettingsOpen(true)}
+            aria-label={translateSetting(appSettings.language, 'settings')}
+            title={translateSetting(appSettings.language, 'settings')}
           >
             <IconSettings />
-            <span>Paramètres</span>
-          </Link>
+            <span>{translateSetting(appSettings.language, 'settings')}</span>
+          </button>
         </div>
       </div>
       )}
@@ -2143,6 +2627,39 @@ export default function GlobalShare() {
       />
       <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />
       <input type="file" ref={resumeInputRef} onChange={handleResumeSelect} accept="*/*" className="hidden" />
+
+      {/* ---- Réglages par-dessus le salon : page plein écran, retour direct ---- */}
+      {roomSettingsOpen && (
+        <div
+          className="gs-settings-overlay"
+          role="dialog"
+          aria-label={translateSetting(appSettings.language, 'settings')}
+        >
+          <div className="gs-glow" aria-hidden="true" />
+          <header className="gs-settings-topbar">
+            <button
+              type="button"
+              className="gs-btn gs-btn--ghost gs-settings-back"
+              onClick={() => setRoomSettingsOpen(false)}
+            >
+              <IconArrowLeft className="gs-icon gs-icon--sm" />
+              {translateSetting(appSettings.language, 'roomBack')}
+            </button>
+            <h1>{translateSetting(appSettings.language, 'settingsHeroTitle')}</h1>
+            <span className="gs-settings-topbar-version">v{appVersion}</span>
+          </header>
+          <div className="gs-settings-inner">
+            <div className="gs-settings-scroll">
+              <SettingsPanelBody
+                appSettings={appSettings}
+                updateAppSetting={updateAppSetting}
+                resetAllSettings={resetAllSettings}
+                showVersion={false}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

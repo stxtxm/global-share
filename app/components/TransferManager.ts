@@ -158,6 +158,14 @@ export class TransferManager {
   public chunkStore: ChunkStore | null = null;
 
   /**
+   * Nombre de retransmissions tolérées par transfert avant abandon automatique
+   * (réglage « Tentatives » des Réglages). Un chunk qui n'acquittait pas après
+   * ce budget laisse le transfert en échec plutôt que de le laisser retransmettre
+   * indéfiniment sur un réseau moribond.
+   */
+  public maxRetries = 3;
+
+  /**
    * Transport direct optionnel (canal WebRTC). Renvoie true quand le chunk est
    * réellement parti par ce canal ; false fait retomber l'émission sur le
    * socket, c'est-à-dire sur le relais.
@@ -890,6 +898,12 @@ export class TransferManager {
       const chunk = t.pending.get(seq);
       if (!chunk) return;
       t.attempts += 1;
+      // Budget de retransmissions atteint : on abandonne proprement le
+      // transfert au lieu de retransmettre indéfiniment (réglage « Tentatives »).
+      if (t.attempts > this.maxRetries) {
+        this.cancel(t.id, `Échec après ${this.maxRetries} tentatives sans réponse.`);
+        return;
+      }
       // Le chunk est déjà dans pending : on le retransmet sans repasser par sendChunk.
       this._transmitChunk(t, seq, chunk);
       this._startAckTimeout(t, seq, size, Math.min(effective * 2, 60000));
