@@ -1,7 +1,7 @@
 {
   "name": "globalshare",
   "productName": "GlobalShare",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "nativeVersion": 2,
   "private": true,
   "description": "Partage de fichiers P2P entre appareils",

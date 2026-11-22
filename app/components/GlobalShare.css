@@ -129,6 +129,14 @@
 }
 
 
+.gs-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
 .gs-topbar-right {
   display: flex;
   align-items: center;
@@ -368,6 +376,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   min-height: 42px;
   padding: 0 12px;
   border-radius: var(--gs-radius-sm);
@@ -396,6 +405,8 @@
 
 
 .gs-room-chip-code {
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.95rem;
   font-weight: 700;
@@ -408,6 +419,8 @@
   place-items: center;
   width: 42px;
   height: 42px;
+  padding: 0;
+  line-height: 1;
   flex-shrink: 0;
   border-radius: var(--gs-radius-sm);
   border: 1px solid var(--gs-border);
@@ -1977,26 +1990,27 @@
 
 
 /* ==========================================================================
-   Mobile Responsiveness - Settings in Bottom Navigation
+   Barre du salon : 3 actions, un seul bouton de réglages en haut à gauche.
    ========================================================================== */
 
-/* Hide settings button in topbar on mobile devices */
-.gs-hide-on-mobile {
-  display: none;
-}
-
-
-/* Show settings button in topbar on desktop/tablet */
-@media (min-width: 768px) {
-  .gs-hide-on-mobile {
-    display: inline-flex;
+/* Sur les écrans étroits (Pixel 9a), le libellé « Salon » est masqué pour que
+   le bouton de réglages, le code et les actions de droite tiennent sur une
+   seule ligne sans débordement. */
+@media (max-width: 480px) {
+  .gs-room-chip-label {
+    display: none;
   }
-}
 
+  .gs-topbar {
+    gap: 6px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
 
-/* Make sure actionbar has enough space for settings button */
-.gs-actionbar-row {
-  gap: var(--gs-gutter-sm);
+  .gs-topbar-left,
+  .gs-topbar-right {
+    gap: 6px;
+  }
 }
 
 

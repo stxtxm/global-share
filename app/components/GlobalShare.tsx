@@ -1886,16 +1886,29 @@ export default function GlobalShare() {
     <div className="gs-app">
       <div className="gs-glow" aria-hidden="true" />
       <header className="gs-topbar">
-        <button
-          type="button"
-          className="gs-room-chip"
-          onClick={() => void copyRoomLink()}
-          title="Partager le lien du salon"
-        >
-          <span className="gs-room-chip-label">Salon</span>
-          <span className="gs-room-chip-code">{roomId}</span>
-          <IconShare className="gs-icon gs-icon--sm" />
-        </button>
+        <div className="gs-topbar-left">
+          {/* Seul point d'accès aux réglages depuis le salon : toujours visible,
+              y compris sur mobile (Pixel 9a), à gauche du code du salon. */}
+          <button
+            type="button"
+            className="gs-iconbtn"
+            onClick={() => setRoomSettingsOpen(true)}
+            aria-label={translateSetting(appSettings.language, 'settings')}
+            title={translateSetting(appSettings.language, 'settings')}
+          >
+            <IconSettings className="gs-icon" />
+          </button>
+          <button
+            type="button"
+            className="gs-room-chip"
+            onClick={() => void copyRoomLink()}
+            title="Partager le lien du salon"
+          >
+            <span className="gs-room-chip-label">Salon</span>
+            <span className="gs-room-chip-code">{roomId}</span>
+            <IconShare className="gs-icon gs-icon--sm" />
+          </button>
+        </div>
         <div className="gs-topbar-right">
           <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
           {appSettings.showConnectionStatus && (
@@ -1904,15 +1917,6 @@ export default function GlobalShare() {
               {connectionStatus === 'connected' ? 'Connecté' : connectionStatus === 'connecting' ? 'Connexion' : 'Hors ligne'}
             </span>
           )}
-          <button
-            type="button"
-            className="gs-iconbtn gs-hide-on-mobile"
-            onClick={() => setRoomSettingsOpen(true)}
-            aria-label={translateSetting(appSettings.language, 'settings')}
-            title={translateSetting(appSettings.language, 'settings')}
-          >
-            <IconSettings className="gs-icon" />
-          </button>
           <button
             type="button"
             className="gs-iconbtn"
@@ -2314,16 +2318,6 @@ export default function GlobalShare() {
           >
             <IconCamera />
             <span>Photo</span>
-          </button>
-          <button
-            type="button"
-            className="gs-action"
-            onClick={() => setRoomSettingsOpen(true)}
-            aria-label={translateSetting(appSettings.language, 'settings')}
-            title={translateSetting(appSettings.language, 'settings')}
-          >
-            <IconSettings />
-            <span>{translateSetting(appSettings.language, 'settings')}</span>
           </button>
         </div>
       </div>
