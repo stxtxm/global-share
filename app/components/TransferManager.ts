@@ -42,7 +42,16 @@ export interface TransferState {
   nextSeq: number;
   pending: Map<number, Uint8Array>;
   ackedSeqs: Set<number>;
+  /** Fenêtre d'1 s utilisée uniquement pour le calcul du débit. */
   window: { start: number; bytes: number } | null;
+  /** Somme incrémentale des octets reçus (évite un scan O(n) par chunk). */
+  receivedBytes: number;
+  /** Tentatives de retransmission par séquence (le budget est par chunk). */
+  ackAttempts: Map<number, number>;
+  /** Horodatage d'émission de chaque chunk, pour estimer le RTT. */
+  sentAt: Map<number, number>;
+  /** RTT lissé en ms, utilisé pour dimensionner le timeout d'ACK. */
+  rttMs: number;
   buffer: Map<number, Uint8Array>;
   ackTimers: Map<number, ReturnType<typeof setTimeout>>;
   /** SHA-256 attendu du fichier complet (hexadécimal), si connu. */
@@ -112,11 +121,17 @@ export interface TransferEndPayload {
   target: string;
 }
 
-// 128 Ko : le contenu circule en binaire (Relais) ou via le canal direct, le
-// coût par chunk est devenu négligeable, mais chaque chunk reste un aller-
-// retour d'acquittement — doubler la taille double le débit potentiel sur un
-// réseau à forte latence, avec deux fois moins d'événements à traiter.
-export const CHUNK_SIZE_DEFAULT = 128 * 1024;
+// 512 Ko : le contenu circule en binaire (Relais) ou via le canal direct, et
+// le relais transmet les pièces jointes sans les parser. Chaque chunk reste un
+// aller-retour d'acquittement : avec 4× moins de chunks qu'à 128 Ko, on divise
+// par 4 le nombre de messages dans le Durable Object et le nombre d'ACK sur un
+// réseau à forte latence. Les anciens clients s'alignent sur la taille réelle
+// du premier chunk reçu, donc la migration est progressive.
+export const CHUNK_SIZE_DEFAULT = 512 * 1024;
+// Le débit est calculé sur des fenêtres d'1 s et ramené à zéro après 2 s sans
+// octet acquitté (fin de transfert, ACK perdu, onglet en arrière-plan).
+const RATE_WINDOW_MS = 1000;
+const SPEED_DECAY_MS = 2000;
 // Sans réémission, un seul paquet d'EOF perdu bloquait le transfert pour de bon.
 const EOF_RETRY_MS = 2000;
 // Au-delà, lire tout le fichier en mémoire serait risqué sur un téléphone.
@@ -153,6 +168,7 @@ export class TransferManager {
   private transfers = new Map<string, TransferState>();
   private nextTransferId = 0;
   private finishing = new Set<string>();
+  private speedTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Écriture des chunks reçus sur l'appareil (facultatif). */
   public chunkStore: ChunkStore | null = null;
@@ -179,6 +195,7 @@ export class TransferManager {
   public onCancel: (t: TransferState, reason: string) => void;
   public onError: (t: TransferState, error: string) => void;
   public onStatus: (t: TransferState) => void;
+  public onAck: (t: TransferState) => void;
   public onSendDone: (id: string) => void;
 
   /** Identité courante : socket.id n'est disponible qu'après la connexion. */
@@ -198,6 +215,8 @@ export class TransferManager {
       onCancel: (t: TransferState, reason: string) => void;
       onError: (t: TransferState, error: string) => void;
       onStatus: (t: TransferState) => void;
+      /** Un ACK vient de libérer un créneau de la fenêtre d'envoi. */
+      onAck?: (t: TransferState) => void;
       onSendDone: (id: string) => void;
     }
   ) {
@@ -208,7 +227,12 @@ export class TransferManager {
     this.onCancel = cb.onCancel;
     this.onError = cb.onError;
     this.onStatus = cb.onStatus;
+    this.onAck = cb.onAck ?? (() => {});
     this.onSendDone = cb.onSendDone;
+    // Horloge indépendante des ACK : sans elle, la vitesse resterait figée sur
+    // la dernière valeur dès que le réseau se tait (sur le relais, un ACK perdu
+    // immobilise un chunk pendant plusieurs secondes).
+    this.speedTimer = setInterval(() => this._tickRates(), 500);
   }
 
   startSend(
@@ -242,6 +266,10 @@ export class TransferManager {
       pending: new Map(),
       ackedSeqs: new Set(),
       window: null,
+      receivedBytes: 0,
+      ackAttempts: new Map(),
+      sentAt: new Map(),
+      rttMs: 0,
       buffer: new Map(),
       ackTimers: new Map(),
       hash,
@@ -291,6 +319,10 @@ export class TransferManager {
       pending: new Map(),
       ackedSeqs: new Set(),
       window: null,
+      receivedBytes: 0,
+      ackAttempts: new Map(),
+      sentAt: new Map(),
+      rttMs: 0,
       buffer: new Map(),
       ackTimers: new Map(),
       hash: meta.hash,
@@ -345,6 +377,10 @@ export class TransferManager {
       pending: new Map(),
       ackedSeqs: new Set(),
       window: null,
+      receivedBytes: 0,
+      ackAttempts: new Map(),
+      sentAt: new Map(),
+      rttMs: 0,
       buffer: new Map(),
       ackTimers: new Map(),
       hash,
@@ -452,6 +488,7 @@ export class TransferManager {
     t.pending.set(seq, chunk);
     t.offset += chunk.length;
     t.lastActivity = Date.now();
+    t.sentAt.set(seq, Date.now());
     this._transmitChunk(t, seq, chunk);
     this._startAckTimeout(t, seq, chunk.length);
     return true;
@@ -558,8 +595,10 @@ export class TransferManager {
     // Conservé tout de suite : un onglet tué par le système doit pouvoir
     // reprendre exactement là où il s'est arrêté.
     this.chunkStore?.save(t.id, payload.seq, bytes);
+    t.receivedBytes += bytes.byteLength;
     t.confirmed += payload.size;
     t.lastActivity = Date.now();
+    this._trackRate(t, bytes.byteLength);
     this._sendAck(t, payload.seq, payload.size);
     this._updateReceiverProgress(t);
   }
@@ -578,13 +617,24 @@ export class TransferManager {
     t.ackedSeqs.add(payload.seq);
     t.confirmed += payload.size;
     t.pending.delete(payload.seq);
+    const sentAt = t.sentAt.get(payload.seq);
+    if (sentAt !== undefined) {
+      const rtt = Date.now() - sentAt;
+      t.sentAt.delete(payload.seq);
+      if (rtt >= 0 && rtt < 120_000) {
+        t.rttMs = t.rttMs === 0 ? rtt : t.rttMs * 0.7 + rtt * 0.3;
+      }
+    }
+    t.ackAttempts.delete(payload.seq);
     const ackTimer = t.ackTimers.get(payload.seq);
     if (ackTimer) clearTimeout(ackTimer);
     t.ackTimers.delete(payload.seq);
     t.lastActivity = Date.now();
-    if (!t.window) t.window = { start: Date.now(), bytes: 0 };
-    t.window.bytes += payload.size;
+    this._trackRate(t, payload.size);
     this._updateSenderProgress(t);
+    // Libère immédiatement un créneau : la boucle d'envoi peut repartir sans
+    // attendre son prochain timer (bridé à ~1 s en arrière-plan mobile).
+    this.onAck(t);
   }
 
   onTransferEof(payload: { transferId: string; size: number; target: string }): void {
@@ -768,6 +818,7 @@ export class TransferManager {
     if (payload.chunkSize && payload.chunkSize > 0) t.chunkSize = payload.chunkSize;
     stored?.forEach((bytes, seq) => t.buffer.set(seq, bytes));
     t.confirmed = this._prefixBytes(t);
+    t.receivedBytes = t.confirmed;
     this._updateReceiverProgress(t);
     this._emit('transfer-resync', {
       transferId: t.id,
@@ -805,6 +856,9 @@ export class TransferManager {
     t.confirmed = aligned;
     t.progress = t.file.size > 0 ? Math.min(100, Math.round((aligned / t.file.size) * 100)) : 0;
     t.speed = 0;
+    t.window = null;
+    t.sentAt.clear();
+    t.ackAttempts.clear();
     t.status = 'transferring';
     t.error = undefined;
     t.lastActivity = Date.now();
@@ -882,7 +936,11 @@ export class TransferManager {
    * suite. Par le relais, latence et gigue imposent de laisser plus de marge.
    */
   private _ackTimeoutBase(t: TransferState): number {
-    return t.method === 'p2p' ? 5000 : 15000;
+    // L'ancien délai fixe de 15 s immobilisait un créneau pendant un quart de
+    // minute sur un simple ACK perdu. On le dimensionne maintenant d'après le
+    // RTT mesuré (5× la moyenne lissée, au moins 3 s).
+    if (t.rttMs > 0) return Math.min(20_000, Math.max(3000, Math.round(t.rttMs * 5)));
+    return t.method === 'p2p' ? 5000 : 8000;
   }
 
   private _startAckTimeout(t: TransferState, seq: number, size: number, delay?: number): void {
@@ -898,15 +956,18 @@ export class TransferManager {
       const chunk = t.pending.get(seq);
       if (!chunk) return;
       t.attempts += 1;
-      // Budget de retransmissions atteint : on abandonne proprement le
-      // transfert au lieu de retransmettre indéfiniment (réglage « Tentatives »).
-      if (t.attempts > this.maxRetries) {
-        this.cancel(t.id, `Échec après ${this.maxRetries} tentatives sans réponse.`);
+      // Le budget est PAR CHUNK : avec un budget global, quelques ACK perdus
+      // sur un gros fichier annulaient tout le transfert après 3 incidents.
+      const chunkAttempts = (t.ackAttempts.get(seq) ?? 0) + 1;
+      t.ackAttempts.set(seq, chunkAttempts);
+      if (chunkAttempts > this.maxRetries) {
+        this.cancel(t.id, `Chunk ${seq} abandonné après ${this.maxRetries} tentatives sans réponse.`);
         return;
       }
       // Le chunk est déjà dans pending : on le retransmet sans repasser par sendChunk.
+      t.sentAt.set(seq, Date.now());
       this._transmitChunk(t, seq, chunk);
-      this._startAckTimeout(t, seq, size, Math.min(effective * 2, 60000));
+      this._startAckTimeout(t, seq, size, Math.min(effective * 2, 20_000));
     }, effective);
     t.ackTimers.set(seq, timer);
   }
@@ -917,9 +978,7 @@ export class TransferManager {
     // annoncent le chunkSize de transfer-init mais envoient des blocs plus
     // grands en réseau local, ce qui figeait la barre (ex. 25 %) pendant que
     // l'expéditeur, lui, affichait 100 %.
-    let bytes = 0;
-    for (const chunk of t.buffer.values()) bytes += chunk.byteLength;
-    t.confirmed = Math.min(bytes, t.file.size);
+    t.confirmed = Math.min(t.receivedBytes, t.file.size);
     t.progress =
       t.file.size > 0 ? Math.min(100, Math.round((t.confirmed / t.file.size) * 100)) : 100;
     this.onStatus(t);
@@ -930,14 +989,44 @@ export class TransferManager {
     const total = t.file.size;
     if (total <= 0) t.progress = 100;
     else t.progress = Math.min(100, Math.round((t.confirmed / total) * 100));
-    if (t.window) {
-      const now = Date.now();
-      const elapsed = (now - t.window.start) / 1000;
-      const avg = elapsed > 0 ? t.window.bytes / elapsed : 0;
-      t.speed = Math.max(t.speed * 0.6, avg * 0.4);
-      if (elapsed > 1) this.onStatus(t);
-    }
     this.onUpdate(t);
+  }
+
+  /** Clôt la fenêtre d'1 s et publie le débit instantané lissé. */
+  private _flushRate(t: TransferState, now: number): void {
+    if (!t.window) return;
+    const elapsed = now - t.window.start;
+    if (elapsed < RATE_WINDOW_MS) return;
+    const rate = t.window.bytes / (elapsed / 1000);
+    t.speed = t.speed === 0 ? rate : t.speed * 0.5 + rate * 0.5;
+    t.window = { start: now, bytes: 0 };
+    this.onStatus(t);
+  }
+
+  /** Ajoute des octets à la fenêtre courante (expéditeur ET destinataire). */
+  private _trackRate(t: TransferState, bytes: number): void {
+    const now = Date.now();
+    if (!t.window) t.window = { start: now, bytes: 0 };
+    if (now - t.window.start >= RATE_WINDOW_MS) this._flushRate(t, now);
+    t.window.bytes += bytes;
+  }
+
+  /**
+   * Horloge de débit : publie la vitesse même quand aucun ACK n'arrive plus et
+   * la ramène à zéro après quelques secondes d'inactivité.
+   */
+  private _tickRates(): void {
+    const now = Date.now();
+    for (const t of this.transfers.values()) {
+      if (t.status !== 'transferring') continue;
+      this._flushRate(t, now);
+      if (t.speed > 0 && now - t.lastActivity > SPEED_DECAY_MS) {
+        t.speed = 0;
+        t.window = null;
+        this.onStatus(t);
+        this.onUpdate(t);
+      }
+    }
   }
 
   private _isComplete(t: TransferState): boolean {
@@ -1020,6 +1109,10 @@ export class TransferManager {
   }
 
   clear(): void {
+    if (this.speedTimer !== null) {
+      clearInterval(this.speedTimer);
+      this.speedTimer = null;
+    }
     for (const t of this.transfers.values()) {
       for (const timer of t.ackTimers.values()) clearTimeout(timer);
       t.ackTimers.clear();

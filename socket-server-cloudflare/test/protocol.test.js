@@ -146,6 +146,49 @@ async function main() {
   }
   console.log('binary transfer-chunk relay ok');
 
+  // Régression : 24 chunks binaires émis d'un coup (fenêtre du client). Les
+  // headers Socket.IO arrivent avant leurs pièces jointes ; un seul emplacement
+  // « pendingBinary » écrasait le header courant et perdait des chunks, ce qui
+  // déclenchait des retransmissions après 15 s et effondrait le débit relayé.
+  const burstChunks = 24;
+  const burstSize = 128 * 1024;
+  const burstReceived = new Map();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`burst binaire: ${burstReceived.size}/${burstChunks} chunks reçus`)),
+      20_000
+    );
+    const onChunk = ({ seq, chunk }) => {
+      const bytes = new Uint8Array(chunk);
+      const expected = new Uint8Array([seq & 0xff]);
+      if (bytes.length !== burstSize || bytes[0] !== expected[0]) {
+        clearTimeout(timer);
+        bob.off('transfer-chunk', onChunk);
+        reject(new Error(`burst binaire corrompu pour seq ${seq}`));
+        return;
+      }
+      burstReceived.set(seq, bytes.length);
+      if (burstReceived.size === burstChunks) {
+        clearTimeout(timer);
+        bob.off('transfer-chunk', onChunk);
+        resolve();
+      }
+    };
+    bob.on('transfer-chunk', onChunk);
+    for (let i = 0; i < burstChunks; i += 1) {
+      const bytes = new Uint8Array(burstSize);
+      bytes[0] = i & 0xff;
+      alice.emit('transfer-chunk', {
+        target: bob.id,
+        transferId: 't-burst.test',
+        seq: i,
+        size: burstSize,
+        chunk: bytes,
+      });
+    }
+  });
+  console.log(`binary pipelined transfer-chunk burst ok (${burstReceived.size} chunks)`);
+
   // transfer-chunk texte (anciens clients) : toujours relayé par le chemin JSON.
   const textChunkPromise = waitFor(bob, 'transfer-chunk');
   alice.emit('transfer-chunk', {

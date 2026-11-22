@@ -61,6 +61,8 @@ import SettingsPanel from './SettingsPanel';
 import pkgVersion from '../../package.json';
 import { translate as translateSetting } from '../lib/settings-i18n';
 
+// 24 × 512 Ko = 12 Mo en vol sur le relais : de quoi remplir le tuyau même
+// avec un RTT de plusieurs centaines de millisecondes (réseaux différents).
 const MAX_IN_FLIGHT_CHUNKS = 24;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
 // perte — on peut démultiplier la taille des blocs et la profondeur du pipeline
@@ -146,10 +148,10 @@ const formatTime = (ms: number): string => {
   const m = Math.floor(s / 60);
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 };
-const formatSpeed = (bps: number): string => {
-  if (bps < 1024) return `${bps} B/s`;
-  if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
-  return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
+const formatSpeed = (bytesPerSec: number): string => {
+  if (bytesPerSec < 1024) return `${bytesPerSec} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 };
 // Date de réception, dans le format court français (12 nov. 15:04).
 const formatDate = (ms: number): string =>
@@ -441,6 +443,11 @@ export default function GlobalShare() {
   const transferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Empêche deux exécutions simultanées de la boucle d'envoi.
   const sendLoopRunningRef = useRef(false);
+  const sendLoopRef = useRef<(() => void) | null>(null);
+  const sendLoopKickRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Valeur courante du réglage « Tentatives », lue à la création du manager :
+  // un effet séparé ne suffisait pas après une reconnexion (manager recréé).
+  const maxRetriesRef = useRef(DEFAULT_SETTINGS.maxRetries);
   const connectDeadlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectErrorShownRef = useRef(false);
   // Identité stable du salon : les transferts la visent, pas `socket.id`.
@@ -564,9 +571,11 @@ export default function GlobalShare() {
 
   const appVersion = pkgVersion?.version ?? 'dev';
 
-  // Réglage « Tentatives » : propagé au gestionnaire de transfert dès
-  // qu'il existe (il est créé après le premier mount).
+  // Réglage « Tentatives » : conservé dans une ref, appliqué à chaque création
+  // du gestionnaire (le socket est recréé à chaque reconnexion / changement de
+  // salon) et mis à jour à chaud sur le manager courant.
   useEffect(() => {
+    maxRetriesRef.current = appSettings.maxRetries;
     if (managerRef.current) managerRef.current.maxRetries = appSettings.maxRetries;
   }, [appSettings.maxRetries]);
 
@@ -696,6 +705,18 @@ export default function GlobalShare() {
       setTransfers(managerRef.current?.getAll() ?? []);
     }, 200);
   }, []);
+
+  // Un ACK libère un créneau : relancer la boucle d'envoi tout de suite plutôt
+  // que d'attendre son tick (les timers des WebView mobiles sont bridés en
+  // arrière-plan, ce qui faisait chuter le débit après quelques secondes).
+  const kickSendLoop = useCallback(() => {
+    if (sendLoopKickRef.current !== null) return;
+    sendLoopKickRef.current = setTimeout(() => {
+      sendLoopKickRef.current = null;
+      sendLoopRef.current?.();
+    }, 0);
+  }, []);
+
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket) return;
@@ -706,7 +727,7 @@ export default function GlobalShare() {
         onUpdate: (t) => {
           // Nouveau transfert : ajout immédiat. Sinon, rafraîchissement groupé
           // (voir syncTransfers) : un setState par chunk saturait le rendu.
-          setTransfers(prev => (prev.some(x => x.id === t.id) ? prev : [...prev, t]));
+          setTransfers(prev => (prev.some(x => x.id === t.id) ? [...prev] : [...prev, t]));
           syncTransfers();
         },
         onComplete: (t) => {
@@ -729,10 +750,12 @@ export default function GlobalShare() {
           showToast('error', `Échec du transfert : ${t.file.name} — ${error}`);
         },
         onStatus: () => syncTransfers(),
+        onAck: kickSendLoop,
         onSendDone: () => {},
       }
     );
     managerRef.current = manager;
+    manager.maxRetries = maxRetriesRef.current;
     // Les chunks d'un transfert marqué P2P partent par le canal direct ; si le
     // canal n'est pas (ou plus) ouvert, le TransferManager retombe sur le
     // socket, donc sur le relais, sans perdre le transfert en cours.
@@ -756,7 +779,12 @@ export default function GlobalShare() {
     s.on('transfer-eof-ack', (p) => manager.onTransferEofAck(p));
     s.on('transfer-cancel', (p) => manager.onTransferCancel(p));
     s.on('transfer-end', (p) => manager.onTransferEnd(p));
-    s.on('transfer-resync', (p) => manager.onTransferResync(p));
+    s.on('transfer-resync', (p) => {
+      manager.onTransferResync(p);
+      // Le destinataire vient de fixer une nouvelle position de reprise :
+      // relancer la boucle évite un transfert bloqué à son ancien pourcentage.
+      kickSendLoop();
+    });
 
     // Les chunks reçus sont écrits au fil de l'eau : un onglet tué par le
     // système reprend à l'octet près, sans rien retélécharger.
@@ -793,7 +821,7 @@ export default function GlobalShare() {
         transfersSyncTimerRef.current = null;
       }
     };
-  }, [showToast, socketEpoch, syncTransfers]);
+  }, [showToast, socketEpoch, syncTransfers, kickSendLoop]);
 
   // ---- URL room param ----
   useEffect(() => {
@@ -808,8 +836,10 @@ export default function GlobalShare() {
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
     const sendLoop = async () => {
-      // Un ACK relance la boucle pendant que le chunk courant est encore en
-      // cours de lecture. Sans ce verrou, deux exécutions lisent le même
+      sendLoopRef.current = () => void sendLoop();
+      // Une reprise après resync reprogramme la boucle : sans ce kick, un EOF
+      // suivi d'un « il me manque des octets » laissait le transfert figé.
+      // Sans le verrou ci-dessous, deux exécutions lisent le même
       // `offset` et envoient le même bloc sous deux séquences différentes :
       // le fichier reconstruit garde la bonne taille mais contient un bloc
       // dupliqué et un bloc manquant (APK/zip corrompu).
@@ -836,9 +866,11 @@ export default function GlobalShare() {
           return;
         }
         if (sendT.offset >= file.size) {
-          // N'annonce la fin qu'une fois tous les chunks acquittés.
+          // N'annonce la fin qu'une fois tous les chunks acquittés. On
+          // reprogramme un tick même après l'EOF : si le destinataire répond
+          // « transfer-resync », la boucle doit repartir d'elle-même.
           if (sendT.pending.size === 0) manager.sendEof(sendT.id);
-          else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
           return;
         }
         // Même réseau local et chemin direct ouvert : blocs plus gros, pipeline
@@ -887,6 +919,9 @@ export default function GlobalShare() {
     void sendLoop();
     return () => {
       if (transferTimeoutRef.current) clearTimeout(transferTimeoutRef.current);
+      if (sendLoopKickRef.current) clearTimeout(sendLoopKickRef.current);
+      sendLoopKickRef.current = null;
+      sendLoopRef.current = null;
     };
     // Ne dépend volontairement plus de `transfers` : chaque tick de progression
     // déclenchait une re-création d'effet dont le cleanup annulait le timer
@@ -1081,6 +1116,10 @@ export default function GlobalShare() {
     const socket = io(getSocketUrl(), {
       transports: ['websocket'], reconnection: true, reconnectionDelay: 1000,
       reconnectionDelayMax: 5000, reconnectionAttempts: Infinity, timeout: 10000,
+      // Les chunks de fichiers sont déjà compressés (zip, médias, chiffrement) :
+      // permessage-deflate ne ferait que consommer du CPU sur le téléphone et
+      // au edge sans réduire le trafic, et retarderait les acquittements.
+      compression: false,
     } as Parameters<typeof io>[1]);
     socketRef.current = socket;
     setSocketEpoch(epoch => epoch + 1);
@@ -2174,7 +2213,7 @@ export default function GlobalShare() {
                         Annuler
                       </button>
                     )}
-                    <span>{formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}</span>
+                    <span>{formatSpeed(t.speed)} · {formatBytes(t.confirmed)}</span>
                   </div>
                 </div>
               ))}
@@ -2250,7 +2289,7 @@ export default function GlobalShare() {
                       </div>
                     )}
                     <div className="gs-minirow-sub">
-                      {t.direction === 'send' ? 'Vers ' : 'De '}{t.targetName} · {formatSpeed(t.speed)}/s · {formatBytes(t.confirmed)}
+                      {t.direction === 'send' ? 'Vers ' : 'De '}{t.targetName} · {formatSpeed(t.speed)} · {formatBytes(t.confirmed)}
                     </div>
                   </div>
                 ))}
@@ -2277,7 +2316,7 @@ export default function GlobalShare() {
                 <span>
                   {activeTransfers.length > 1
                     ? 'Progression globale'
-                    : `${formatSpeed(activeTransfers[0].speed)}/s · ${formatBytes(activeTransfers[0].confirmed)}`}
+                    : `${formatSpeed(activeTransfers[0].speed)} · ${formatBytes(activeTransfers[0].confirmed)}`}
                 </span>
               </span>
               <span className="gs-minibar-chevron" aria-hidden="true">▾</span>

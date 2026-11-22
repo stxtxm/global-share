@@ -25,9 +25,14 @@ interface Client {
   peerId?: string;
   alive: boolean;
   closed: boolean;
-  pendingBinary: PendingBinary | null;
+  /** FILE d'événements binaires en cours : les headers arrivent tous avant
+      leurs pièces jointes quand le client pipeligne des chunks (24 en vol).
+      Un emplacement unique écrasait le header courant et perdait des chunks. */
+  pendingBinaries: PendingBinary[];
   binaryQueue: Promise<void>;
 }
+
+const MAX_PENDING_BINARIES = 64;
 
 const PING_INTERVAL_MS = 25_000;
 const MAX_ROOM_LENGTH = 64;
@@ -250,7 +255,7 @@ export class GlobalRoom {
       ws,
       alive: true,
       closed: false,
-      pendingBinary: null,
+      pendingBinaries: [],
       binaryQueue: Promise.resolve(),
     };
     this.sockets.set(id, client);
@@ -543,18 +548,27 @@ export class GlobalRoom {
       return;
     }
 
-    client.pendingBinary = {
+    // Un client peut émettre 24+ chunks d'affilée : empiler les headers dans
+    // l'ordre d'arrivée plutôt que d'écraser le précédent. Au-delà d'une
+    // certaine profondeur, on abandonne le plus ancien (client défaillant)
+    // pour ne pas laisser la file croître sans borne.
+    if (client.pendingBinaries.length >= MAX_PENDING_BINARIES) {
+      client.pendingBinaries.shift();
+    }
+    client.pendingBinaries.push({
       args,
       attachments: [],
       remaining: count,
-    };
+    });
   }
 
   private handleBinaryAttachment(
     client: Client,
     data: ArrayBuffer | ArrayBufferView
   ): void {
-    const pending = client.pendingBinary;
+    // Attachement rattaché au PLUS ANCIEN header encore incomplet : l'ordre
+    // des pièces jointes suit toujours celui des headers émis par socket.io.
+    const pending = client.pendingBinaries[0];
     if (!pending) return;
 
     pending.attachments.push(data);
@@ -562,7 +576,7 @@ export class GlobalRoom {
 
     if (pending.remaining > 0) return;
 
-    client.pendingBinary = null;
+    client.pendingBinaries.shift();
     this.handleBinaryEvent(client, pending.args, pending.attachments);
   }
 

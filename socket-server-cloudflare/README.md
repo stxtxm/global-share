@@ -32,7 +32,13 @@ npm run test:protocol
 ```
 
 It checks health, room membership, WebRTC signaling, text/binary relay, a
-100-chunk burst (1.6 MB) and disconnect notifications.
+burst of 24 pipelined binary `transfer-chunk` messages (24 × 128 KiB — the
+sender's in-flight window, which used to race in the Durable Object and drop
+chunks), a 100-chunk relay burst (1.6 MB) and disconnect notifications.
+
+Binary attachments are forwarded untouched. The client must disable WebSocket
+compression (`compression: false` in `io()`): file chunks are incompressible,
+so `permessage-deflate` only burns CPU on the phone and at the edge.
 
 To point the frontend at the local worker:
 
