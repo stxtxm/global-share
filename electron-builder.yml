@@ -11,10 +11,13 @@ directories:
 
 # Seuls le processus principal et ses dépendances de production sont embarqués :
 # les dépendances Next.js ne servent qu'au build de l'export statique.
+# web-updates.js est requis par main.js et updater.js : l'oublier fait
+# planter le démarrage (« Cannot find module './web-updates' »).
 files:
   - main.js
   - preload.js
   - updater.js
+  - web-updates.js
   - package.json
 
 # Chemins relatifs à la racine du projet (projectDir), pas à desktop/.

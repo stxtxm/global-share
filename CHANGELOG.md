@@ -22,6 +22,19 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.19] — 2026-11-22
+
+### Corrigé
+
+- **Crash au démarrage de l'application de bureau (depuis la 1.0.13)** :
+  `updater.js` et `main.js` importent `web-updates.js`, mais ce fichier
+  manquait de la liste `files` d'electron-builder — il était absent de
+  `app.asar`, et toutes les applis de bureau publiées (RPM, DEB, AppImage,
+  Windows) quittaient aussitôt avec « Cannot find module './web-updates' ».
+  Le fichier est désormais embarqué ; l'app démarre et retrouve ses mises à
+  jour in-app. Réinstallation manuelle du paquet nécessaire une fois (une
+  version cassée ne peut pas s'auto-corriger).
+
 ## [1.0.18] — 2026-11-22
 
 ### Ajouté
@@ -281,7 +294,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.18...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.19...HEAD
+[1.0.19]: https://github.com/stxtxm/global-share/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/stxtxm/global-share/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/stxtxm/global-share/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/stxtxm/global-share/compare/v1.0.15...v1.0.16
