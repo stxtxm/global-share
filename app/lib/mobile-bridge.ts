@@ -35,12 +35,28 @@ declare global {
 
 let cachedPlugin: GlobalShareNativePlugin | undefined;
 
+/**
+ * Récupère le proxy natif du plugin. Deux sources possibles : l'objet
+ * `window.Capacitor.Plugins` peuplé nativement (JSExport injecte, pour chaque
+ * plugin enregistré, un objet avec `addListener` et les méthodes en
+ * `Promise`), ou `registerPlugin` du paquet `@capacitor/core`. Attention :
+ * `registerPlugin` n'est PAS exposé dans le WebView natif — s'y limiter rend
+ * le pont indisponible sur tous les appareils.
+ */
 function nativePlugin(): GlobalShareNativePlugin | undefined {
   if (cachedPlugin) return cachedPlugin;
   if (typeof window === 'undefined') return undefined;
-  const capacitor = window.Capacitor;
-  if (!capacitor?.isNativePlatform?.() || !capacitor.registerPlugin) return undefined;
-  cachedPlugin = capacitor.registerPlugin<GlobalShareNativePlugin>('GlobalShareNative');
+  const capacitor = (window.Capacitor ?? undefined) as
+    | (CapacitorGlobal & { Plugins?: Record<string, GlobalShareNativePlugin> })
+    | undefined;
+  if (!capacitor?.isNativePlatform?.()) return undefined;
+  const injected = capacitor.Plugins?.GlobalShareNative;
+  if (injected) {
+    cachedPlugin = injected;
+    return cachedPlugin;
+  }
+  const registered = capacitor.registerPlugin?.<GlobalShareNativePlugin>('GlobalShareNative');
+  if (registered) cachedPlugin = registered;
   return cachedPlugin;
 }
 
@@ -48,7 +64,25 @@ function subscribe(event: string, listener: (value: unknown) => void): () => voi
   const plugin = nativePlugin();
   if (!plugin) return () => {};
   let handle: ListenerHandle | undefined;
-  void plugin.addListener(event, listener).then((value) => { handle = value; }).catch(() => {});
+  // Selon le mode d'injection, `addListener` renvoie soit un handle
+  // synchrone (pont natif `window.Capacitor.addListener`), soit une Promesse.
+  try {
+    const result = plugin.addListener(event, listener) as
+      | ListenerHandle
+      | Promise<ListenerHandle>
+      | undefined;
+    if (result && typeof (result as Promise<ListenerHandle>)?.then === 'function') {
+      void (result as Promise<ListenerHandle>)
+        .then((value) => {
+          handle = value;
+        })
+        .catch(() => {});
+    } else {
+      handle = result as ListenerHandle;
+    }
+  } catch {
+    // L'appareil refuse l'abonnement : l'UI restera sur l'état demandé.
+  }
   return () => {
     if (handle) void handle.remove();
   };

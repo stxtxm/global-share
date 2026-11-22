@@ -22,7 +22,22 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
-## [Non publié]
+## [1.0.16] — 2026-11-22
+
+### Corrigé
+
+- **Mises à jour et version invisibles sur Android (toutes versions)** : le
+  pont entre l'interface web et l'application Android ne s'installait jamais.
+  Il exigeait `window.Capacitor.registerPlugin`, une fonction du paquet
+  `@capacitor/core` qui n'est pas exposée dans le WebView natif — le
+  mécanisme correct est `window.Capacitor.Plugins.GlobalShareNative`,
+  injecté automatiquement pour chaque plugin enregistré. Conséquences
+  corrigées : l'abonnement aux notifications du pont accepte désormais aussi
+  l'écouteur synchrone du bridge natif (et plus seulement une `Promise`),
+  l'icône ⟳ et le badge de version réapparaissent sur l'accueil, et les mises
+  à jour rapides de ~1,4 Mo sont proposées à nouveau. Une installation
+  manuelle de cette version reste nécessaire une dernière fois ; les
+  suivantes sont réservées depuis l'application.
 
 ## [1.0.15] — 2026-11-22
 
@@ -233,7 +248,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.14...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.16...HEAD
+[1.0.16]: https://github.com/stxtxm/global-share/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/stxtxm/global-share/compare/v1.0.14...v1.0.15
 [1.0.14]: https://github.com/stxtxm/global-share/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/stxtxm/global-share/compare/v1.0.12...v1.0.13
