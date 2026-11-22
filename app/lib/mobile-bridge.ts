@@ -20,6 +20,11 @@ interface GlobalShareNativePlugin {
   stopTransfer(): Promise<unknown>;
   keepAlive(options: { enabled: boolean }): Promise<unknown>;
   requestBatteryExemption(): Promise<unknown>;
+  saveDownload(options: {
+    name: string; mime: string; bytes: string; uri?: string; append?: boolean;
+  }): Promise<{ uri?: string; path?: string; error?: string }>;
+  finishDownload(options: { uri?: string; mime?: string }): Promise<{ error?: string }>;
+  openDownload(options: { uri: string; mime?: string; name?: string }): Promise<string>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -205,4 +210,37 @@ export function mobileServiceState(): Promise<unknown> | undefined {
  */
 export function mobileRequestBatteryExemption(): void {
   invoke(nativePlugin()?.requestBatteryExemption());
+}
+
+// ---- Fichiers reçus (stockage partagé Android) ---------------------------
+
+export async function mobileSaveDownload(options: {
+  name: string; mime: string; bytes: string; uri?: string; append?: boolean;
+}): Promise<{ uri?: string; path?: string; error?: string }> {
+  try {
+    return (await nativePlugin()?.saveDownload(options)) ?? { error: 'Pont Android indisponible.' };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+export async function mobileFinishDownload(options: {
+  uri?: string; mime?: string;
+}): Promise<{ error?: string }> {
+  try {
+    return (await nativePlugin()?.finishDownload(options)) ?? {};
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/** Ouvre le fichier avec l'application système adaptée (ACTION_VIEW). */
+export async function mobileOpenDownload(options: {
+  uri: string; mime?: string; name?: string;
+}): Promise<string> {
+  try {
+    return (await nativePlugin()?.openDownload(options)) ?? "Aucune application d'ouverture disponible.";
+  } catch (error) {
+    return String(error);
+  }
 }

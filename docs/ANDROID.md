@@ -144,6 +144,35 @@ GitHub créée par le workflow desktop. Quatre secrets sont nécessaires :
 `versionCode` est dérivé de `package.json` (`1.0.8` → `10008`) et `versionName`
 en est copié : les deux workflows restent alignés sur le tag.
 
+## Fichiers reçus (visible dans « Fichiers »)
+
+Sur desktop, les fichiers reçus sont écrits dans `~/Téléchargements/GlobalShare`
+par l'IPC Electron. Sur Android, un `<a download>` sur une URL `blob:` est ignoré
+par le WebView Capacitor (pas de `DownloadListener`) : le fichier restait uniquement
+en IndexedDB — invisible de l'application Fichiers et impossible à ouvrir avec un
+lecteur externe.
+
+Depuis la v1.0.32 :
+
+- `app/lib/mobile-files.ts` découpe le blob en morceaux de 256 Ko encodés en
+  base64 et les envoie au plugin natif (`saveDownload`, puis `finishDownload`).
+- `GlobalShareNativePlugin.java` crée une entrée `MediaStore.Downloads` avec
+  `RELATIVE_PATH = Download/GlobalShare`, le bon MIME et `IS_PENDING = 1`,
+  écrit les morceaux dans cette URI, puis rend le fichier visible (`IS_PENDING = 0`).
+  Sur Android ≤ 9 (minSdk 24), il écrit dans le dossier public et lance un
+  `MediaScannerConnection`.
+- `openDownload()` lance un intent `ACTION_VIEW` avec l'URI `content://` renvoyée
+  — seul moyen fiable d'ouvrir un FLAC avec le lecteur système. Le manifeste
+  déclare les `<queries>` audio/vidéo/image/scheme `content` nécessaires à la
+  visibilité des paquets sur Android 11+, et `WRITE_EXTERNAL_STORAGE` plafonné à
+  `maxSdkVersion="28"` pour les anciennes versions.
+- Le MIME est inféré depuis l'extension quand `File.type` est vide (cas fréquent
+  du FLAC sur Android) : `mimeFromName()` dans `app/lib/downloads.ts` renvoie
+  `audio/flac`, `audio/mpeg`, etc. Les fichiers audio reçoivent une icône dédiée
+  dans la liste.
+- L'URI MediaStore est conservée dans `record.path` : le bouton « Ouvrir » et le
+  bouton « Dossier » apparaissent donc aussi sur mobile.
+
 ## Limites
 
 - Distribution directe / F-Droid : le Play Store interdit le self-update par

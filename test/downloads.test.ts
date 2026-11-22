@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DOWNLOAD_LIMITS,
+  mimeFromName,
   planRetention,
   sanitizeFileName,
   toPublicDownloads,
@@ -10,6 +11,14 @@ import {
   viewerKind,
   type StoredDownload,
 } from '../app/lib/downloads.ts';
+
+test('mimeFromName reconnaît le FLAC et les formats audio courants', () => {
+  assert.equal(mimeFromName('album.flac'), 'audio/flac');
+  assert.equal(mimeFromName('PISTE.FLAC'), 'audio/flac');
+  assert.equal(mimeFromName('song.mp3'), 'audio/mpeg');
+  assert.equal(mimeFromName('inconnu.bin'), 'application/octet-stream');
+  assert.equal(mimeFromName('sans-extension'), 'application/octet-stream');
+});
 
 function record(id: string, receivedAt: number, blobSize = 0): StoredDownload {
   return {

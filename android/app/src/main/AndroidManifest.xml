@@ -16,8 +16,35 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
+    <!-- Écriture des fichiers reçus en stockage partagé sur Android ≤ 9.
+         Inutile et ignorée sur Android 10+ (MediaStore, scoped storage). -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Mise à jour in-app depuis les releases GitHub (APK hors Play Store). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Android 11+ : sans ces déclarations, resolveActivity() ne voit aucun
+         lecteur audio/vidéo et l'ouverture d'un FLAC échoue silencieusement. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="audio/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"

@@ -21,6 +21,7 @@ import {
   putDownload,
   sanitizeFileName,
   toPublicDownloads,
+  mimeFromName,
   viewerKind,
   type DownloadRecord,
   type StoredDownload,
@@ -31,6 +32,7 @@ import type { DesktopUpdateBridge } from '../lib/update';
 // Installe le pont Capacitor dans l'APK avant le premier rendu.
 import '../lib/mobile-bridge';
 import {
+  isMobileHost,
   mobileFinishTransfer,
   mobileKeepAlive,
   mobileRequestBatteryExemption,
@@ -38,6 +40,8 @@ import {
   mobileStopTransfer,
   mobileUpdateTransfer,
 } from '../lib/mobile-bridge';
+import { saveBlobToSharedStorage } from '../lib/mobile-files';
+import { mobileOpenDownload } from '../lib/mobile-bridge';
 import { UpdateBanner, UpdateTrigger } from './UpdateManager';
 import {
   fetchLiveRooms,
@@ -275,6 +279,16 @@ function IconFile({ className = 'gs-icon' }: IconProps) {
     <svg {...iconProps} className={className}>
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
+    </svg>
+  );
+}
+
+function IconMusic({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M9 18V5l12-2v13" />
+      <circle cx="6" cy="18" r="3" />
+      <circle cx="18" cy="16" r="3" />
     </svg>
   );
 }
@@ -1374,7 +1388,7 @@ export default function GlobalShare() {
     // le destinataire s'aligne sur le chunkSize annoncé dans transfer-init.
     const lan = lanPeersRef.current.has(targetId) && method === 'p2p';
     const t = managerRef.current?.startSend(
-      { name: file.name, size: file.size, mime: file.type },
+      { name: file.name, size: file.size, mime: file.type || mimeFromName(file.name) },
       targetId,
       method,
       hash ?? undefined,
@@ -1388,7 +1402,7 @@ export default function GlobalShare() {
         id: t.id,
         name: file.name,
         size: file.size,
-        mime: file.type || 'application/octet-stream',
+        mime: file.type || mimeFromName(file.name),
         hash: hash ?? undefined,
         chunkSize: t.chunkSize,
         targetId,
@@ -1548,6 +1562,15 @@ export default function GlobalShare() {
       if (error) showToast('error', error);
       return;
     }
+    // Android : le fichier est dans MediaStore ; seul un intent ACTION_VIEW
+    // peut lancer le lecteur FLAC/audio système (blob: n'est pas openable).
+    if (isMobileHost() && record.path) {
+      const error = await mobileOpenDownload({
+        uri: record.path, mime: record.mime, name: record.name,
+      });
+      if (error) showToast('error', error);
+      return;
+    }
     let blob = downloadBlobRef.current.get(record.id);
     if (!blob) {
       blob = (await getDownloadBlob(record.id)) ?? undefined;
@@ -1614,7 +1637,7 @@ export default function GlobalShare() {
       id,
       name: sanitizeFileName(name),
       size: blob.size,
-      mime: blob.type || 'application/octet-stream',
+      mime: blob.type || mimeFromName(name),
       from: resolveSender(from),
       receivedAt: Date.now(),
       integrity,
@@ -1661,6 +1684,19 @@ export default function GlobalShare() {
         }
       } catch {
         showToast('warning', "Enregistrement impossible : le fichier reste dans l'onglet Téléchargements.");
+      }
+    } else if (isMobileHost()) {
+      // Le pont Capacitor n'expose pas `globalshareDesktop` : écrire le fichier
+      // dans Téléchargements/GlobalShare via MediaStore le rend visible dans
+      // l'app Fichiers et ouvrable par un lecteur externe.
+      record.blob = blob;
+      downloadBlobRef.current.set(id, blob);
+      const saved = await saveBlobToSharedStorage(blob, record.name, record.mime);
+      if (saved.error) {
+        showToast('warning', `${saved.error} Le fichier reste dans l'onglet Téléchargements.`);
+      } else if (saved.path) {
+        record.path = saved.path;
+        showToast('success', `Enregistré dans Téléchargements/GlobalShare : ${record.name}`);
       }
     } else {
       record.blob = blob;
@@ -2139,7 +2175,9 @@ export default function GlobalShare() {
                 {downloads.map((f, i) => (
                   <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
                     {appSettings.showFileIcons && (
-                      <span className="gs-file-icon" aria-hidden="true"><IconFile /></span>
+                      <span className="gs-file-icon" aria-hidden="true">
+                        {viewerKind(f.mime, f.name) === 'audio' ? <IconMusic /> : <IconFile />}
+                      </span>
                     )}
                     <div className="gs-file-meta">
                       <div className="gs-file-name" title={f.name}>{f.name}</div>

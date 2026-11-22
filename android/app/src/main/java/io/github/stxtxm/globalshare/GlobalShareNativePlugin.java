@@ -1,7 +1,10 @@
 package io.github.stxtxm.globalshare;
 
 import android.Manifest;
+import android.content.ContentValues;
 import android.content.Intent;
+import android.media.MediaScannerConnection;
+import android.os.Environment;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import androidx.core.app.ActivityCompat;
@@ -11,7 +14,10 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
+import androidx.core.content.FileProvider;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -19,6 +25,9 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 
 /** Pont natif exposé à la page sous le nom « GlobalShareNative ». */
 @CapacitorPlugin(
@@ -170,6 +179,135 @@ public class GlobalShareNativePlugin extends Plugin {
         }
         TransferForegroundService.setKeepAlive(getContext(), enabled);
         call.resolve();
+    }
+
+    // ---- Fichiers reçus : stockage partagé + ouverture système -----------
+
+    /**
+     * Écrit un morceau (base64) du fichier reçu dans Téléchargements/GlobalShare.
+     * Le JS découpe en morceaux de 256 Ko : le pont Capacitor ne doit jamais
+     * transporter une chaîne de dizaines de Mo d'un coup. La première fois,
+     * on crée l'entrée MediaStore (ou le fichier sur Android < 10) et on
+     * renvoie son URI ; les appels suivants ajoutent au même URI.
+     */
+    @PluginMethod
+    public void saveDownload(PluginCall call) {
+        String name = call.getString("name");
+        String mime = call.getString("mime");
+        String base64 = call.getString("bytes");
+        String uriText = call.getString("uri");
+        boolean append = Boolean.TRUE.equals(call.getBoolean("append", false));
+        JSObject result = new JSObject();
+        if (name == null || base64 == null) {
+            result.put("error", "Nom ou contenu de fichier manquant.");
+            call.resolve(result);
+            return;
+        }
+        try {
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            android.content.Context context = getContext();
+            Uri uri;
+            if (append && uriText != null) {
+                uri = Uri.parse(uriText);
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE,
+                        mime != null ? mime : "application/octet-stream");
+                values.put(MediaStore.Downloads.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/GlobalShare");
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                uri = context.getContentResolver().insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) {
+                    result.put("error", "Impossible de créer le fichier dans Téléchargements.");
+                    call.resolve(result);
+                    return;
+                }
+            } else {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
+                if (!dir.exists() && !dir.mkdirs()) {
+                    result.put("error", "Impossible de créer le dossier GlobalShare.");
+                    call.resolve(result);
+                    return;
+                }
+                File file = new File(dir, name);
+                try (FileOutputStream out = new FileOutputStream(file, false)) {
+                    out.write(bytes);
+                }
+                MediaScannerConnection.scanFile(context,
+                        new String[]{file.getAbsolutePath()}, new String[]{mime}, null);
+                uri = FileProvider.getUriForFile(context,
+                        context.getPackageName() + ".fileprovider", file);
+                result.put("uri", uri.toString());
+                call.resolve(result);
+                return;
+            }
+            try (OutputStream out = context.getContentResolver()
+                    .openOutputStream(uri, (append && uriText != null) ? "wa" : "w")) {
+                if (out == null) {
+                    result.put("error", "Impossible d'écrire le fichier.");
+                    call.resolve(result);
+                    return;
+                }
+                out.write(bytes);
+            }
+            result.put("uri", uri.toString());
+            call.resolve(result);
+        } catch (Exception error) {
+            result.put("error", "Enregistrement impossible : " + error.getMessage());
+            call.resolve(result);
+        }
+    }
+
+    /** Rend le fichier visible dès la fin de l'écriture (MediaStore IS_PENDING). */
+    @PluginMethod
+    public void finishDownload(PluginCall call) {
+        String uriText = call.getString("uri");
+        JSObject result = new JSObject();
+        if (uriText == null) {
+            call.resolve(result);
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    && uriText.startsWith("content://")) {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                getContext().getContentResolver()
+                        .update(Uri.parse(uriText), values, null, null);
+            }
+        } catch (Exception error) {
+            result.put("error", "Fichier écrit mais pas encore indexé : " + error.getMessage());
+        }
+        call.resolve(result);
+    }
+
+    /** Ouvre le fichier avec le lecteur système (FLAC, audio, image, PDF…). */
+    @PluginMethod
+    public void openDownload(PluginCall call) {
+        String uriText = call.getString("uri");
+        String mime = call.getString("mime");
+        if (uriText == null) {
+            call.resolve("Aucun fichier à ouvrir.");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse(uriText),
+                    mime != null ? mime : "application/octet-stream");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (intent.resolveActivity(getContext().getPackageManager()) == null) {
+                call.resolve("Aucune application installée pour ouvrir ce fichier.");
+                return;
+            }
+            getContext().startActivity(intent);
+            call.resolve("");
+        } catch (Exception error) {
+            call.resolve("Ouverture impossible : " + error.getMessage());
+        }
     }
 
     /** État du service pour le diagnostic (Notification, réglages). */

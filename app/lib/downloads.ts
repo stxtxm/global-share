@@ -109,6 +109,22 @@ export function viewerKind(mime: string, name = ''): ViewerKind {
   return 'none';
 }
 
+const MIME_BY_EXTENSION: Record<string, string> = {
+  flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4', m4b: 'audio/mp4',
+  ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', aac: 'audio/aac',
+  aiff: 'audio/aiff', alac: 'audio/mp4', webm: 'video/webm', mkv: 'video/x-matroska',
+};
+
+/**
+ * Android renvoie souvent `File.type === ''` pour un FLAC : sans inférence par
+ * extension, le fichier part en `application/octet-stream`, l'app Fichiers
+ * affiche une icône générique et aucun lecteur audio n'est proposé.
+ */
+export function mimeFromName(name: string, fallback = 'application/octet-stream'): string {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  return MIME_BY_EXTENSION[ext] ?? fallback;
+}
+
 /** Métadonnées seules : l'état React n'a pas à retenir les blobs. */
 export function toPublicDownloads(records: StoredDownload[]): DownloadRecord[] {
   return records.map((record) => ({
