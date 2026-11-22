@@ -22,6 +22,22 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.20] — 2026-11-22
+
+### Ajouté
+
+- **Session maintenue en arrière-plan et écran verrouillé (Android)** : rejoindre
+  un salon démarre désormais le service avant-plan même sans transfert
+  (wake lock CPU + verrou Wi-Fi basse latence + notification « Connectée ·
+  reste joignable en arrière-plan ») — la socket ne meurt plus quand l'app
+  passe en arrière-plan ou que le téléphone se met en veille, et les transferts
+  entrants continuent. Sous Android 14+, le service utilise le type
+  « specialUse » (pair-à-pair temps réel), sans le plafond de 6 h/jour du type
+  « dataSync ». À la première connexion, l'app demande une seule fois
+  l'exemption d'optimisation de batterie (Doze) : l'accepter garantit la
+  continuité même sur les téléphones agressifs. Quitter le salon ou se
+  déconnecter rend les verrous immédiatement.
+
 ## [1.0.19] — 2026-11-22
 
 ### Corrigé
@@ -294,7 +310,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.19...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.20...HEAD
+[1.0.20]: https://github.com/stxtxm/global-share/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/stxtxm/global-share/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/stxtxm/global-share/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/stxtxm/global-share/compare/v1.0.16...v1.0.17

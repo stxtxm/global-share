@@ -31,6 +31,8 @@ import type { DesktopUpdateBridge } from '../lib/update';
 // Installe le pont Capacitor dans l'APK avant le premier rendu.
 import '../lib/mobile-bridge';
 import {
+  mobileKeepAlive,
+  mobileRequestBatteryExemption,
   mobileStartTransfer,
   mobileStopTransfer,
   mobileUpdateTransfer,
@@ -467,6 +469,13 @@ export default function GlobalShare() {
     }
   }, [nativeTransferCount, nativeTransferProgress]);
 
+  // Salon ouvert et connecté : le service avant-plan reste actif même sans
+  // transfert, pour que la socket survive à l'arrière-plan et à la veille.
+  // Sur desktop/web, mobileKeepAlive ne fait rien.
+  useEffect(() => {
+    mobileKeepAlive(step === 'room' && connectionStatus !== 'disconnected');
+  }, [step, connectionStatus]);
+
   const showToast = useCallback((type: Toast['type'], message: string) => {
     const id = ++toastIdRef.current;
     setToasts(prev => [...prev, { id, type, message }]);
@@ -849,6 +858,9 @@ export default function GlobalShare() {
       rememberRoom(effectiveRoomId, effectiveName);
       setRoomHistory(loadRoomHistory());
       setStep('room');
+      // Exemption d'optimisation de batterie : demandée une seule fois par
+      // installation côté natif, au premier salon rejoint.
+      mobileRequestBatteryExemption();
       // Retour en ligne : les transferts interrompus repartent d'eux-mêmes, le
       // temps que le pair se réenregistre dans le salon.
       setTimeout(() => managerRef.current?.resumeInterrupted(), 600);

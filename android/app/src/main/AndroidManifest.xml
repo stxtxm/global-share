@@ -8,8 +8,12 @@
     <!-- Continuité du transfert écran verrouillé : service avant-plan + réveil. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 14+ : « specialUse » n'a pas le plafond de 6 h/jour de dataSync. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Demande (une fois) l'exemption d'optimisation de batterie pour Doze. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
     <!-- Mise à jour in-app depuis les releases GitHub (APK hors Play Store). -->
@@ -40,7 +44,14 @@
         <service
             android:name=".TransferForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <!-- Android 14 exige de déclarer l'usage « specialUse » : pair-à-pair
+                 temps réel (signalement socket + transfert de fichiers) qui ne
+                 correspond à aucun type standard et ne doit pas être plafonné. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Le transfert de fichiers pair-à-pair temps réel doit continuer en arrière-plan, même écran verrouillé." />
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

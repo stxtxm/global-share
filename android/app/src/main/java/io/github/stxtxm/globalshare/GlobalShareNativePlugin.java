@@ -1,8 +1,14 @@
 package io.github.stxtxm.globalshare;
 
 import android.Manifest;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -125,6 +131,53 @@ public class GlobalShareNativePlugin extends Plugin {
     @PluginMethod
     public void stopTransfer(PluginCall call) {
         TransferForegroundService.stop(getContext());
+        call.resolve();
+    }
+
+    /**
+     * Session salon ouverte : maintient le service avant-plan (wake locks +
+     * notification) même sans transfert, pour que la socket survive à
+     * l'arrière-plan et à la veille. Appelé avec false quand l'app quitte le
+     * salon ou se déconnecte.
+     */
+    @PluginMethod
+    public void keepAlive(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", Boolean.FALSE));
+        TransferForegroundService.setKeepAlive(getContext(), enabled);
+        call.resolve();
+    }
+
+    /**
+     * Demande (une seule fois par installation) l'exemption d'optimisation de
+     * batterie : sans elle, Doze peut suspendre le réseau malgré le service
+     * avant-plan sur certains constructeurs agressifs.
+     */
+    @PluginMethod
+    public void requestBatteryExemption(PluginCall call) {
+        android.content.Context context = getContext();
+        PowerManager power = (PowerManager) context.getSystemService(android.content.Context.POWER_SERVICE);
+        String packageName = context.getPackageName();
+        SharedPreferences prefs = context.getSharedPreferences("gsbg", android.content.Context.MODE_PRIVATE);
+        boolean alreadyIgnored = power != null
+                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                    || power.isIgnoringBatteryOptimizations(packageName));
+        if (alreadyIgnored || prefs.getBoolean("batteryAsked", false)) {
+            call.resolve();
+            return;
+        }
+        prefs.edit().putBoolean("batteryAsked", true).apply();
+        android.app.Activity activity = getActivity();
+        if (activity == null) {
+            call.resolve();
+            return;
+        }
+        try {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + packageName));
+            activity.startActivity(intent);
+        } catch (Exception ignored) {
+            // Écran sans ce réglage : on n'insiste pas.
+        }
         call.resolve();
     }
 }

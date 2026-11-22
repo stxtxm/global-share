@@ -16,15 +16,27 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 /**
- * Garde le transfert WebRTC en vie quand l'écran est verrouillé : notification
- * permanente (foreground service), wake lock CPU et verrou Wi-Fi. Si Android
- * tue quand même le WebView, la reprise IndexedDB reprend au dernier chunk.
+ * Maintient la session quand l'app part en arrière-plan ou que l'écran se
+ * verrouille : notification permanente (service avant-plan), wake lock CPU et
+ * verrou Wi-Fi. Deux sources de demande cohabitent :
+ *
+ * - « keepAlive » : la session est ouverte et connectée ; le socket du WebView
+ *   doit rester actif, transfert en cours ou pas (sinon l'appareil s'endort,
+ *   la socket tombe et les pairs nous voient partir). Republicain : l'app est
+ *   revenue au premier plan ou a quitté le salon → l'UI envoie keepAlive=false.
+ * - Les transferts : compteur affiché dans la notification (envoi et réception
+ *   passent par le même compteur web).
+ *
+ * Le service ne s'arrête que quand les deux sont à zéro. Si Android tue quand
+ * même le WebView, la reprise IndexedDB repart au dernier chunk.
  */
 public final class TransferForegroundService extends Service {
     public static final String ACTION_START =
             "io.github.stxtxm.globalshare.TRANSFER_START";
     public static final String ACTION_UPDATE =
             "io.github.stxtxm.globalshare.TRANSFER_UPDATE";
+    public static final String ACTION_KEEP_ALIVE =
+            "io.github.stxtxm.globalshare.TRANSFER_KEEP_ALIVE";
     public static final String ACTION_STOP =
             "io.github.stxtxm.globalshare.TRANSFER_STOP";
 
@@ -33,9 +45,22 @@ public final class TransferForegroundService extends Service {
 
     private static volatile int activeTransfers;
     private static volatile int progress;
+    private static volatile boolean keepAlive;
 
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+
+    /** Session salon connectée : la connexion doit survivre à l'arrière-plan. */
+    public static void setKeepAlive(Context context, boolean enabled) {
+        keepAlive = enabled;
+        if (enabled) {
+            Intent intent = new Intent(context, TransferForegroundService.class);
+            intent.setAction(ACTION_KEEP_ALIVE);
+            ContextCompat.startForegroundService(context, intent);
+        } else if (activeTransfers == 0) {
+            context.stopService(new Intent(context, TransferForegroundService.class));
+        }
+    }
 
     public static void start(Context context, int count, int percent) {
         activeTransfers = Math.max(1, count);
@@ -47,7 +72,7 @@ public final class TransferForegroundService extends Service {
 
     public static void update(Context context, int count, int percent) {
         if (count <= 0) {
-            stop(context);
+            finishTransfers(context);
             return;
         }
         activeTransfers = count;
@@ -57,9 +82,24 @@ public final class TransferForegroundService extends Service {
         ContextCompat.startForegroundService(context, intent);
     }
 
+    /** Transferts terminés : le service ne reste que si la session le demande. */
+    private static void finishTransfers(Context context) {
+        activeTransfers = 0;
+        progress = 0;
+        if (!keepAlive) {
+            context.stopService(new Intent(context, TransferForegroundService.class));
+            return;
+        }
+        // Session toujours ouverte : on ne garde que la connexion.
+        Intent intent = new Intent(context, TransferForegroundService.class);
+        intent.setAction(ACTION_KEEP_ALIVE);
+        ContextCompat.startForegroundService(context, intent);
+    }
+
     public static void stop(Context context) {
         activeTransfers = 0;
         progress = 0;
+        keepAlive = false;
         Intent intent = new Intent(context, TransferForegroundService.class);
         intent.setAction(ACTION_STOP);
         context.stopService(intent);
@@ -83,7 +123,7 @@ public final class TransferForegroundService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (intent != null) {
+        if (intent != null && !ACTION_KEEP_ALIVE.equals(action)) {
             int count = intent.getIntExtra("count", activeTransfers);
             int percent = intent.getIntExtra("progress", progress);
             if (count > 0) {
@@ -104,7 +144,7 @@ public final class TransferForegroundService extends Service {
         if (manager == null) return;
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID, "Transferts de fichiers", NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Maintient le transfert actif quand l'écran est verrouillé");
+        channel.setDescription("Maintient la session et les transferts actifs en arrière-plan");
         channel.setSound(null, null);
         manager.createNotificationChannel(channel);
     }
@@ -124,8 +164,12 @@ public final class TransferForegroundService extends Service {
             WifiManager wifi = (WifiManager) getApplicationContext()
                     .getSystemService(WIFI_SERVICE);
             if (wifi != null) {
-                wifiLock = wifi.createWifiLock(
-                        WifiManager.WIFI_MODE_FULL_HIGH_PERF, "GlobalShare:transfer");
+                // LOW_LATENCY (API 29+) garde le Wi-Fi réactif pendant les
+                // échanges ; HIGH_PERF en dessous.
+                int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                        : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                wifiLock = wifi.createWifiLock(mode, "GlobalShare:transfer");
                 wifiLock.acquire();
             }
         } catch (Exception ignored) {
@@ -136,25 +180,40 @@ public final class TransferForegroundService extends Service {
     private void showNotification() {
         Intent open = new Intent(this, MainActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
 
-        String text = activeTransfers > 1
-                ? activeTransfers + " transferts en cours · " + progress + "%"
-                : "Transfert en cours · " + progress + "%";
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+        boolean transferring = activeTransfers > 0;
+        String text = transferring
+                ? (activeTransfers > 1
+                        ? activeTransfers + " transferts en cours · " + progress + "%"
+                        : "Transfert en cours · " + progress + "%")
+                : "Connectée · reste joignable en arrière-plan";
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("GlobalShare")
                 .setContentText(text)
                 .setOngoing(true)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setProgress(100, progress, false)
                 .setContentIntent(PendingIntent.getActivity(this, 0, open, flags))
-                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-                .build();
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS);
+        if (transferring) {
+            builder.setSmallIcon(android.R.drawable.stat_sys_download);
+            builder.setProgress(100, progress, false);
+        } else {
+            builder.setSmallIcon(android.R.drawable.stat_notify_sync_noanim);
+        }
+        Notification notification = builder.build();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        // Android 14+ : « dataSync » est plafonné à 6 h par jour ; le type
+        // « specialUse » (P2P entre appareils, sans équivalent standard) n'a
+        // pas de limite et décrit mieux le service. Les déclarations figurent
+        // dans le manifeste (foregroundServiceType + PROPERTY_SPECIAL_USE).
+        int foregroundType = 0;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        }
+        if (foregroundType != 0) {
+            startForeground(NOTIFICATION_ID, notification, foregroundType);
         } else {
             startForeground(NOTIFICATION_ID, notification);
         }

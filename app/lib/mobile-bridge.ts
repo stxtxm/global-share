@@ -18,6 +18,8 @@ interface GlobalShareNativePlugin {
   startTransfer(options: { count: number; progress: number }): Promise<unknown>;
   updateTransferProgress(options: { count: number; progress: number }): Promise<unknown>;
   stopTransfer(): Promise<unknown>;
+  keepAlive(options: { enabled: boolean }): Promise<unknown>;
+  requestBatteryExemption(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
 
@@ -164,4 +166,20 @@ export function mobileUpdateTransfer(count: number, progress: number): void {
 
 export function mobileStopTransfer(): void {
   void nativePlugin()?.stopTransfer();
+}
+
+/**
+ * Session salon connectée : maintient le service avant-plan (wake locks) pour
+ * que la socket survive à l'arrière-plan et à la veille, même sans transfert.
+ */
+export function mobileKeepAlive(enabled: boolean): void {
+  void nativePlugin()?.keepAlive({ enabled });
+}
+
+/**
+ * Exemption d'optimisation de batterie : demandée une seule fois par
+ * installation côté natif (le plugin ignore les redemandes).
+ */
+export function mobileRequestBatteryExemption(): void {
+  void nativePlugin()?.requestBatteryExemption();
 }
