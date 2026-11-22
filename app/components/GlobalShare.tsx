@@ -36,12 +36,14 @@ import {
   mobileFinishTransfer,
   mobileDeleteDownload,
   mobileKeepAlive,
+  mobileListDownloads,
   mobileRevealDownload,
   mobileRequestBatteryExemption,
   mobileStartTransfer,
   mobileStopTransfer,
   mobileUpdateTransfer,
 } from '../lib/mobile-bridge';
+import type { SharedFile } from '../lib/mobile-bridge';
 import { saveBlobToSharedStorage } from '../lib/mobile-files';
 import { mobileOpenDownload } from '../lib/mobile-bridge';
 import { UpdateBanner, UpdateTrigger } from './UpdateManager';
@@ -421,6 +423,8 @@ export default function GlobalShare() {
   const [tab, setTab] = useState<'room' | 'downloads'>('room');
   // Historique des téléchargements, conservé sur l'appareil (voir lib/downloads).
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
+  // Fichiers réellement présents dans Téléchargements/GlobalShare (Android).
+  const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -903,6 +907,19 @@ export default function GlobalShare() {
       if (roomParam) queueMicrotask(() => setRoomId(roomParam));
     }
   }, []);
+
+  // Lecture du stockage partagé à l'ouverture de l'onglet : montre les fichiers
+  // même quand l'historique IndexedDB est vide ou périmé.
+  useEffect(() => {
+    if (tab !== 'downloads' || !isMobileHost()) return;
+    let cancelled = false;
+    void mobileListDownloads().then(result => {
+      if (cancelled) return;
+      setSharedFiles(result.files);
+      if (result.error) showToast('warning', result.error);
+    });
+    return () => { cancelled = true; };
+  }, [tab, showToast]);
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
@@ -2287,6 +2304,59 @@ export default function GlobalShare() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {isMobileHost() && (
+              <div className="gs-shared-files">
+                <h3 className="gs-list-title">Sur cet appareil</h3>
+                <p className="gs-hint">Téléchargements/GlobalShare · {sharedFiles.length} fichier{sharedFiles.length > 1 ? 's' : ''}</p>
+                {sharedFiles.length === 0 ? (
+                  <p className="gs-hint">Aucun fichier enregistré pour le moment.</p>
+                ) : (
+                  <div className="gs-list">
+                    {sharedFiles.map(file => (
+                      <div key={file.uri} className="gs-file">
+                        <div className="gs-file-meta">
+                          <div className="gs-file-name" title={file.name}>{file.name}</div>
+                          <div className="gs-file-sub"><span>{formatBytes(file.size)}</span></div>
+                          <div className="gs-file-actions">
+                            <button
+                              type="button"
+                              className="gs-dl"
+                              onClick={() => void (async () => {
+                                const error = await mobileOpenDownload({
+                                  uri: file.uri, mime: mimeFromName(file.name), name: file.name,
+                                });
+                                if (error) showToast('error', error);
+                              })()}
+                            >
+                              <IconMusic className="gs-icon gs-icon--sm" />
+                              Écouter
+                            </button>
+                            <button
+                              type="button"
+                              className="gs-dl gs-dl--ghost"
+                              onClick={() => void (async () => {
+                                const result = await mobileDeleteDownload({
+                                  uri: file.uri, name: file.name,
+                                });
+                                if (result.error) showToast('error', result.error);
+                                else {
+                                  setSharedFiles(prev => prev.filter(f => f.uri !== file.uri));
+                                  showToast('success', `Supprimé : ${file.name}`);
+                                }
+                              })()}
+                            >
+                              <IconTrash className="gs-icon gs-icon--sm" />
+                              Supprimer
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </section>

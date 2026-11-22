@@ -3,6 +3,7 @@ package io.github.stxtxm.globalshare;
 import android.Manifest;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.os.Environment;
 import android.content.SharedPreferences;
@@ -14,6 +15,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
@@ -318,82 +320,133 @@ public class GlobalShareNativePlugin extends Plugin {
     }
 
     /**
-     * Ouvre l'application Fichiers du système directement dans
-     * Téléchargements/GlobalShare. Depuis là, l'utilisateur peut écouter le FLAC
-     * avec le lecteur de son choix, sans qu'un lecteur vidéo ne soit imposé.
+     * Ouvre le gestionnaire de fichiers dans Téléchargements/GlobalShare.
+     * Sur Pixel 9a, Google Files est le gestionnaire par défaut et ne répond
+     * pas toujours à un ACTION_VIEW sur l'URI DocumentsUI. On essaie donc dans
+     * l'ordre : DocumentsUI avec EXTRA_INITIAL_URI, puis l'application Google
+     * Files / DocumentsUI par son nom de paquet, puis le sélecteur système
+     * ouvert directement dans le dossier.
      */
     @PluginMethod
     public void revealDownload(PluginCall call) {
         JSObject result = new JSObject();
+        android.content.Context context = getContext();
         try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            Uri folder = Uri.parse(
-                    "content://com.android.externalstorage.documents/document/primary%3ADownload%2FGlobalShare");
-            intent.setData(folder);
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(intent);
+            Uri folder = DocumentsContract.buildDocumentUri(
+                    "com.android.externalstorage.documents", "primary:Download/GlobalShare");
+
+            Intent view = new Intent(Intent.ACTION_VIEW);
+            view.setData(folder);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                view.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
+            }
+            view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (view.resolveActivity(context.getPackageManager()) != null) {
+                context.startActivity(view);
+                call.resolve(result);
+                return;
+            }
+
+            // Google Files (Pixel) et les gestionnaires AOSP : lancement direct.
+            String[] managers = {
+                    "com.google.android.apps.nbu.files",
+                    "com.google.android.documentsui",
+                    "com.android.documentsui"
+            };
+            for (String pkg : managers) {
+                Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
+                if (launch == null) continue;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    launch.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
+                }
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(launch);
+                call.resolve(result);
+                return;
+            }
+
+            // Dernier recours : le sélecteur de documents ouvert sur le dossier.
+            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            picker.addCategory(Intent.CATEGORY_OPENABLE);
+            picker.setType("*/*");
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
+            }
+            picker.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (picker.resolveActivity(context.getPackageManager()) != null) {
+                context.startActivity(picker);
+                call.resolve(result);
+                return;
+            }
+            result.put("error", "Aucun gestionnaire de fichiers disponible sur cet appareil.");
         } catch (Exception error) {
-            result.put("error", "Impossible d'ouvrir l'application Fichiers : "
-                    + error.getMessage());
+            result.put("error", "Ouverture du gestionnaire impossible : " + error.getMessage());
         }
         call.resolve(result);
     }
 
     /**
-     * Supprime le fichier du stockage partagé (et pas seulement de l'historique
-     * IndexedDB). Accepte l'URI MediaStore renvoyée à l'enregistrement, ou le
-     * nom de fichier pour les anciennes entrées dont l'URI a été perdue.
+     * Liste les fichiers RÉELLEMENT présents dans Téléchargements/GlobalShare.
+     * Source de vérité indépendante de l'historique IndexedDB : permet de voir,
+     * ouvrir et supprimer un fichier même si l'entrée de l'historique a été
+     * perdue ou si l'enregistrement a échoué silencieusement.
      */
     @PluginMethod
-    public void deleteDownload(PluginCall call) {
+    public void listDownloads(PluginCall call) {
         JSObject result = new JSObject();
-        String uriText = call.getString("uri");
-        String name = call.getString("name");
+        com.getcapacitor.JSArray files = new com.getcapacitor.JSArray();
         try {
             android.content.Context context = getContext();
-            boolean deleted = false;
-            if (uriText != null && uriText.startsWith("content://")) {
-                Uri uri = Uri.parse(uriText);
-                String authority = uri.getAuthority();
-                if (authority != null && authority.endsWith(".fileprovider")) {
-                    // Ancien chemin Android ≤ 9 : FileProvider ne sait pas
-                    // supprimer, on retrouve le fichier par son chemin.
-                    java.util.List<String> segments = uri.getPathSegments();
-                    String filePart = segments.isEmpty() ? "" : segments.get(segments.size() - 1);
-                    File dir = new File(Environment.getExternalStoragePublicDirectory(
-                            Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
-                    File file = new File(dir, filePart);
-                    deleted = file.exists() && file.delete();
-                    if (deleted) {
-                        MediaScannerConnection.scanFile(context,
-                                new String[]{file.getAbsolutePath()}, null, null);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                String[] projection = {
+                        MediaStore.MediaColumns._ID,
+                        MediaStore.MediaColumns.DISPLAY_NAME,
+                        MediaStore.MediaColumns.SIZE,
+                        MediaStore.MediaColumns.DATE_ADDED
+                };
+                String selection = MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
+                String[] args = {"%" + Environment.DIRECTORY_DOWNLOADS + "/GlobalShare%"};
+                Cursor cursor = context.getContentResolver().query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        projection, selection, args,
+                        MediaStore.MediaColumns.DATE_ADDED + " DESC");
+                if (cursor != null) {
+                    try {
+                        while (cursor.moveToNext()) {
+                            JSObject file = new JSObject();
+                            long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID));
+                            String name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME));
+                            long size = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE));
+                            file.put("uri", android.content.ContentUris.withAppendedId(
+                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, id).toString());
+                            file.put("name", name == null ? "fichier" : name);
+                            file.put("size", size);
+                            files.put(file);
+                        }
+                    } finally {
+                        cursor.close();
                     }
-                } else {
-                    deleted = context.getContentResolver().delete(uri, null, null) > 0;
                 }
-            }
-            if (!deleted && name != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                String selection = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
-                        + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
-                String[] args = {name, "%GlobalShare%"};
-                deleted = context.getContentResolver().delete(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, selection, args) > 0;
-            }
-            if (!deleted && name != null) {
+            } else {
                 File dir = new File(Environment.getExternalStoragePublicDirectory(
                         Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
-                File file = new File(dir, name);
-                deleted = file.exists() && file.delete();
-                if (deleted) {
-                    MediaScannerConnection.scanFile(context,
-                            new String[]{file.getAbsolutePath()}, null, null);
+                File[] entries = dir.listFiles();
+                if (entries != null) {
+                    for (File file : entries) {
+                        if (!file.isFile()) continue;
+                        JSObject item = new JSObject();
+                        item.put("uri", FileProvider.getUriForFile(context,
+                                context.getPackageName() + ".fileprovider", file).toString());
+                        item.put("name", file.getName());
+                        item.put("size", file.length());
+                        files.put(item);
+                    }
                 }
             }
-            result.put("deleted", deleted);
         } catch (Exception error) {
-            result.put("error", "Suppression impossible : " + error.getMessage());
+            result.put("error", "Lecture du dossier impossible : " + error.getMessage());
         }
+        result.put("files", files);
         call.resolve(result);
     }
 

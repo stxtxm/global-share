@@ -44,6 +44,15 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="content" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <!-- Google Files (Pixel) et DocumentsUI : nécessaires à la visibilité
+             des paquets sur Android 11+ pour getLaunchIntentForPackage(). -->
+        <package android:name="com.google.android.apps.nbu.files" />
+        <package android:name="com.google.android.documentsui" />
+        <package android:name="com.android.documentsui" />
     </queries>
 
     <application

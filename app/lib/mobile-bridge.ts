@@ -27,6 +27,7 @@ interface GlobalShareNativePlugin {
   openDownload(options: { uri: string; mime?: string; name?: string }): Promise<{ error?: string }>;
   revealDownload(): Promise<{ error?: string }>;
   deleteDownload(options: { uri?: string; name: string }): Promise<{ deleted?: boolean; error?: string }>;
+  listDownloads(): Promise<{ files?: { uri: string; name: string; size: number }[]; error?: string }>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -249,6 +250,26 @@ export async function mobileFinishDownload(options: {
     return (await plugin.finishDownload(options)) ?? {};
   } catch (error) {
     return { error: String(error) };
+  }
+}
+
+export interface SharedFile {
+  uri: string;
+  name: string;
+  size: number;
+}
+
+/** Fichiers réellement présents dans Téléchargements/GlobalShare. */
+export async function mobileListDownloads(): Promise<{ files: SharedFile[]; error?: string }> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.listDownloads !== 'function') {
+    return { files: [], error: missingNative('Liste des fichiers') };
+  }
+  try {
+    const result = await plugin.listDownloads();
+    return { files: result?.files ?? [], error: result?.error };
+  } catch (error) {
+    return { files: [], error: String(error) };
   }
 }
 

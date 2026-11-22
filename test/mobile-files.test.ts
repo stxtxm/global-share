@@ -33,6 +33,7 @@ const plugin = {
   openDownload: async () => '',
   revealDownload: async () => {},
   deleteDownload: async (args: unknown) => { calls.push({ name: 'deleteDownload', args }); return { deleted: true }; },
+  listDownloads: async () => ({ files: [] }),
   addListener: async () => ({ remove: async () => {} }),
 };
 

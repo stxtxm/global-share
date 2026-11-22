@@ -182,6 +182,12 @@ Depuis la v1.0.32 :
 - **Retirer** supprime aussi le fichier du stockage partagé via
   `deleteDownload()` (URI MediaStore, ou recherche par nom pour les anciennes
   entrées) : l'historique et le fichier sur le téléphone restent cohérents.
+- Une section **« Sur cet appareil »** dans l'onglet Téléchargements liste les
+  fichiers réellement présents dans `Téléchargements/GlobalShare`, lus via
+  `listDownloads()` (MediaStore, ou le dossier public sur Android ≤ 9). C'est la
+  source de vérité du disque, indépendante de l'historique IndexedDB : chaque
+  fichier peut y être écouté ou supprimé. Utile quand l'historique a été perdu
+  ou qu'un enregistrement a échoué sur une ancienne coquille.
 - `finishDownload()` vérifie le retour de `MediaStore.update()` : si l'entrée a
   disparu, une erreur est remontée au lieu d'enregistrer une URI invalide.
 

@@ -25,6 +25,7 @@ const plugin = {
   openDownload: async () => ({}),
   revealDownload: async () => void calls.push({ name: 'revealDownload' }),
   deleteDownload: async (args: unknown) => { calls.push({ name: 'deleteDownload', args }); return { deleted: true }; },
+  listDownloads: async () => ({ files: [] }),
   getServiceState: async () => ({ running: true }),
   addListener: async (name: string, listener: (value: unknown) => void) => {
     listeners.set(name, listener);
@@ -110,4 +111,10 @@ test('une coquille native plus ancienne renvoie un message au lieu d un TypeErro
   } finally {
     plugin.revealDownload = original;
   }
+});
+
+test('listDownloads renvoie les fichiers du stockage partagé', async () => {
+  calls.length = 0;
+  const result = await bridge.mobileListDownloads();
+  assert.equal(result.files.length, 0);
 });
