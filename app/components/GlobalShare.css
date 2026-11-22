@@ -303,52 +303,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Badge de version (écran d'accueil) ----------------------------------- */
-.gs-welcome-footer {
-  margin-top: auto;
-  padding-top: 6px;
-  display: flex;
-  justify-content: center;
-}
-
-.gs-version {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 6px 14px 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--gs-border);
-  background: var(--gs-surface);
-  color: var(--gs-dim);
-  font-size: 0.74rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.gs-version:hover {
-  color: var(--gs-text);
-  border-color: rgba(167, 139, 250, 0.4);
-  background: rgba(167, 139, 250, 0.08);
-}
-
-.gs-version-icon {
-  opacity: 0.75;
-}
-
-.gs-version-tag {
-  font-variant-numeric: tabular-nums;
-}
-
-.gs-update-dot--inline {
-  position: static;
-  box-shadow: none;
-  width: 7px;
-  height: 7px;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .gs-update-bar-fill.is-indeterminate {
     animation: none;

@@ -22,6 +22,17 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.17] — 2026-11-22
+
+### Modifié
+
+- **L'icône ⟳ de la barre supérieure devient le seul point d'entrée des mises
+  à jour** : le badge de version sous l'écran d'accueil est supprimé (il
+  doublonnait l'icône et affichait « … » le temps que le pont réponde). Le
+  clic sur l'icône ouvre l'encart et lance directement une recherche quand
+  l'état est « à jour » ou après une erreur ; la version courante reste
+  affichée dans l'encart.
+
 ## [1.0.16] — 2026-11-22
 
 ### Corrigé
@@ -248,7 +259,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.16...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.17...HEAD
+[1.0.17]: https://github.com/stxtxm/global-share/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/stxtxm/global-share/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/stxtxm/global-share/compare/v1.0.14...v1.0.15
 [1.0.14]: https://github.com/stxtxm/global-share/compare/v1.0.13...v1.0.14

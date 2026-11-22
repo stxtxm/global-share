@@ -202,52 +202,25 @@ export function UpdateTrigger({ open, onToggle }: TriggerProps) {
   if (!isDesktop) return null;
 
   const badge = state.status === 'available' || state.status === 'downloaded';
+  // Ouvrir l'encart depuis l'état « à jour » ou après une erreur relance
+  // directement une recherche : le bouton vaut « rechercher » à lui seul.
+  const shouldCheckOnOpen =
+    !open && (state.status === 'idle' || state.status === 'up-to-date' || state.status === 'error');
+
   return (
     <button
       type="button"
       className={`gs-iconbtn gs-update-trigger${open ? ' is-active' : ''}`}
-      onClick={onToggle}
+      onClick={() => {
+        onToggle();
+        if (shouldCheckOnOpen) actions.check();
+      }}
       aria-pressed={open}
       aria-label="Mises à jour"
       title="Mises à jour"
     >
       <UpdateIcon />
       {badge && <span className="gs-update-dot" aria-hidden="true" />}
-    </button>
-  );
-}
-
-/**
- * Badge de version de l'écran d'accueil : affiche la version courante et
- * lance une recherche manuelle au clic. Invisible sans pont natif (le site
- * web ne porte pas de version).
- */
-export function VersionBadge({ onOpen }: { onOpen: () => void }) {
-  const state = useUpdateState();
-  const isDesktop = useHasUpdateHost();
-  if (!isDesktop) return null;
-
-  const version = state.currentVersion && state.currentVersion !== 'version inconnue'
-    ? state.currentVersion
-    : '…';
-  const badge = state.status === 'available' || state.status === 'downloaded';
-
-  return (
-    <button
-      type="button"
-      className="gs-version"
-      onClick={() => {
-        onOpen();
-        if (state.status === 'idle' || state.status === 'up-to-date' || state.status === 'error') {
-          actions.check();
-        }
-      }}
-      title="Rechercher des mises à jour"
-      aria-label={`Version ${version}. Rechercher des mises à jour`}
-    >
-      <UpdateIcon className="gs-icon gs-icon--sm gs-version-icon" />
-      <span className="gs-version-tag">v{version}</span>
-      {badge && <span className="gs-update-dot gs-update-dot--inline" aria-hidden="true" />}
     </button>
   );
 }
