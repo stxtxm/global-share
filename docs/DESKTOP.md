@@ -52,6 +52,16 @@ un fichier corrompu. Empreinte de la clé :
 - les erreurs s'affichent dans l'encart avec un bouton **Réessayer** ; une
   vérification de fond qui échoue reste silencieuse.
 
+### Bundle web (~1 Mo au lieu du paquet complet)
+
+Quand seul le frontend change, la release publie `web-bundle.zip` et
+`web-bundle.json` (version, empreinte SHA-256, `nativeVersion`). Si le
+`nativeVersion` du manifeste correspond à celui de l'application installée,
+[`desktop/web-updates.js`](../desktop/web-updates.js) télécharge ce bundle, le
+vérifie, l'extrait dans le dossier utilisateur et redémarre l'interface sur ce
+bundle — sans télécharger le `.rpm`/`.exe`. Le numéro `nativeVersion` des deux
+`package.json` n'est augmenté que quand le code natif change.
+
 Le pont [`desktop/preload.js`](../desktop/preload.js) expose
 `getUpdateState`, `onUpdateState`, `checkForUpdates`, `downloadUpdate`,
 `installUpdate` et `dismissUpdate`. L'état est normalisé des deux côtés

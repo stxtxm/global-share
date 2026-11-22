@@ -24,6 +24,23 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.13] — 2026-11-22
+
+### Ajouté
+
+- **Mises à jour rapides** : chaque release publie un `web-bundle.zip` (~1 Mo)
+  avec son manifeste signé. Tant que la coquille native ne change pas, le bureau
+  et l'APK ne téléchargent que ce bundle, le vérifient (SHA-256) et rechargent
+  l'interface — plus aucun paquet de ~80 Mo à télécharger pour une modification
+  du frontend.
+- **APK différentiel** : publications d'un `.apk.blockmap` (empreintes SHA-256
+  par blocs de 64 Ko) pour ne demander que les blocs manquants lors d'une mise à
+  jour de la coquille native, avec repli sur le téléchargement complet.
+
+### Corrigé
+
+- Test de typage du faux `fetch` dans les tests du bundle web.
+
 ## [1.0.12] — 2026-11-22
 
 ### Corrigé
@@ -189,7 +206,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.12...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.13...HEAD
+[1.0.13]: https://github.com/stxtxm/global-share/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/stxtxm/global-share/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/stxtxm/global-share/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/stxtxm/global-share/compare/v1.0.9...v1.0.10

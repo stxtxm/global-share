@@ -44,6 +44,18 @@ l'asset `.apk` (et son `.apk.sha256`), compare les versions sémantiques avec
 
 - L'empreinte SHA-256 du fichier `.apk.sha256` est vérifiée avant installation ;
   le magic `PK\x03\x04` est contrôlé.
+- **Bundle web (~1 Mo)** : si le `nativeVersion` du manifeste
+  `web-bundle.json` correspond à celui de l'APK installé, l'application
+  télécharge uniquement `web-bundle.zip`, le vérifie et rebase le WebView
+  dessus. Aucun APK n'est téléchargé ni réinstallé pour une modification du
+  frontend. Le manifeste et le zip sont publiés par le workflow desktop.
+- **APK différentiel** : quand la coquille native change, l'APK complet est
+  inévitable. Chaque release publie alors un `.apk.blockmap` (SHA-256 de chaque
+  bloc de 64 Ko, généré par `scripts/apk-blockmap.mjs`) : seuls les blocs
+  manquants sont demandés via des requêtes `Range`, avec repli sur le
+  téléchargement complet si le gain est insuffisant (moins de 40 % de blocs
+  réutilisés). Le fichier reconstruit reste identique à l'APK signé de la
+  release.
 - L'installation passe par un `FileProvider` et `ACTION_VIEW`. Sur Android 8+,
   l'utilisateur doit autoriser une fois « installer des applications inconnues »
   (`ACTION_MANAGE_UNKNOWN_APP_SOURCES`) — c'est le prix d'une distribution hors

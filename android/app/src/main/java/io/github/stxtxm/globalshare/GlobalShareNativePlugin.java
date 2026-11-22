@@ -1,6 +1,7 @@
 package io.github.stxtxm.globalshare;
 
 import android.Manifest;
+import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -66,7 +67,12 @@ public class GlobalShareNativePlugin extends Plugin {
 
     @PluginMethod
     public void installUpdate(PluginCall call) {
-        UpdateManager.installUpdate(getActivity());
+        // Bundle web : rebasage du WebView sur le dossier extrait, sans
+        // réinstallation. setServerBasePath recharge la page par lui-même.
+        UpdateManager.installUpdate(getActivity(), (webDir) -> {
+            Bridge bridge = getBridge();
+            if (bridge != null) bridge.setServerBasePath(webDir);
+        });
         call.resolve(UpdateManager.snapshot());
     }
 

@@ -23,6 +23,11 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode androidVersionCode
         versionName packageJson.version
+        // Compteur de la coquille native : bumpé uniquement quand le code
+        // natif (desktop/, android/, dépendances Electron/Capacitor) change.
+        // UpdateManager n'accepte un bundle web « chaud » que si ce compteur
+        // correspond à celui du manifeste de la release.
+        buildConfigField "int", "NATIVE_VERSION", String.valueOf(packageJson.nativeVersion ?: 1)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

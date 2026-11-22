@@ -6,6 +6,7 @@ const http = require('node:http');
 const path = require('node:path');
 
 const { checkForUpdates, initAutoUpdater, sendUpdateState } = require('./updater');
+const webUpdates = require('./web-updates');
 
 // Identifiant Windows (raccourcis, notifications) : doit rester identique à
 // `appId` dans electron-builder.yml.
@@ -13,10 +14,33 @@ const APP_ID = 'io.github.stxtxm.globalshare';
 const SITE_URL = 'https://stxtxm.github.io/global-share/';
 
 // L'export statique (`npm run build:desktop`) est copié dans resources/web par
-// electron-builder ; en développement il est lu directement dans out/.
-const WEB_ROOT = app.isPackaged
+// electron-builder ; en développement il est lu directement dans out/. Une mise
+// à jour « bundle web » appliquée remplace ce dossier par le bundle extrait —
+// d'où un root mutable et un repli systématique sur les ressources embarquées.
+const PACKAGED_WEB_ROOT = app.isPackaged
   ? path.join(process.resourcesPath, 'web')
   : path.join(__dirname, '..', 'out');
+let WEB_ROOT = PACKAGED_WEB_ROOT;
+
+// Activation des mises à jour web uniquement dans la version installée :
+// ce module ne connaît ni Electron ni le réseau, tout est injecté ici.
+if (app.isPackaged) {
+  webUpdates.configure({
+    enabled: true,
+    baseDir: app.getPath('userData'),
+    appVersion: app.getVersion(),
+    nativeVersion: (() => {
+      try {
+        return require('./package.json').nativeVersion || 1;
+      } catch {
+        return 1;
+      }
+    })(),
+    fetchImpl: (url, options) => fetch(url, options),
+  });
+  const hot = webUpdates.activeRoot();
+  if (hot && fs.existsSync(path.join(hot, 'index.html'))) WEB_ROOT = hot;
+}
 
 // Icône de la fenêtre (barre des tâches, aperçu Alt+Tab). Elle est livrée à
 // côté de l'asar : Chromium ne sait pas la lire depuis l'archive.
@@ -248,6 +272,18 @@ function createWindow(port) {
   // L'interface demande l'état au montage ; ce renvoi couvre le cas où une
   // mise à jour a changé d'état pendant un rechargement de la page.
   window.webContents.on('did-finish-load', () => sendUpdateState());
+
+  // Garde-fou du bundle chaud : si le contenu web appliqué par une mise à jour
+  // ne charge pas (fichier corrompu, incompatibilité imprévue), on
+  // revient aux ressources embarquées au lieu de laisser une fenêtre morte.
+  window.webContents.on('did-fail-load', (_event, code, _desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3 /* ERR_ABORTED : navigation supplantée */) return;
+    if (WEB_ROOT === PACKAGED_WEB_ROOT) return;
+    webUpdates.reset();
+    WEB_ROOT = PACKAGED_WEB_ROOT;
+    if (!window.isDestroyed()) void window.loadURL(`${origin}/`);
+  });
+
   void window.loadURL(`${origin}/`);
   return window;
 }
@@ -297,7 +333,7 @@ function buildMenu() {
       submenu: [
         { label: 'Rechercher des mises à jour…', click: () => checkForUpdates({ manual: true }) },
         { type: 'separator' },
-        { label: `Version ${app.getVersion()}`, enabled: false },
+        { label: `Version ${webUpdates.effectiveVersion() || app.getVersion()}`, enabled: false },
       ],
     },
   );
@@ -332,7 +368,17 @@ async function start() {
 
   mainWindow = createWindow(staticServer.address().port);
   Menu.setApplicationMenu(buildMenu());
-  initAutoUpdater(() => mainWindow);
+  initAutoUpdater(() => mainWindow, {
+    // InstallUpdate (bundle web) : bascule le serveur statique sur le nouveau
+    // bundle, puis recharge la fenêtre — sans redémarrer l'application.
+    applyWebRoot: (dir) => {
+      if (!dir || !fs.existsSync(path.join(dir, 'index.html'))) return;
+      WEB_ROOT = path.resolve(dir);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        void mainWindow.loadURL(`http://127.0.0.1:${staticServer.address().port}/`);
+      }
+    },
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {

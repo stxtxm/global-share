@@ -37,6 +37,7 @@ function applyState(value: unknown) {
     next.total === previous.total &&
     next.bytesPerSecond === previous.bytesPerSecond &&
     next.requiresAdmin === previous.requiresAdmin &&
+    next.mode === previous.mode &&
     next.message === previous.message
   ) {
     return;
@@ -212,6 +213,7 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       break;
     case 'available':
       title = `Mise à jour disponible · ${state.version}`;
+      if (state.mode === 'web') detail = 'Mise à jour rapide : quelques Mo seulement, sans réinstaller l’application.';
       buttons.push({ label: 'Télécharger', primary: true, run: actions.download });
       buttons.push({ label: 'Plus tard', run: close });
       break;
@@ -221,12 +223,20 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       break;
     case 'downloaded':
       title = `${state.version} est prête`;
-      detail = state.message.toLowerCase().includes('sources inconnues')
-        ? state.message
-        : state.requiresAdmin
+      if (state.mode === 'web') {
+        detail = 'Appliquée en quelques secondes, sans réinstallation ni mot de passe.';
+      } else if (state.message.toLowerCase().includes('sources inconnues')) {
+        detail = state.message;
+      } else {
+        detail = state.requiresAdmin
           ? 'L’installation demandera le mot de passe administrateur, puis l’application redémarrera.'
           : 'L’application va redémarrer pour terminer l’installation.';
-      buttons.push({ label: 'Installer et redémarrer', primary: true, run: actions.install });
+      }
+      buttons.push({
+        label: state.mode === 'web' ? 'Appliquer' : 'Installer et redémarrer',
+        primary: true,
+        run: actions.install,
+      });
       buttons.push({ label: 'Plus tard', run: close });
       break;
     case 'installing':

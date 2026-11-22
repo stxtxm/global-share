@@ -69,6 +69,17 @@ jobs:
           NEXT_PUBLIC_TURN_USERNAME: ${{ vars.TURN_USERNAME }}
           NEXT_PUBLIC_TURN_CREDENTIAL: ${{ vars.TURN_CREDENTIAL }}
 
+      # Mise à jour delta : le bundle web (~1,4 Mo) et son manifeste sont
+      # publiés avec les paquets. Les applications installées le téléchargent
+      # à la place du paquet complet (~80 Mo) tant que nativeVersion est
+      # inchangée (voir desktop/web-updates.js et docs/DESKTOP.md).
+      # Produit une seule fois (job linux) : deux jobs l'uploadant en parallèle
+      # pourraient laisser dans la release un zip qui ne correspond plus au
+      # manifeste publié à côté.
+      - name: Build web bundle
+        if: matrix.name == 'linux'
+        run: node scripts/web-bundle.mjs
+
       - name: Package
         run: npx electron-builder ${{ matrix.target }} --publish never
 
@@ -112,6 +123,8 @@ jobs:
             dist/*.exe
             dist/*.yml
             dist/*.blockmap
+            dist/web-bundle.zip
+            dist/web-bundle.json
             dist/RPM-GPG-KEY-globalshare
 
   publish:

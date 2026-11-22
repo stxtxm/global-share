@@ -5,6 +5,7 @@ const { autoUpdater } = require('electron-updater');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const webUpdates = require('./web-updates');
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 8_000;
@@ -28,6 +29,11 @@ let installing = false;
 let manualCheck = false;
 let dismissedVersion = null;
 let installerPath = null;
+// Mise à jour « bundle web » : manifeste vérifié, en attente de téléchargement.
+let pendingWeb = null;
+// Callback fourni par main.js : bascule le serveur statique sur le nouveau
+// bundle et recharge la fenêtre.
+let applyWebRoot = null;
 
 function initialState() {
   return {
@@ -77,7 +83,10 @@ function publish(patch = {}) {
   const next = {
     ...state,
     ...patch,
-    currentVersion: app.getVersion(),
+    // Un bundle web appliqué compte comme la version courante : après une
+    // mise à jour « rapide », l'interface affiche la version du bundle, pas
+    // celle de la coquille installée.
+    currentVersion: webUpdates.effectiveVersion() || app.getVersion(),
     status: STATUSES.has(patch.status) ? patch.status : state.status,
     version: patch.version === undefined ? state.version : patch.version || app.getVersion(),
     percent: percent(patch.percent === undefined ? state.percent : patch.percent),
@@ -208,15 +217,44 @@ function checkForUpdates(options = {}) {
   manualCheck = manual;
   publish({ status: 'checking', message: '', percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 });
 
-  return autoUpdater
-    .checkForUpdates()
-    .catch((error) => {
-      // En arrière-plan, un réseau indisponible ne doit pas afficher d'erreur.
-      publish({
-        status: manual ? 'error' : state.status === 'checking' ? 'idle' : state.status,
-        message: manual ? errorText(error, 'La vérification a échoué.') : '',
-        percent: 0,
-      });
+  // 1) Mise à jour rapide : manifeste du bundle web (~1 Ko). S'il annonce une
+  // version compatible avec la coquille installée (nativeVersion identique),
+  // inutile de consulter electron-updater : on proposera le zip web, pas le
+  // paquet complet.
+  return webUpdates
+    .check()
+    .catch(() => null)
+    .then((info) => {
+      if (info && info.available) {
+        if (info.version === dismissedVersion) return state;
+        pendingWeb = info;
+        manualCheck = false;
+        publish({
+          status: 'available',
+          version: info.version,
+          mode: 'web',
+          total: info.size || 0,
+          message: `Version ${info.version} disponible — mise à jour rapide (${app.getVersion()} installée).`,
+          percent: 0,
+          transferred: 0,
+          bytesPerSecond: 0,
+        });
+        return state;
+      }
+      pendingWeb = null;
+      // 2) Paquet complet : electron-updater (deltas blockmap natifs pour
+      // NSIS/AppImage). Un échec réseau silencieux garde le comportement
+      // historique ci-dessous.
+      return autoUpdater
+        .checkForUpdates()
+        .catch((error) => {
+          // En arrière-plan, un réseau indisponible ne doit pas afficher d'erreur.
+          publish({
+            status: manual ? 'error' : state.status === 'checking' ? 'idle' : state.status,
+            message: manual ? errorText(error, 'La vérification a échoué.') : '',
+            percent: 0,
+          });
+        });
     })
     .finally(() => {
       checking = false;
@@ -225,6 +263,7 @@ function checkForUpdates(options = {}) {
 
 async function downloadUpdate() {
   if (downloading || installing || !app.isPackaged) return state;
+  if (pendingWeb) return downloadWebUpdate(pendingWeb);
 
   downloading = true;
   dismissedVersion = null;
@@ -260,8 +299,105 @@ async function downloadUpdate() {
   return state;
 }
 
+// Téléchargement du bundle web : quelques mégaoctets, vérification SHA-256 du
+// manifeste, extraction locale. Aucun paquet système impliqué : l'application
+// s'appuiera sur les fichiers extraits au prochain démarrage.
+function downloadWebUpdate(info) {
+  downloading = true;
+  dismissedVersion = null;
+  publish({
+    status: 'downloading',
+    version: info.version,
+    mode: 'web',
+    message: 'Téléchargement de la mise à jour…',
+    percent: 0,
+    transferred: 0,
+    total: info.size || 0,
+    bytesPerSecond: 0,
+  });
+  setProgress(0);
+
+  let lastTime = Date.now();
+  let lastBytes = 0;
+  return webUpdates
+    .download(info, (percent, transferred, total) => {
+      const now = Date.now();
+      const speed = now - lastTime >= 200 ? Math.round(((transferred - lastBytes) * 1000) / Math.max(1, now - lastTime)) : state.bytesPerSecond;
+      if (now - lastTime >= 200) {
+        lastTime = now;
+        lastBytes = transferred;
+      }
+      publish({
+        status: 'downloading',
+        version: info.version,
+        mode: 'web',
+        percent,
+        transferred,
+        total,
+        bytesPerSecond: speed,
+        message: 'Téléchargement de la mise à jour…',
+      });
+      setProgress(Math.min(1, percent / 100));
+    })
+    .then(() => {
+      downloading = false;
+      setProgress(-1);
+      publish({
+        status: 'downloaded',
+        version: info.version,
+        mode: 'web',
+        percent: 100,
+        message: `${info.version} est prête à installer (sans redémarrage complet).`,
+      });
+    })
+    .catch((error) => {
+      downloading = false;
+      pendingWeb = null;
+      setProgress(-1);
+      publish({
+        status: 'error',
+        mode: 'web',
+        message: errorText(error, 'Le téléchargement de la mise à jour a échoué.'),
+        percent: 0,
+      });
+    })
+    .then(() => state);
+}
+
 async function installUpdate() {
   if (installing || downloading || state.status !== 'downloaded') return state;
+
+  if (pendingWeb) {
+    installing = true;
+    publish({ status: 'installing', mode: 'web', message: 'Application de la mise à jour…', percent: 0 });
+    try {
+      const dir = webUpdates.apply(pendingWeb.version, pendingWeb.nativeVersion || 0);
+      const version = pendingWeb.version;
+      pendingWeb = null;
+      dismissedVersion = null;
+      publish({
+        status: 'up-to-date',
+        version,
+        mode: 'web',
+        percent: 0,
+        message: `GlobalShare ${version} est appliquée.`,
+      });
+      // Rechargement de l'interface sur le nouveau bundle ; la coquille
+      // (electron, paquet système) reste celle installée.
+      if (applyWebRoot) applyWebRoot(dir);
+    } catch (error) {
+      pendingWeb = null;
+      publish({
+        status: 'error',
+        mode: 'web',
+        message: errorText(error, "L'application de la mise à jour a échoué."),
+        percent: 0,
+      });
+    } finally {
+      installing = false;
+    }
+    return state;
+  }
 
   const type = linuxPackageType();
   if (!type) {
@@ -323,8 +459,9 @@ function registerIpc() {
 }
 registerIpc();
 
-function initAutoUpdater(resolveWindow) {
+function initAutoUpdater(resolveWindow, options = {}) {
   getWindow = resolveWindow;
+  applyWebRoot = typeof options.applyWebRoot === 'function' ? options.applyWebRoot : null;
   if (!app.isPackaged) return;
 
   // Le téléchargement et l'installation sont déclenchés depuis l'interface.
@@ -337,6 +474,19 @@ function initAutoUpdater(resolveWindow) {
   autoUpdater.on('update-available', (info) => {
     const availableVersion = versionOf(info);
     manualCheck = false;
+    // Un bundle web déjà appliqué fait foi : la coquille installée est plus
+    // ancienne que la version qui tourne, electron-updater ne doit pas la
+    // proposer de nouveau.
+    const applied = webUpdates.appliedVersion();
+    if (applied && webUpdates.compareVersions(availableVersion, applied) <= 0) {
+      publish({
+        status: 'up-to-date',
+        version: applied,
+        message: `GlobalShare est à jour (version ${webUpdates.effectiveVersion()}).`,
+        percent: 0,
+      });
+      return;
+    }
     if (availableVersion === dismissedVersion) return;
     publish({
       status: 'available',

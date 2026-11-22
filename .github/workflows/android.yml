@@ -96,6 +96,8 @@ jobs:
           test -f "$APK" || { echo "::error::APK introuvable"; exit 1; }
           mv "$APK" "GlobalShare-$VERSION.apk"
           sha256sum "GlobalShare-$VERSION.apk" | cut -d' ' -f1 > "GlobalShare-$VERSION.apk.sha256"
+          node scripts/apk-blockmap.mjs \
+            "GlobalShare-$VERSION.apk" "GlobalShare-$VERSION.apk.blockmap"
 
           for attempt in $(seq 1 30); do
             if gh release view "$TAG" >/dev/null 2>&1; then break; fi
@@ -105,4 +107,6 @@ jobs:
             echo "::error::Release $TAG introuvable après 5 minutes"; exit 1;
           }
           gh release upload "$TAG" \
-            "GlobalShare-$VERSION.apk" "GlobalShare-$VERSION.apk.sha256" --clobber
+            "GlobalShare-$VERSION.apk" \
+            "GlobalShare-$VERSION.apk.sha256" \
+            "GlobalShare-$VERSION.apk.blockmap" --clobber

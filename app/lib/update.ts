@@ -13,6 +13,13 @@ export type UpdateStatus =
   | 'unsupported'
   | 'error';
 
+/**
+ * Cinématique en cours : `web` = bundle web réduit (~1 Mo, sans réinstallation),
+ * `full` = paquet complet (~80 Mo) réservé au cas où la coquille native change,
+ * `''` = non déterminé (miroirs anciens, état initial).
+ */
+export type UpdateMode = '' | 'web' | 'full';
+
 export interface UpdateState {
   status: UpdateStatus;
   currentVersion: string;
@@ -26,6 +33,7 @@ export interface UpdateState {
   /** rpm/deb : l'installation demandera le mot de passe administrateur. */
   requiresAdmin: boolean;
   message: string;
+  mode: UpdateMode;
 }
 
 const STATUSES: ReadonlySet<string> = new Set<UpdateStatus>([
@@ -50,6 +58,7 @@ export const INITIAL_UPDATE_STATE: UpdateState = {
   bytesPerSecond: 0,
   requiresAdmin: false,
   message: '',
+  mode: '',
 };
 
 function finite(value: unknown, fallback = 0): number {
@@ -72,6 +81,8 @@ export function normalizeUpdateState(input: unknown): UpdateState {
   const currentVersion = text(raw.currentVersion) || 'version inconnue';
   const version = text(raw.version) || currentVersion;
 
+  const mode = raw.mode === 'web' || raw.mode === 'full' ? (raw.mode as UpdateMode) : '';
+
   return {
     status,
     currentVersion,
@@ -82,6 +93,7 @@ export function normalizeUpdateState(input: unknown): UpdateState {
     bytesPerSecond: bytes(raw.bytesPerSecond),
     requiresAdmin: raw.requiresAdmin === true,
     message: text(raw.message),
+    mode,
   };
 }
 
