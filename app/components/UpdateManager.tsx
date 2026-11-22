@@ -127,6 +127,69 @@ function UpdateIcon({ className = 'gs-icon' }: { className?: string }) {
   );
 }
 
+function DownloadIcon({ className = 'gs-icon' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 4v11" />
+      <path d="m7 11 5 5 5-5" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className = 'gs-icon' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m4.5 12.5 5 5L19.5 7" />
+    </svg>
+  );
+}
+
+function AlertIcon({ className = 'gs-icon' }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3.5 21.5 20h-19L12 3.5Z" />
+      <path d="M12 10v4.5" />
+      <path d="M12 17.2v.3" />
+    </svg>
+  );
+}
+
+/** Pictogramme d'état : distinct par situation, lisible sur petit écran. */
+function StatusIcon({ status }: { status: UpdateStatus }) {
+  if (status === 'downloading' || status === 'installing') return <DownloadIcon />;
+  if (status === 'downloaded' || status === 'up-to-date') return <CheckIcon />;
+  if (status === 'error' || status === 'unsupported') return <AlertIcon />;
+  return <UpdateIcon />;
+}
+
 interface TriggerProps {
   open: boolean;
   onToggle: () => void;
@@ -150,6 +213,41 @@ export function UpdateTrigger({ open, onToggle }: TriggerProps) {
     >
       <UpdateIcon />
       {badge && <span className="gs-update-dot" aria-hidden="true" />}
+    </button>
+  );
+}
+
+/**
+ * Badge de version de l'écran d'accueil : affiche la version courante et
+ * lance une recherche manuelle au clic. Invisible sans pont natif (le site
+ * web ne porte pas de version).
+ */
+export function VersionBadge({ onOpen }: { onOpen: () => void }) {
+  const state = useUpdateState();
+  const isDesktop = useHasUpdateHost();
+  if (!isDesktop) return null;
+
+  const version = state.currentVersion && state.currentVersion !== 'version inconnue'
+    ? state.currentVersion
+    : '…';
+  const badge = state.status === 'available' || state.status === 'downloaded';
+
+  return (
+    <button
+      type="button"
+      className="gs-version"
+      onClick={() => {
+        onOpen();
+        if (state.status === 'idle' || state.status === 'up-to-date' || state.status === 'error') {
+          actions.check();
+        }
+      }}
+      title="Rechercher des mises à jour"
+      aria-label={`Version ${version}. Rechercher des mises à jour`}
+    >
+      <UpdateIcon className="gs-icon gs-icon--sm gs-version-icon" />
+      <span className="gs-version-tag">v{version}</span>
+      {badge && <span className="gs-update-dot gs-update-dot--inline" aria-hidden="true" />}
     </button>
   );
 }
@@ -181,6 +279,17 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       : state.bytesPerSecond > 0
         ? `${formatUpdateBytes(state.bytesPerSecond)}/s`
         : '';
+  // Temps restant estimé à partir du débit lissé publié par le natif.
+  const remaining = Math.max(0, state.total - state.transferred);
+  const etaSeconds =
+    state.status === 'downloading' && state.bytesPerSecond > 0 && state.total > 0 && remaining > 0
+      ? Math.max(1, Math.round(remaining / state.bytesPerSecond))
+      : null;
+  const eta = etaSeconds === null
+    ? ''
+    : etaSeconds >= 60
+      ? ` · reste ${Math.floor(etaSeconds / 60)} min ${etaSeconds % 60} s`
+      : ` · reste ${etaSeconds} s`;
   // Tant que le serveur n'a pas annoncé de taille, la barre est animée : un
   // « 0 % » figé donnerait l'impression que le téléchargement est bloqué.
   const indeterminate =
@@ -270,9 +379,14 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       aria-label="Mise à jour de GlobalShare"
     >
       <div className="gs-update-head">
-        <span className="gs-update-icon" aria-hidden="true"><UpdateIcon /></span>
+        <span className="gs-update-icon" aria-hidden="true"><StatusIcon status={state.status} /></span>
         <div className="gs-update-text">
-          <strong className="gs-update-title">{title}</strong>
+          <strong className="gs-update-title">
+            {title}
+            {state.mode === 'web' && (state.status === 'available' || state.status === 'downloading' || state.status === 'downloaded') && (
+              <span className="gs-update-tag">Rapide</span>
+            )}
+          </strong>
           {detail && <span className="gs-update-detail">{detail}</span>}
         </div>
         <button type="button" className="gs-update-close" onClick={close} aria-label="Fermer l'encart de mise à jour">
@@ -301,6 +415,7 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
           {showBar && state.status === 'downloading' && !indeterminate && (
             <span className="gs-update-meta">
               {state.percent}% · {transfer}
+              {eta}
             </span>
           )}
           {buttons.map(({ label, primary, run }) => (

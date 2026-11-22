@@ -131,43 +131,68 @@
   box-shadow: 0 0 0 2px var(--gs-bg);
 }
 
+/* Encart : carte vitrée, pictogramme coloré par état, progression épurée. */
 .gs-update {
   margin: 10px var(--gs-gutter) 0;
-  padding: 12px;
+  padding: 14px;
   border-radius: var(--gs-radius-sm);
   border: 1px solid rgba(167, 139, 250, 0.32);
-  background: linear-gradient(135deg, rgba(167, 139, 250, 0.11), rgba(34, 211, 238, 0.06));
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.12), rgba(34, 211, 238, 0.05));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
   animation: gs-toast-in 0.24s ease-out;
 }
 
-.gs-update--error {
+.gs-update--available {
+  border-color: rgba(167, 139, 250, 0.42);
+}
+
+.gs-update--error,
+.gs-update--unsupported {
   border-color: rgba(251, 113, 133, 0.45);
   background: rgba(251, 113, 133, 0.09);
 }
 
 .gs-update--downloading,
 .gs-update--installing {
-  border-color: rgba(34, 211, 238, 0.32);
+  border-color: rgba(34, 211, 238, 0.34);
+}
+
+.gs-update--downloaded,
+.gs-update--up-to-date {
+  border-color: rgba(52, 211, 153, 0.34);
 }
 
 .gs-update-head {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 11px;
 }
 
 .gs-update-icon {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 11px;
   background: rgba(167, 139, 250, 0.15);
   color: var(--gs-accent);
 }
 
-.gs-update--error .gs-update-icon {
+.gs-update--downloading .gs-update-icon,
+.gs-update--installing .gs-update-icon {
+  color: var(--gs-accent-2);
+  background: rgba(34, 211, 238, 0.13);
+}
+
+.gs-update--downloaded .gs-update-icon,
+.gs-update--up-to-date .gs-update-icon {
+  color: var(--gs-success);
+  background: rgba(52, 211, 153, 0.13);
+}
+
+.gs-update--error .gs-update-icon,
+.gs-update--unsupported .gs-update-icon {
   color: var(--gs-danger);
   background: rgba(251, 113, 133, 0.16);
 }
@@ -181,29 +206,47 @@
 }
 
 .gs-update-title {
-  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
+/* Pastille « Rapide » : bundle web (~1 Mo), pour valoriser un téléchargement court. */
+.gs-update-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--gs-accent-2);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .gs-update-detail {
-  font-size: 0.74rem;
-  line-height: 1.4;
+  font-size: 0.75rem;
+  line-height: 1.45;
   color: var(--gs-dim);
   overflow-wrap: anywhere;
 }
 
 .gs-update-close {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border: 0;
   border-radius: 9px;
   background: transparent;
   color: var(--gs-dim);
-  font-size: 1.2rem;
+  font-size: 1.25rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -214,10 +257,11 @@
 }
 
 .gs-update-bar {
-  height: 6px;
-  margin-top: 11px;
+  position: relative;
+  height: 7px;
+  margin-top: 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
 
@@ -225,6 +269,7 @@
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--gs-accent), var(--gs-accent-2));
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.45);
   transition: width 0.25s ease;
 }
 
@@ -244,7 +289,11 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
+}
+
+.gs-update-actions .gs-btn--sm {
+  min-height: 40px;
 }
 
 .gs-update-meta {
@@ -252,6 +301,52 @@
   font-size: 0.72rem;
   color: var(--gs-dim);
   font-variant-numeric: tabular-nums;
+}
+
+/* --- Badge de version (écran d'accueil) ----------------------------------- */
+.gs-welcome-footer {
+  margin-top: auto;
+  padding-top: 6px;
+  display: flex;
+  justify-content: center;
+}
+
+.gs-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 14px 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--gs-border);
+  background: var(--gs-surface);
+  color: var(--gs-dim);
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gs-version:hover {
+  color: var(--gs-text);
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.gs-version-icon {
+  opacity: 0.75;
+}
+
+.gs-version-tag {
+  font-variant-numeric: tabular-nums;
+}
+
+.gs-update-dot--inline {
+  position: static;
+  box-shadow: none;
+  width: 7px;
+  height: 7px;
 }
 
 @media (prefers-reduced-motion: reduce) {

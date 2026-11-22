@@ -35,7 +35,7 @@ import {
   mobileStopTransfer,
   mobileUpdateTransfer,
 } from '../lib/mobile-bridge';
-import { UpdateBanner, UpdateTrigger } from './UpdateManager';
+import { UpdateBanner, UpdateTrigger, VersionBadge } from './UpdateManager';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -1303,6 +1303,9 @@ export default function GlobalShare() {
             <li>2. Appareils reliés</li>
             <li>3. Envoi direct</li>
           </ul>
+          <footer className="gs-welcome-footer">
+            <VersionBadge onOpen={() => setUpdateOpen(true)} />
+          </footer>
         </main>
       </div>
     );
