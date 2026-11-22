@@ -55,6 +55,9 @@ export interface TransferState {
    * d'octets il possède et on n'émet rien avant sa réponse.
    */
   awaitingResync: boolean;
+  /** Dernière réconciliation envoyée au pair (anti-tempête), côté réception. */
+  lastResyncAt?: number;
+  lastResyncBytes?: number;
 }
 
 export interface TransferInitPayload {
@@ -476,7 +479,19 @@ export class TransferManager {
   }): void {
     const known = this.transfers.get(payload.transferId);
     if (known) {
-      if (known.direction === 'receive') known.targetId = payload.initiator;
+      if (known.direction === 'receive') {
+        known.targetId = payload.initiator;
+        // Tant que rien n'est reçu, le bloc annoncé est la référence ; s'il
+        // diffère (expéditeur mis à jour, blocs plus gros), s'y aligner plutôt
+        // que de compter avec une taille quand même fausse.
+        if (
+          known.buffer.size === 0 &&
+          typeof payload.chunkSize === 'number' &&
+          payload.chunkSize > 0
+        ) {
+          known.chunkSize = payload.chunkSize;
+        }
+      }
       // L'expéditeur reprend : le transfert redevient actif côté réception.
       if (known.status === 'interrupted') this._resume(known);
       else this.onUpdate(known);
@@ -526,6 +541,11 @@ export class TransferManager {
       this.onStatus(t);
     }
     const bytes = new Uint8Array(payload.chunk);
+    // Le premier bloc reçu fait foi sur la taille réelle : certains anciens
+    // clients (APK 1.0.17) annoncent le chunkSize de transfer-init mais envoient
+    // en réseau local des blocs jusqu'à 4× plus gros. Sans cet alignement, le
+    // comptage du destinataire est faux et le transfert ne se termine jamais.
+    if (t.buffer.size === 0 && bytes.byteLength > 0) t.chunkSize = bytes.byteLength;
     t.buffer.set(payload.seq, bytes);
     // Conservé tout de suite : un onglet tué par le système doit pouvoir
     // reprendre exactement là où il s'est arrêté.
@@ -567,7 +587,21 @@ export class TransferManager {
     // L'expéditeur réémet l'EOF tant qu'il n'a pas d'ACK : n'acquitter qu'une
     // fois tout arrivé, et ne reconstruire le fichier qu'une seule fois.
     // C'est ce qui lançait plusieurs téléchargements du même fichier.
-    if (!this._isComplete(t)) return;
+    if (!this._isComplete(t)) {
+      // Répondre où reprendre : sinon l'expéditeur réémet l'EOF en boucle sans
+      // jamais connaître notre état (lui à 100 %, nous figés à 25 %).
+      const have = this._prefixBytes(t);
+      if (t.lastResyncBytes !== have || Date.now() - (t.lastResyncAt ?? 0) > 5000) {
+        t.lastResyncAt = Date.now();
+        t.lastResyncBytes = have;
+        this._emit('transfer-resync', {
+          transferId: t.id,
+          target: t.targetId,
+          haveBytes: have,
+        });
+      }
+      return;
+    }
     this._sendEofAck(t);
     void this._finishReceive(t);
   }
@@ -864,8 +898,16 @@ export class TransferManager {
   }
 
   private _updateReceiverProgress(t: TransferState): void {
-    const totalChunks = Math.ceil(t.file.size / t.chunkSize) || 1;
-    t.progress = Math.min(100, Math.round((t.buffer.size / totalChunks) * 100));
+    // La progression est comptée en octets réellement stockés (somme des blocs
+    // uniques), jamais en nombre de chunks : des clients anciens (APK 1.0.17)
+    // annoncent le chunkSize de transfer-init mais envoient des blocs plus
+    // grands en réseau local, ce qui figeait la barre (ex. 25 %) pendant que
+    // l'expéditeur, lui, affichait 100 %.
+    let bytes = 0;
+    for (const chunk of t.buffer.values()) bytes += chunk.byteLength;
+    t.confirmed = Math.min(bytes, t.file.size);
+    t.progress =
+      t.file.size > 0 ? Math.min(100, Math.round((t.confirmed / t.file.size) * 100)) : 100;
     this.onStatus(t);
     this.onUpdate(t);
   }
@@ -886,8 +928,9 @@ export class TransferManager {
 
   private _isComplete(t: TransferState): boolean {
     if (t.file.size === 0) return true;
-    const totalChunks = Math.ceil(t.file.size / t.chunkSize);
-    return t.buffer.size >= totalChunks;
+    // Complétude en octets : le préfixe contigu reçu doit couvrir tout le
+    // fichier, quel que soit le nombre de blocs (tailles hétéroclites en reprise).
+    return this._prefixBytes(t) >= t.file.size;
   }
 
   private async _finishReceive(t: TransferState): Promise<void> {
@@ -896,12 +939,16 @@ export class TransferManager {
     if (t.status === 'completed' || this.finishing.has(t.id)) return;
     this.finishing.add(t.id);
     try {
-      const totalChunks = Math.ceil(t.file.size / t.chunkSize);
+      // Assembler par séquences contiguës de 0, en sommant les longueurs réelles
+      // des blocs : robuste même si la taille des blocs a changé en cours de
+      // route (bascule LAN chez certains clients anciens, reprises multiples).
       const chunks: Uint8Array[] = [];
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = t.buffer.get(i);
+      let offset = 0;
+      while (offset < t.file.size) {
+        const chunk = t.buffer.get(chunks.length);
         if (!chunk) {
-          this._setStatus(t, 'failed', 'Fichier incomplet (séquence ' + i + ' manquante)');
+          if (chunks.length === 0) return; // EOF prématuré : rien d'assemblable
+          this._setStatus(t, 'failed', 'Fichier incomplet (séquence ' + chunks.length + ' manquante)');
           this._emit('transfer-end', {
             transferId: t.id,
             status: 'failed',
@@ -911,9 +958,10 @@ export class TransferManager {
           return;
         }
         chunks.push(chunk);
+        offset += chunk.byteLength;
       }
       const merged = new Uint8Array(t.file.size);
-      let offset = 0;
+      offset = 0;
       for (const c of chunks) {
         merged.set(c, offset);
         offset += c.byteLength;

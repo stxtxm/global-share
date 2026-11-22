@@ -52,11 +52,11 @@ import {
 import { loadSettings as loadAppSettings, saveSettings, type AppSettings, DEFAULT_SETTINGS } from '../lib/settings';
 import Settings from './Settings';
 
-const MAX_IN_FLIGHT_CHUNKS = 16;
+const MAX_IN_FLIGHT_CHUNKS = 24;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
 // perte — on peut démultiplier la taille des blocs et la profondeur du pipeline
 // sans risque, pour un débit proche de celui du Wi-Fi lui-même.
-const MAX_IN_FLIGHT_CHUNKS_LAN = 16;
+const MAX_IN_FLIGHT_CHUNKS_LAN = 32;
 const CHUNK_SIZE_LAN = 256 * 1024;
 // Garde-fou : au-delà, le tampon SCTP du canal_data sature (le navigateur
 // peut clore le canal). On ralentit plutôt la boucle d'émission.
@@ -687,9 +687,17 @@ export default function GlobalShare() {
         if (!manager) return;
         const transfers = manager.getAll();
         const sendT = transfers.find(t => t.direction === 'send' && t.status === 'transferring');
-        if (!sendT) return;
+        if (!sendT) {
+          // Rien à envoyer : la boucle reste autonome et repoll, elle ne dépend
+          // plus des re-renders React (qui tuaient le timer programmé).
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 250);
+          return;
+        }
         const file = fileRefs.current.get(sendT.id);
-        if (!file) return;
+        if (!file) {
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 250);
+          return;
+        }
         if (sendT.offset >= file.size) {
           // N'annonce la fin qu'une fois tous les chunks acquittés.
           if (sendT.pending.size === 0) manager.sendEof(sendT.id);
@@ -712,16 +720,24 @@ export default function GlobalShare() {
         // Le bloc annoncé par transfer-init reste la référence du destinataire :
         // la taille ne peut pas changer en cours de transfert (alignement de
         // reprise, comptage des chunks). Elle est donc choisie ici.
-        const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
-        const arrayBuffer = await blob.arrayBuffer();
-        const chunk = new Uint8Array(arrayBuffer);
-        // Le transport (canal direct ou relais) est choisi par le
-        // TransferManager : sendChunk avance l'offset, arme le suivi des ACK et
-        // réémet en cas de perte, quel que soit le chemin emprunté.
-        // La séquence n'est consommée que si le chunk est réellement accepté :
-        // sinon une pause ou une coupure laissait un trou définitif dans le
-        // fichier, et la reprise ne pouvait plus aboutir.
-        if (manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) sendT.nextSeq++;
+        // Lecture en rafale : au lieu d'un chunk par itération (coût
+        // d'ordonnancement dominant, ~1 ms par bloc), on enfile plusieurs
+        // lectures + émissions par aller-retour. C'est ce qui fait la plus
+        // grande part du gain de débit, relais comme chemin direct.
+        const burst = lan ? 8 : 3;
+        for (let i = 0; i < burst; i++) {
+          if (sendT.offset >= file.size) break;
+          if (sendT.pending.size >= maxInFlight) break;
+          // Tampon SCTP : attendre qu'il se vide plutôt que le saturer.
+          if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT)
+            break;
+          const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
+          const chunk = new Uint8Array(await blob.arrayBuffer());
+          // sendChunk avance l'offset et arme le suivi des ACK ; la séquence
+          // n'est consommée que si le chunk est réellement accepté.
+          if (!manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) break;
+          sendT.nextSeq++;
+        }
         // Le flow control, c'est la fenêtre de chunks en vol (et le plafond de
         // tampon SCTP en direct) : plus de délai artificiel par chunk, qui
         // plafonnait le débit à ~40 blocs/s en relais comme en direct. Une
@@ -735,7 +751,10 @@ export default function GlobalShare() {
     return () => {
       if (transferTimeoutRef.current) clearTimeout(transferTimeoutRef.current);
     };
-  }, [transfers]);
+    // Ne dépend volontairement plus de `transfers` : chaque tick de progression
+    // déclenchait une re-création d'effet dont le cleanup annulait le timer
+    // programmé (la boucle repartait alors plus lentement, par à-coups).
+  }, [socketEpoch]);
 
   // Identifiants TURN éphémères servis par le Worker : le navigateur n'embarque
   // donc aucun mot de passe durable. Renouvelés à mi-vie pour qu'une
