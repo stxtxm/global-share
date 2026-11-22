@@ -99,3 +99,15 @@ test('la suppression retire aussi le fichier du stockage partagé', async () => 
   assert.deepEqual(result, { deleted: true });
   assert.equal(calls[0].name, 'deleteDownload');
 });
+
+test('une coquille native plus ancienne renvoie un message au lieu d un TypeError', async () => {
+  const original = plugin.revealDownload;
+  // @ts-expect-error simulation d'un APK dont le plugin n'a pas la méthode
+  delete plugin.revealDownload;
+  try {
+    const message = await bridge.mobileRevealDownload();
+    assert.match(message, /mettez l'APK à jour/i);
+  } finally {
+    plugin.revealDownload = original;
+  }
+});

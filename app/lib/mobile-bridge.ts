@@ -98,6 +98,16 @@ function subscribe(event: string, listener: (value: unknown) => void): () => voi
   };
 }
 
+/**
+ * Le bundle web peut être plus récent que la coquille native (mise à jour delta
+ * `nativeVersion` identique). Dans ce cas une méthode du plugin n'existe pas et
+ * l'appel direct lève un TypeError. On renvoie un message actionnable à la
+ * place, et la release suivante incrémente nativeVersion pour forcer l'APK.
+ */
+function missingNative(feature: string): string {
+  return `Fonction « ${feature} » indisponible : mettez l'APK à jour depuis les Réglages.`;
+}
+
 /** Un appel natif rejeté (service interdit en arrière-plan, permission refusée)
  *  ne doit jamais devenir une rejection non gérée : le silence rendait le
  *  blocage impossible à diagnostiquer. */
@@ -219,8 +229,12 @@ export function mobileRequestBatteryExemption(): void {
 export async function mobileSaveDownload(options: {
   name: string; mime: string; bytes: string; uri?: string; append?: boolean;
 }): Promise<{ uri?: string; path?: string; error?: string }> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.saveDownload !== 'function') {
+    return { error: missingNative('Enregistrement des fichiers') };
+  }
   try {
-    return (await nativePlugin()?.saveDownload(options)) ?? { error: 'Pont Android indisponible.' };
+    return (await plugin.saveDownload(options)) ?? { error: 'Pont Android indisponible.' };
   } catch (error) {
     return { error: String(error) };
   }
@@ -229,8 +243,10 @@ export async function mobileSaveDownload(options: {
 export async function mobileFinishDownload(options: {
   uri?: string; mime?: string;
 }): Promise<{ error?: string }> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.finishDownload !== 'function') return {};
   try {
-    return (await nativePlugin()?.finishDownload(options)) ?? {};
+    return (await plugin.finishDownload(options)) ?? {};
   } catch (error) {
     return { error: String(error) };
   }
@@ -240,8 +256,12 @@ export async function mobileFinishDownload(options: {
 export async function mobileDeleteDownload(options: {
   uri?: string; name: string;
 }): Promise<{ deleted?: boolean; error?: string }> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.deleteDownload !== 'function') {
+    return { error: missingNative('Suppression des fichiers') };
+  }
   try {
-    return (await nativePlugin()?.deleteDownload(options)) ?? { error: 'Pont Android indisponible.' };
+    return (await plugin.deleteDownload(options)) ?? { error: 'Pont Android indisponible.' };
   } catch (error) {
     return { error: String(error) };
   }
@@ -249,8 +269,10 @@ export async function mobileDeleteDownload(options: {
 
 /** Ouvre l'application Fichiers sur Téléchargements/GlobalShare. */
 export async function mobileRevealDownload(): Promise<string> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.revealDownload !== 'function') return missingNative('Fichiers');
   try {
-    const result = await nativePlugin()?.revealDownload();
+    const result = await plugin.revealDownload();
     return result?.error ?? (result ? '' : "Application Fichiers indisponible.");
   } catch (error) {
     return String(error);
@@ -261,8 +283,10 @@ export async function mobileRevealDownload(): Promise<string> {
 export async function mobileOpenDownload(options: {
   uri: string; mime?: string; name?: string;
 }): Promise<string> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.openDownload !== 'function') return missingNative('Ouvrir avec');
   try {
-    const result = await nativePlugin()?.openDownload(options);
+    const result = await plugin.openDownload(options);
     return result?.error ?? (result ? '' : "Aucune application d'ouverture disponible.");
   } catch (error) {
     return String(error);

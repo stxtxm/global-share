@@ -185,6 +185,27 @@ Depuis la v1.0.32 :
 - `finishDownload()` vérifie le retour de `MediaStore.update()` : si l'entrée a
   disparu, une erreur est remontée au lieu d'enregistrer une URI invalide.
 
+## Décalage bundle web / coquille native
+
+Les versions 1.0.32 à 1.0.35 ont ajouté des **méthodes natives** (`saveDownload`,
+`finishDownload`, `openDownload`, `revealDownload`, `deleteDownload`) sans changer
+`nativeVersion` (resté à 2). Une APK installée avec une version antérieure
+pouvait donc récupérer le nouveau bundle web (~1,4 Mo) par mise à jour delta :
+l'interface affichait les boutons, mais l'appel à la méthode native absente levait
+un `TypeError` — « Fichiers » ne s'ouvrait pas et les fichiers n'étaient pas
+enregistrés sur le disque.
+
+Depuis la **v1.0.36**, `nativeVersion` passe à **3** : le vérificateur de mise à
+jour (`UpdateManager.java`, `desktop/web-updates.js`) refuse le bundle web quand
+le compteur diffère et propose le **paquet complet**. Le pont JS vérifie aussi
+l'existence de chaque méthode et affiche « mettez l'APK à jour » au lieu d'un
+TypeError si une coquille obsolète est détectée.
+
+**Important pour tester** : installez l'**APK complet v1.0.36** (pas seulement la
+mise à jour web) depuis la release GitHub. Les fichiers déjà reçus avec une
+ancienne coquille n'existent que dans IndexedDB : recevez-les à nouveau après la
+mise à jour pour qu'ils soient écrits dans `Téléchargements/GlobalShare`.
+
 ## Limites
 
 - Distribution directe / F-Droid : le Play Store interdit le self-update par
