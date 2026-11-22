@@ -24,6 +24,24 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.15] — 2026-11-22
+
+### Ajouté
+
+- **Version visible sur l'accueil** : un badge `v1.0.15` sous l'écran d'accueil
+  (application de bureau et APK ; masqué sur le site web) affiche la version
+  courante et lance une recherche manuelle des mises à jour au clic — un point
+  vert signale une version disponible. Ce badge affiche la version du bundle
+  web appliqué, pas seulement celle du paquet installé.
+
+### Modifié
+
+- **Encart de mise à jour repensé** (mobile avant tout) : pictogramme et
+  couleurs distincts par état (disponible, téléchargement, prête, à jour,
+  erreur), pastille « Rapide » quand la mise à jour ne télécharge que le bundle
+  web (~1 Mo), temps restant estimé et taille transférée affichés pendant le
+  téléchargement, cibles tactiles plus grandes.
+
 ## [1.0.14] — 2026-11-22
 
 ### Corrigé
@@ -216,6 +234,7 @@ signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
 [Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.14...HEAD
+[1.0.15]: https://github.com/stxtxm/global-share/compare/v1.0.14...v1.0.15
 [1.0.14]: https://github.com/stxtxm/global-share/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/stxtxm/global-share/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/stxtxm/global-share/compare/v1.0.11...v1.0.12
