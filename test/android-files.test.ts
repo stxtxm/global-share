@@ -13,11 +13,11 @@ const plugin = readFileSync(
 const manifest = readFileSync(`${root}android/app/src/main/AndroidManifest.xml`, 'utf8');
 const pkg = JSON.parse(readFileSync(`${root}package.json`, 'utf8')) as { nativeVersion: number };
 
-test('revealDownload essaie DocumentsUI puis Google Files puis le sélecteur', () => {
+test('revealDownload utilise le même choisir que Écouter (évite l UID error)', () => {
   assert.match(plugin, /DocumentsContract\.buildDocumentUri/);
-  assert.match(plugin, /com\.google\.android\.apps\.nbu\.files/);
-  assert.match(plugin, /Intent\.ACTION_OPEN_DOCUMENT/);
-  assert.match(plugin, /getLaunchIntentForPackage/);
+  assert.match(plugin, /Intent\.createChooser\(view, "Ouvrir le dossier avec"\)/);
+  assert.match(plugin, /DocumentsContract\.EXTRA_INITIAL_URI/);
+  assert.ok(!plugin.includes('getLaunchIntentForPackage'), 'lancement direct supprimé (uid 10415)');
 });
 
 test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
@@ -27,7 +27,7 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  assert.equal(pkg.nativeVersion, 4);
+  assert.equal(pkg.nativeVersion, 5);
 });
 
 test('listDownloads lit MediaStore et le dossier legacy', () => {

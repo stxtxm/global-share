@@ -170,6 +170,33 @@ des valeurs de production surchargeables :
 | `NEXT_PUBLIC_SHARE_BASE` | `https://stxtxm.github.io/global-share` | base des liens de salon partagés (sinon `127.0.0.1`) |
 | `NEXT_PUBLIC_TURN_*` | vides | relais TURN statique (voir [DEPLOYMENT.md](./DEPLOYMENT.md)) |
 
+## Retrouver la fenêtre (GNOME, KDE, XFCE…)
+
+Sur GNOME, l'icône tray (StatusNotifierItem) est souvent masquée par le shell :
+une fenêtre masquée ou minimisée pouvait devenir impossible à récupérer pendant
+un transfert. Depuis la v1.0.38 :
+
+- le raccourci global **Ctrl+Alt+G** (**Alt+Cmd+G** sur macOS) rouvre,
+  restaure et focus la fenêtre depuis n'importe quel environnement ;
+- `showMainWindow()` restaure aussi une fenêtre minimisée et la remet au premier
+  plan ;
+- `skipTaskbar: false` garantit que la fenêtre reste dans la barre des tâches ;
+- le menu contextuel du tray affiche le raccourci, et un clic sur l'icône du
+  Dock / activateur du gestionnaire de fenêtres rouvre une fenêtre masquée.
+
+Le raccourci est enregistré au démarrage et libéré à la fermeture. Sur Wayland,
+le portail `GlobalShortcuts` peut afficher un dialogue de consentement au
+premier lancement ; l'identité `desktopName` est reverse-DNS
+(`io.github.stxtxm.globalshare.desktop`) pour qu'il soit accepté. Si un autre
+logiciel utilise le raccourci, Electron journalise un avertissement et le tray
+reste disponible.
+
+Pendant un transfert, la croix ne quitte plus l'application : elle masque la
+fenêtre et affiche une notification cliquable qui rouvre l'app. Le compteur de
+transferts est aussi affiché dans le tooltip du tray. Sur KDE et XFCE, le tray
+SNI natif fonctionne ; sur GNOME nu (sans extension AppIndicator), utilisez le
+dock ou le raccourci.
+
 ## Limites connues
 
 - Seules les architectures x64 (Linux et Windows) sont produites ; ajouter

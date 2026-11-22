@@ -1,8 +1,8 @@
 {
   "name": "globalshare",
   "productName": "GlobalShare",
-  "version": "1.0.37",
-  "nativeVersion": 4,
+  "version": "1.0.38",
+  "nativeVersion": 5,
   "private": true,
   "description": "Partage de fichiers P2P entre appareils",
   "author": {
@@ -11,7 +11,7 @@
   },
   "license": "UNLICENSED",
   "main": "main.js",
-  "desktopName": "globalshare.desktop",
+  "desktopName": "io.github.stxtxm.globalshare.desktop",
   "dependencies": {
     "electron-updater": "^6.6.2"
   }

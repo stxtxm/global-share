@@ -2,7 +2,7 @@
 
 const {
   app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell,
-  Notification, powerSaveBlocker,
+  Notification, powerSaveBlocker, globalShortcut,
 } = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -34,6 +34,10 @@ let WEB_ROOT = PACKAGED_WEB_ROOT;
 // permission Android, tenant à la convention des apps de bureau.
 let tray = null;
 let quitRequested = false;
+// Compteur de transferts actifs, mis à jour par la page via le pont IPC.
+// Sert à empêcher une vraie fermeture pendant un transfert et à proposer une
+// notification cliquable comme voie de secours sur GNOME (tray souvent masqué).
+let activeTransfers = 0;
 
 const PREFS_FILE = () => path.join(app.getPath('userData'), 'prefs.json');
 
@@ -55,21 +59,34 @@ function savePrefs(prefs) {
 
 function showMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
+    if (mainWindow.moveTop) mainWindow.moveTop();
   } else if (staticServer) {
     mainWindow = createWindow(staticServer.address().port);
   }
 }
 
+// Raccourci global : sur GNOME, l'icône tray (StatusNotifierItem) est souvent
+// masquée et la fenêtre peut disparaître de la barre des tâches. Ce raccourci
+// fonctionne sur tous les environnements, même quand l'app est masquée.
+const RESTORE_SHORTCUT = 'CommandOrControl+Alt+G';
+
 function createTray() {
   if (tray) return;
   try {
-    const image = nativeImage.createFromPath(ICON_FILE);
-    tray = new Tray(image.isEmpty() ? image : image.resize({ width: 24, height: 24 }));
+    const image = nativeImage.createFromPath(TRAY_ICON_FILE);
+    // Ne jamais construire un Tray avec une image vide : certains hôtes SNI
+    // plantent ou créent une entrée invisible (GNOME, XFCE).
+    if (image.isEmpty()) {
+      console.warn('[GlobalShare] icône tray introuvable :', TRAY_ICON_FILE);
+      return;
+    }
+    tray = new Tray(image);
     tray.setToolTip('GlobalShare tourne en arrière-plan');
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Ouvrir GlobalShare', click: showMainWindow },
+      { label: `Ouvrir GlobalShare (${RESTORE_SHORTCUT})`, click: showMainWindow },
       { type: 'separator' },
       {
         label: 'Quitter',
@@ -80,8 +97,13 @@ function createTray() {
       },
     ]));
     tray.on('click', showMainWindow);
-  } catch {
-    // Environnement sans zone de notification : l'app fonctionne pareil.
+    // La spec SNI ne définit pas si le simple ou double clic déclenche
+    // « click » : on couvre les deux.
+    tray.on('double-click', showMainWindow);
+  } catch (error) {
+    // GNOME nu n'a pas d'hôte SNI : le raccourci global et le dock prennent
+    // le relais. On log tout de même pour le diagnostic.
+    console.warn('[GlobalShare] tray indisponible :', String(error));
   }
 }
 
@@ -110,6 +132,10 @@ if (app.isPackaged) {
 const ICON_FILE = app.isPackaged
   ? path.join(process.resourcesPath, 'icon.png')
   : path.join(__dirname, 'resources', 'icon.png');
+// Icône 24x24 dédiée au tray (livrée hors asar, voir electron-builder.yml).
+const TRAY_ICON_FILE = app.isPackaged
+  ? path.join(process.resourcesPath, 'tray.png')
+  : path.join(__dirname, 'resources', 'icons', '24x24.png');
 
 // L'image est décodée ici : un chemin passé tel quel à BrowserWindow n'est pas
 // toujours appliqué comme icône de fenêtre sous Linux.
@@ -207,6 +233,12 @@ function registerDownloadHandlers() {
   // du wake lock Android) tant qu'un fichier circule.
   let powerBlockerId = null;
   ipcMain.handle('globalshare:set-transfers-active', (_event, count) => {
+    activeTransfers = Math.max(0, Number(count) || 0);
+    if (tray && !tray.isDestroyed()) {
+      tray.setToolTip(activeTransfers > 0
+        ? `GlobalShare · ${activeTransfers} transfert(s) en cours`
+        : 'GlobalShare tourne en arrière-plan');
+    }
     const active = Number(count) > 0;
     if (active && powerBlockerId === null) {
       powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
@@ -325,6 +357,9 @@ function createWindow(port) {
     minWidth: 360,
     minHeight: 540,
     show: false,
+    // Jamais exclue de la barre des tâches : même masquée dans le tray,
+    // l'utilisateur doit pouvoir retrouver la fenêtre (GNOME, KDE, XFCE…).
+    skipTaskbar: false,
     title: 'GlobalShare',
     backgroundColor: '#0a0b10',
     icon: WINDOW_ICON,
@@ -351,6 +386,23 @@ function createWindow(port) {
   // quittent toujours réellement.
   window.on('close', (event) => {
     if (quitRequested) return;
+    // Un transfert en cours ne doit jamais être tué par un clic malencontreux
+    // sur la croix : on masque la fenêtre et on affiche une notification
+    // cliquable, même si le tray est invisible (GNOME sans AppIndicator).
+    if (activeTransfers > 0) {
+      event.preventDefault();
+      window.hide();
+      try {
+        const notification = new Notification({
+          title: 'GlobalShare',
+          body: 'Transfert en cours — cliquez pour rouvrir la fenêtre',
+          icon: ICON_FILE,
+        });
+        notification.on('click', showMainWindow);
+        notification.show();
+      } catch { /* notifications indisponibles : raccourci toujours là */ }
+      return;
+    }
     const prefs = loadPrefs();
     if (prefs.closeAction === 'background') {
       event.preventDefault();
@@ -473,6 +525,12 @@ async function start() {
   app.setAppUserModelId(APP_ID);
   registerDownloadHandlers();
   createTray();
+  const registered = globalShortcut.register(RESTORE_SHORTCUT, showMainWindow);
+  if (!registered) {
+    // Wayland : le portail GlobalShortcuts exige un desktopName reverse-DNS
+    // et un consentement utilisateur au premier lancement.
+    console.warn(`[GlobalShare] raccourci ${RESTORE_SHORTCUT} refusé (conflit ou portail Wayland)`);
+  }
 
   // Menu « Fichier → Quitter », raccourcis clavier : quitter pour de vrai,
   // sans passer par la demande de la croix.
@@ -498,6 +556,7 @@ async function start() {
   }
 
   app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
     if (staticServer) staticServer.close();
   });
 
@@ -519,18 +578,18 @@ async function start() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  });
+  app.on('second-instance', showMainWindow);
 
   app.whenReady().then(start);
 
   app.on('activate', () => {
-    // macOS : cliquer sur l'icône du Dock rouvre la fenêtre.
-    if (mainWindow || !staticServer) return;
-    mainWindow = createWindow(staticServer.address().port);
+    // Dock (macOS) et gestionnaires de fenêtres : rouvrir une fenêtre masquée.
+    if (!staticServer) return;
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      mainWindow = createWindow(staticServer.address().port);
+    } else {
+      showMainWindow();
+    }
   });
 
   app.on('window-all-closed', () => {

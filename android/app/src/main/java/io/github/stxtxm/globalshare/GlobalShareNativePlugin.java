@@ -321,64 +321,27 @@ public class GlobalShareNativePlugin extends Plugin {
 
     /**
      * Ouvre le gestionnaire de fichiers dans Téléchargements/GlobalShare.
-     * Sur Pixel 9a, Google Files est le gestionnaire par défaut et ne répond
-     * pas toujours à un ACTION_VIEW sur l'URI DocumentsUI. On essaie donc dans
-     * l'ordre : DocumentsUI avec EXTRA_INITIAL_URI, puis l'application Google
-     * Files / DocumentsUI par son nom de paquet, puis le sélecteur système
-     * ouvert directement dans le dossier.
+     * Sur Pixel 9a, un lancement direct par nom de paquet échoue avec une
+     * SecurityException liée à l'UID (10415). Le chemin qui fonctionne est le
+     * même que « Écouter » : ACTION_VIEW + createChooser depuis le contexte
+     * applicatif. Le choisir affiche notamment Google Files, qui ouvre le
+     * dossier grâce à EXTRA_INITIAL_URI.
      */
     @PluginMethod
     public void revealDownload(PluginCall call) {
         JSObject result = new JSObject();
-        android.content.Context context = getContext();
         try {
             Uri folder = DocumentsContract.buildDocumentUri(
                     "com.android.externalstorage.documents", "primary:Download/GlobalShare");
-
             Intent view = new Intent(Intent.ACTION_VIEW);
             view.setData(folder);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 view.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
             }
-            view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            if (view.resolveActivity(context.getPackageManager()) != null) {
-                context.startActivity(view);
-                call.resolve(result);
-                return;
-            }
-
-            // Google Files (Pixel) et les gestionnaires AOSP : lancement direct.
-            String[] managers = {
-                    "com.google.android.apps.nbu.files",
-                    "com.google.android.documentsui",
-                    "com.android.documentsui"
-            };
-            for (String pkg : managers) {
-                Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
-                if (launch == null) continue;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    launch.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
-                }
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                context.startActivity(launch);
-                call.resolve(result);
-                return;
-            }
-
-            // Dernier recours : le sélecteur de documents ouvert sur le dossier.
-            Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-            picker.addCategory(Intent.CATEGORY_OPENABLE);
-            picker.setType("*/*");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
-            }
-            picker.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            if (picker.resolveActivity(context.getPackageManager()) != null) {
-                context.startActivity(picker);
-                call.resolve(result);
-                return;
-            }
-            result.put("error", "Aucun gestionnaire de fichiers disponible sur cet appareil.");
+            view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            Intent chooser = Intent.createChooser(view, "Ouvrir le dossier avec");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(chooser);
         } catch (Exception error) {
             result.put("error", "Ouverture du gestionnaire impossible : " + error.getMessage());
         }
@@ -401,8 +364,7 @@ public class GlobalShareNativePlugin extends Plugin {
                 String[] projection = {
                         MediaStore.MediaColumns._ID,
                         MediaStore.MediaColumns.DISPLAY_NAME,
-                        MediaStore.MediaColumns.SIZE,
-                        MediaStore.MediaColumns.DATE_ADDED
+                        MediaStore.MediaColumns.SIZE
                 };
                 String selection = MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
                 String[] args = {"%" + Environment.DIRECTORY_DOWNLOADS + "/GlobalShare%"};
