@@ -24,7 +24,7 @@ interface GlobalShareNativePlugin {
     name: string; mime: string; bytes: string; uri?: string; append?: boolean;
   }): Promise<{ uri?: string; path?: string; error?: string }>;
   finishDownload(options: { uri?: string; mime?: string }): Promise<{ error?: string }>;
-  openDownload(options: { uri: string; mime?: string; name?: string }): Promise<string>;
+  openDownload(options: { uri: string; mime?: string; name?: string }): Promise<{ error?: string }>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -239,7 +239,8 @@ export async function mobileOpenDownload(options: {
   uri: string; mime?: string; name?: string;
 }): Promise<string> {
   try {
-    return (await nativePlugin()?.openDownload(options)) ?? "Aucune application d'ouverture disponible.";
+    const result = await nativePlugin()?.openDownload(options);
+    return result?.error ?? (result ? '' : "Aucune application d'ouverture disponible.");
   } catch (error) {
     return String(error);
   }

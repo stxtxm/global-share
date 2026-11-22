@@ -287,10 +287,14 @@ public class GlobalShareNativePlugin extends Plugin {
     /** Ouvre le fichier avec le lecteur système (FLAC, audio, image, PDF…). */
     @PluginMethod
     public void openDownload(PluginCall call) {
+        // Capacitor 8 n'accepte que resolve(JSObject) : l'erreur est renvoyée
+        // dans un champ, pas comme chaîne (le builder Java rejette String).
+        JSObject result = new JSObject();
         String uriText = call.getString("uri");
         String mime = call.getString("mime");
         if (uriText == null) {
-            call.resolve("Aucun fichier à ouvrir.");
+            result.put("error", "Aucun fichier à ouvrir.");
+            call.resolve(result);
             return;
         }
         try {
@@ -300,14 +304,15 @@ public class GlobalShareNativePlugin extends Plugin {
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_ACTIVITY_NEW_TASK);
             if (intent.resolveActivity(getContext().getPackageManager()) == null) {
-                call.resolve("Aucune application installée pour ouvrir ce fichier.");
+                result.put("error", "Aucune application installée pour ouvrir ce fichier.");
+                call.resolve(result);
                 return;
             }
             getContext().startActivity(intent);
-            call.resolve("");
         } catch (Exception error) {
-            call.resolve("Ouverture impossible : " + error.getMessage());
+            result.put("error", "Ouverture impossible : " + error.getMessage());
         }
+        call.resolve(result);
     }
 
     /** État du service pour le diagnostic (Notification, réglages). */
