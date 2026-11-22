@@ -40,10 +40,6 @@ next-env.d.ts
 *.swp
 *.swo
 
-# Releases (keep release scripts, ignore builds)
-releases/*/
-!releases/
-
 # Logs
 *.log
 logs/
@@ -52,3 +48,11 @@ logs/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Wrangler state
+.wrangler/
+
+# Ignore release builds but keep release notes
+releases/*/
+!releases/**/*.md
+!releases/**/*.txt
