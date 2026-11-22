@@ -22,6 +22,32 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.21] — 2026-11-22
+
+### Ajouté
+
+- **Accueil en trois vues avec barre de navigation** : une vue « Créer » par
+  défaut (créer le salon libre en un chiffre), une vue « Code » (rejoindre un
+  code partagé, ou générer et rejoindre un code privé), une vue « Salons »
+  (salons ouverts maintenant + historique de l'appareil). La barre, commune à
+  l'APK et à la PWA, est en bas de l'écran sur mobile et en pilule flottante
+  sur écran large.
+- **Transferts beaucoup plus rapides sur un même réseau** : le chemin direct
+  WebRTC détecte automatiquement qu'un pair est sur le même réseau local
+  (candidats « host » des deux côtés) ; les blocs passent à 256 Ko, le
+  pipeline s'élargit et les micro-pauses d'émission disparaissent — le débit
+  s'approche de celui du Wi-Fi. En dehors, réglages conservateurs inchangés.
+  Retransmission bien plus réactive sur le canal direct (ACK attendus 5 s
+  au lieu de 15 s).
+
+### Modifié
+
+- **Aucune page ne défile plus** : l'application tient dans l'écran sur
+  téléphone, tablette et desktop ; seules les listes internes (fichiers,
+  salons, historique) défilent si elles débordent.
+- La section « Vos salons » de l'accueil et son doublon dans le menu
+  disparaissent : la vue « Salons » de la navigation les remplace.
+
 ## [1.0.20] — 2026-11-22
 
 ### Ajouté
@@ -310,7 +336,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.20...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.21...HEAD
+[1.0.21]: https://github.com/stxtxm/global-share/compare/v1.0.20...v1.0.21
 [1.0.20]: https://github.com/stxtxm/global-share/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/stxtxm/global-share/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/stxtxm/global-share/compare/v1.0.17...v1.0.18

@@ -43,10 +43,13 @@
   isolation: isolate;
   width: 100%;
   max-width: 620px;
-  min-height: 100dvh;
+  /* Tout tient dans l'écran : l'app ne défile jamais, seules les listes
+     internes défilent si elles débordent. */
+  height: 100dvh;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   color: var(--gs-text);
   padding-top: env(safe-area-inset-top);
   -webkit-tap-highlight-color: transparent;
@@ -497,10 +500,95 @@
 /* --- Accueil ------------------------------------------------------------- */
 .gs-welcome-main {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 10px var(--gs-gutter) calc(30px + env(safe-area-inset-bottom));
+  padding: 10px var(--gs-gutter) 18px;
+  /* Contenu conçu pour tenir sans défilement ; sécu si clavier ouvert. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Barre de navigation basse de l'accueil (Créer / Code / Salons). */
+.gs-homenav {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--gs-border);
+  background:
+    linear-gradient(to top, rgba(10, 11, 16, 0.97), rgba(10, 11, 16, 0.86));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.gs-homenav-item {
+  flex: 1;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 50px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--gs-dim);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.gs-homenav-item:active {
+  transform: scale(0.95);
+}
+
+.gs-homenav-item.is-active {
+  color: var(--gs-text);
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.22), rgba(34, 211, 238, 0.1));
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.34);
+}
+
+.gs-homenav-item .gs-icon {
+  width: 21px;
+  height: 21px;
+}
+
+/* Page « Salons » de l'accueil : liste qui défile en interne. */
+.gs-rooms-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  align-self: stretch;
+}
+
+.gs-history-list--page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+/* Astuce discrète sous les actions de la vue Code. */
+.gs-hint {
+  margin: 2px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--gs-dim);
+  text-align: center;
+}
+
+.gs-roompill--more {
+  color: var(--gs-accent);
+  border-style: dashed;
+  font-weight: 650;
 }
 
 .gs-hero h1 {
@@ -787,10 +875,15 @@
 /* --- Contenu du salon ---------------------------------------------------- */
 .gs-main {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 6px var(--gs-gutter) calc(132px + env(safe-area-inset-bottom));
+  /* Défilement strictement interne : la page elle-même ne défile jamais,
+     quelle que soit la taille d'écran. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* Réserve la hauteur de la mini-barre de suivi au-dessus de la barre d'action */
@@ -1630,6 +1723,33 @@
 
   .gs-welcome-main {
     gap: 26px;
+  }
+
+  /* Nav flottante, pilule centrée : même navigation, habillage desktop. */
+  .gs-homenav {
+    width: 340px;
+    margin: 0 auto 16px;
+    padding: 6px;
+    gap: 4px;
+    border: 1px solid var(--gs-border);
+    border-radius: 22px;
+    background: var(--gs-surface-strong);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .gs-homenav-item {
+    border-radius: 16px;
+    min-height: 46px;
+  }
+
+  .gs-homenav-item.is-active {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.34), rgba(34, 211, 238, 0.16));
+    box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.42);
+  }
+
+  .gs-hint {
+    text-align: left;
   }
 }
 

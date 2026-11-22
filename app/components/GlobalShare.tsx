@@ -51,6 +51,14 @@ import {
 } from '../lib/rooms';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
+// Même réseau local : le canal direct est alors court, à faible latence et sans
+// perte — on peut démultiplier la taille des blocs et la profondeur du pipeline
+// sans risque, pour un débit proche de celui du Wi-Fi lui-même.
+const MAX_IN_FLIGHT_CHUNKS_LAN = 16;
+const CHUNK_SIZE_LAN = 256 * 1024;
+// Garde-fou : au-delà, le tampon SCTP du canal_data sature (le navigateur
+// peut clore le canal). On ralentit plutôt la boucle d'émission.
+const P2P_BUFFERED_LIMIT = 4 * 1024 * 1024;
 import './GlobalShare.css';
 
 // Délai au-delà duquel une tentative de connexion directe est abandonnée : le
@@ -210,6 +218,17 @@ function IconBolt({ className = 'gs-icon' }: IconProps) {
   );
 }
 
+function IconKey({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <circle cx="8.5" cy="15.5" r="4" />
+      <path d="m11.5 12.5 8-8" />
+      <path d="m16 5 3 3" />
+      <path d="m14 7 3 3" />
+    </svg>
+  );
+}
+
 function IconShare({ className = 'gs-icon' }: IconProps) {
   return (
     <svg {...iconProps} className={className}>
@@ -363,11 +382,13 @@ export default function GlobalShare() {
   // Encart de mise à jour : ouvert depuis le bouton de la barre supérieure,
   // depuis le menu Aide d'Electron, ou automatiquement quand une maj arrive.
   const [updateOpen, setUpdateOpen] = useState(false);
-  // Accueil instantané : salons ouverts à cet instant, historique local des
-  // salons de cet appareil, et menu déroulant correspondant.
+  // Accueil : salons ouverts à cet instant et historique local des salons.
   const [liveRooms, setLiveRooms] = useState<LiveRoom[]>([]);
   const [roomHistory, setRoomHistory] = useState<RoomHistoryEntry[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // Vue de l'accueil, pilotée par la barre de navigation basse :
+  // « create » par défaut (créer un salon en un chiffre), « join » (rejoindre
+  // avec un code), « rooms » (salons ouverts et récents de cet appareil).
+  const [homeView, setHomeView] = useState<'create' | 'join' | 'rooms'>('create');
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -398,6 +419,9 @@ export default function GlobalShare() {
   const peerNamesRef = useRef<Record<string, string>>({});
   const iceServersRef = useRef<RTCIceServer[]>(BASE_ICE_SERVERS);
   const turnValidUntilRef = useRef(0);
+  // Pairs dont le chemin direct est un chemin local (candidats « host » des
+  // deux côtés) : même réseau, on augmente blocs et pipeline pour eux.
+  const lanPeersRef = useRef<Set<string>>(new Set());
 
   const [renderTime, setRenderTime] = useState(0);
 
@@ -636,10 +660,22 @@ export default function GlobalShare() {
           else transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
           return;
         }
-        if (sendT.pending.size >= MAX_IN_FLIGHT_CHUNKS) {
-          transferTimeoutRef.current = setTimeout(() => sendLoop(), 20);
+        // Même réseau local et chemin direct ouvert : blocs plus gros, pipeline
+        // plus profond et pauses supprimées. Sinon, réglages conservateurs.
+        const lan = lanPeersRef.current.has(sendT.targetId) && sendT.method === 'p2p';
+        const maxInFlight = lan ? MAX_IN_FLIGHT_CHUNKS_LAN : MAX_IN_FLIGHT_CHUNKS;
+        if (sendT.pending.size >= maxInFlight) {
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), lan ? 0 : 20);
           return;
         }
+        // Tampon SCTP : attendre qu'il se vide plutôt que le saturer.
+        if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) {
+          transferTimeoutRef.current = setTimeout(() => sendLoop(), 5);
+          return;
+        }
+        // Le bloc annoncé par transfer-init reste la référence du destinataire :
+        // la taille ne peut pas changer en cours de transfert (alignement de
+        // reprise, comptage des chunks). Elle est donc choisie ici.
         const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
         const arrayBuffer = await blob.arrayBuffer();
         const chunk = new Uint8Array(arrayBuffer);
@@ -651,7 +687,10 @@ export default function GlobalShare() {
         // fichier, et la reprise ne pouvait plus aboutir.
         if (manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) sendT.nextSeq++;
         const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), 5 + Math.floor(20 * (1 - speedRatio)));
+        transferTimeoutRef.current = setTimeout(
+          () => sendLoop(),
+          lan ? 0 : 5 + Math.floor(20 * (1 - speedRatio))
+        );
       } finally {
         sendLoopRunningRef.current = false;
       }
@@ -699,6 +738,7 @@ export default function GlobalShare() {
       clearTimeout(timer);
       delete p2pTimersRef.current[peerId];
     }
+    lanPeersRef.current.delete(peerId);
     delete p2pStateRef.current[peerId];
     const peer = peersRef.current[peerId];
     delete peersRef.current[peerId];
@@ -729,6 +769,7 @@ export default function GlobalShare() {
 
     const fallback = () => {
       p2pStateRef.current[peerId] = 'failed';
+      lanPeersRef.current.delete(peerId);
       const timer = p2pTimersRef.current[peerId];
       if (timer) {
         clearTimeout(timer);
@@ -764,6 +805,30 @@ export default function GlobalShare() {
       setPeers(prev => (prev[peerId]
         ? { ...prev, [peerId]: { ...prev[peerId], method: 'p2p', status: 'connected' } }
         : prev));
+      // Détection « même réseau local » : un candidat « host » des deux côtés
+      // (aucune traversée NAT, aucun relais) signifie que les deux appareils
+      // sont sur le même réseau ; les blocs échangés peuvent alors être bien
+      // plus gros sans risque, pour un débit bien supérieur. Une détection
+      // manquée ne dégrade rien : on garde simplement les blocs standards.
+      try {
+        const pc = (peer as unknown as { _pc?: RTCPeerConnection })._pc;
+        pc?.getStats()?.then?.((stats) => {
+          for (const report of stats.values() as unknown as Iterable<{
+            type?: string; state?: string; selected?: boolean; nominated?: boolean;
+            localCandidateId?: string; remoteCandidateId?: string;
+          }>) {
+            if (report.type !== 'candidate-pair') continue;
+            if (!(report.state === 'succeeded' && (report.selected || report.nominated))) continue;
+            const local = stats.get(report.localCandidateId ?? '') as
+              { candidateType?: string } | undefined;
+            const remote = stats.get(report.remoteCandidateId ?? '') as
+              { candidateType?: string } | undefined;
+            if (local?.candidateType === 'host' && remote?.candidateType === 'host') {
+              lanPeersRef.current.add(peerId);
+            }
+          }
+        }).catch(() => {});
+      } catch { /* Stats indisponibles : réglages standards. */ }
     });
 
     peer.on('data', (data: Uint8Array) => {
@@ -1001,11 +1066,15 @@ export default function GlobalShare() {
       showToast('error', 'Connexion au serveur perdue');
       return;
     }
+    // Même réseau local (détecté via les candidats ICE) : blocs bien plus gros,
+    // le destinataire s'aligne sur le chunkSize annoncé dans transfer-init.
+    const lan = lanPeersRef.current.has(targetId) && method === 'p2p';
     const t = managerRef.current?.startSend(
       { name: file.name, size: file.size, mime: file.type },
       targetId,
       method,
-      hash ?? undefined
+      hash ?? undefined,
+      lan ? CHUNK_SIZE_LAN : undefined
     );
     if (t) {
       fileRefs.current.set(t.id, file);
@@ -1306,213 +1375,247 @@ export default function GlobalShare() {
             <span>GlobalShare</span>
           </Link>
           <div className="gs-topbar-right">
-            <button
-              type="button"
-              className="gs-iconbtn"
-              onClick={() => {
-                setRoomHistory(loadRoomHistory());
-                setHistoryOpen(true);
-              }}
-              aria-label="Salons récents"
-              title="Salons récents"
-            >
-              <IconHistory />
-            </button>
             <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
           </div>
         </header>
         <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
         <main className="gs-welcome-main">
-          <div className="gs-hero">
-            <h1>Partagez un fichier, pas un compte</h1>
-            <p>Passez le même code aux deux appareils. Direct, sans inscription.</p>
-          </div>
-
-          {/* Création instantanée : le premier chiffre de salon libre */}
-          <button
-            type="button"
-            className="gs-instant"
-            onClick={() => joinRoom(instantCode)}
-          >
-            <span className="gs-instant-digit" aria-hidden="true">{instantCode}</span>
-            <span className="gs-instant-text">
-              <strong>Créer le salon {instantCode}</strong>
-              <span>Un seul chiffre à retenir, libre à l’instant</span>
-            </span>
-            <IconBolt className="gs-icon gs-icon--sm gs-instant-arrow" />
-          </button>
-
-          {live.length > 0 && (
-            <section className="gs-live" aria-label="Salons ouverts maintenant">
-              <h2 className="gs-list-title">Salons ouverts</h2>
-              <div className="gs-roompills">
-                {live.map(room => (
-                  <button
-                    key={room.roomId}
-                    type="button"
-                    className="gs-roompill"
-                    onClick={() => joinRoom(room.roomId)}
-                  >
-                    <span className="gs-roompill-code">{room.roomId}</span>
-                    <span className="gs-roompill-meta">
-                      {room.users} appareil{room.users > 1 ? 's' : ''}
-                    </span>
-                  </button>
-                ))}
+          {homeView === 'create' && (
+            <>
+              <div className="gs-hero">
+                <h1>Partagez un fichier, pas un compte</h1>
+                <p>Passez le même code aux deux appareils. Direct, sans inscription.</p>
               </div>
-            </section>
+
+              {/* Création instantanée : le premier chiffre de salon libre */}
+              <button
+                type="button"
+                className="gs-instant"
+                onClick={() => joinRoom(instantCode)}
+              >
+                <span className="gs-instant-digit" aria-hidden="true">{instantCode}</span>
+                <span className="gs-instant-text">
+                  <strong>Créer le salon {instantCode}</strong>
+                  <span>Un seul chiffre à retenir, libre à l’instant</span>
+                </span>
+                <IconBolt className="gs-icon gs-icon--sm gs-instant-arrow" />
+              </button>
+
+              <div className="gs-card">
+                <div className="gs-field gs-field--row">
+                  <label htmlFor="gs-name" className="gs-label">Votre appareil</label>
+                  <input
+                    id="gs-name"
+                    className="gs-input"
+                    value={myName}
+                    onChange={e => setMyName(e.target.value)}
+                    placeholder="Nom de l'appareil"
+                    maxLength={24}
+                    enterKeyHint="next"
+                  />
+                </div>
+              </div>
+
+              {live.length > 0 && (
+                <section className="gs-live" aria-label="Salons ouverts maintenant">
+                  <h2 className="gs-list-title">Salons ouverts</h2>
+                  <div className="gs-roompills">
+                    {live.slice(0, 4).map(room => (
+                      <button
+                        key={room.roomId}
+                        type="button"
+                        className="gs-roompill"
+                        onClick={() => joinRoom(room.roomId)}
+                      >
+                        <span className="gs-roompill-code">{room.roomId}</span>
+                        <span className="gs-roompill-meta">
+                          {room.users} appareil{room.users > 1 ? 's' : ''}
+                        </span>
+                      </button>
+                    ))}
+                    {live.length > 4 && (
+                      <button
+                        type="button"
+                        className="gs-roompill gs-roompill--more"
+                        onClick={() => setHomeView('rooms')}
+                      >
+                        +{live.length - 4} autres
+                      </button>
+                    )}
+                  </div>
+                </section>
+              )}
+            </>
           )}
 
-          {roomHistory.length > 0 && (
-            <section className="gs-live" aria-label="Vos salons récents">
-              <h2 className="gs-list-title">
-                Vos salons
+          {homeView === 'join' && (
+            <>
+              <div className="gs-hero">
+                <h1>Rejoindre avec un code</h1>
+                <p>Tapez le code partagé, ou générez-en un privé pour inviter quelqu’un.</p>
+              </div>
+
+              <div className="gs-card">
+                <div className="gs-field gs-field--row">
+                  <label htmlFor="gs-name-join" className="gs-label">Votre appareil</label>
+                  <input
+                    id="gs-name-join"
+                    className="gs-input"
+                    value={myName}
+                    onChange={e => setMyName(e.target.value)}
+                    placeholder="Nom de l'appareil"
+                    maxLength={24}
+                    enterKeyHint="next"
+                  />
+                </div>
+                <div className="gs-field gs-field--row">
+                  <label htmlFor="gs-room" className="gs-label">Code</label>
+                  <input
+                    id="gs-room"
+                    className="gs-input gs-input--code"
+                    value={roomId}
+                    onChange={e => setRoomId(e.target.value.toUpperCase())}
+                    placeholder="1, 42 ou A1B2C3"
+                    onKeyDown={handleKeyDown}
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    maxLength={12}
+                    inputMode="text"
+                    enterKeyHint="go"
+                  />
+                </div>
                 <button
                   type="button"
-                  className="gs-list-more"
-                  onClick={() => setHistoryOpen(true)}
+                  className="gs-btn gs-btn--primary gs-btn--block"
+                  onClick={() => joinRoom()}
+                  disabled={!roomId.trim() || !myName.trim()}
                 >
-                  Tout voir
+                  Rejoindre le salon
                 </button>
-              </h2>
-              <div className="gs-roompills">
-                {roomHistory.slice(0, 3).map(entry => (
-                  <button
-                    key={entry.roomId}
-                    type="button"
-                    className="gs-roompill"
-                    onClick={() => joinRoom(entry.roomId, entry.name)}
-                  >
-                    <span className="gs-roompill-code">{entry.roomId}</span>
-                    <span className="gs-roompill-meta">{formatRoomAge(entry.lastUsed)}</span>
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  className="gs-btn gs-btn--ghost gs-btn--block"
+                  onClick={() => joinRoom(generateRoomId())}
+                >
+                  <IconKey className="gs-icon gs-icon--sm" />
+                  Créer avec un code privé
+                </button>
+                <p className="gs-hint">
+                  Le code privé ne peut pas être deviné : seul celui qui le reçoit
+                  peut rejoindre.
+                </p>
               </div>
-            </section>
+            </>
           )}
 
-          {/* Rejoindre avec un code connu ou un code généré */}
-          <div className="gs-card">
-            <div className="gs-field gs-field--row">
-              <label htmlFor="gs-name" className="gs-label">Votre appareil</label>
-              <input
-                id="gs-name"
-                className="gs-input"
-                value={myName}
-                onChange={e => setMyName(e.target.value)}
-                placeholder="Nom de l'appareil"
-                maxLength={24}
-                enterKeyHint="next"
-              />
-            </div>
-            <div className="gs-field gs-field--row">
-              <label htmlFor="gs-room" className="gs-label">Code</label>
-              <input
-                id="gs-room"
-                className="gs-input gs-input--code"
-                value={roomId}
-                onChange={e => setRoomId(e.target.value.toUpperCase())}
-                placeholder="1, 42 ou A1B2C3"
-                onKeyDown={handleKeyDown}
-                autoCapitalize="characters"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
-                maxLength={12}
-                inputMode="text"
-                enterKeyHint="go"
-              />
-            </div>
-            <button
-              type="button"
-              className="gs-btn gs-btn--primary gs-btn--block"
-              onClick={() => joinRoom()}
-              disabled={!roomId.trim() || !myName.trim()}
-            >
-              Rejoindre le salon
-            </button>
-            <button
-              type="button"
-              className="gs-btn gs-btn--ghost gs-btn--block"
-              onClick={() => setRoomId(generateRoomId())}
-            >
-              <IconBolt className="gs-icon gs-icon--sm" />
-              Générer un code privé
-            </button>
-          </div>
-        </main>
-
-        {historyOpen && (
-          <div className="gs-overlay" onClick={() => setHistoryOpen(false)}>
-            <div
-              className="gs-sheet"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="gs-history-title"
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="gs-sheet-handle" aria-hidden="true" />
-              <div className="gs-sheet-title" id="gs-history-title">Salons récents</div>
-              <div className="gs-sheet-body">
-                {roomHistory.length === 0 ? (
-                  <div className="gs-empty gs-empty--sheet">
-                    <span className="gs-empty-icon" aria-hidden="true"><IconHistory /></span>
-                    <strong>Aucun salon récent</strong>
-                    <span>Les salons créés ou rejoints depuis cet appareil apparaîtront ici.</span>
-                  </div>
-                ) : (
-                  <div className="gs-history-list">
-                    {roomHistory.map(entry => (
-                      <div key={entry.roomId} className="gs-roomrow">
-                        <button
-                          type="button"
-                          className="gs-roomrow-main"
-                          onClick={() => {
-                            setHistoryOpen(false);
-                            joinRoom(entry.roomId, entry.name);
-                          }}
-                        >
-                          <span className="gs-roomrow-code">{entry.roomId}</span>
-                          <span className="gs-roomrow-meta">
-                            {entry.name ? `${entry.name} · ` : ''}
-                            {formatRoomAge(entry.lastUsed)}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="gs-iconbtn gs-roomrow-forget"
-                          aria-label={`Retirer le salon ${entry.roomId}`}
-                          title="Retirer"
-                          onClick={() => setRoomHistory(forgetStoredRoom(entry.roomId))}
-                        >
-                          <IconTrash className="gs-icon gs-icon--sm" />
-                        </button>
-                      </div>
+          {homeView === 'rooms' && (
+            <section className="gs-rooms-page" aria-label="Salons">
+              {live.length > 0 && (
+                <>
+                  <h2 className="gs-list-title">Ouverts maintenant</h2>
+                  <div className="gs-roompills">
+                    {live.map(room => (
+                      <button
+                        key={room.roomId}
+                        type="button"
+                        className="gs-roompill"
+                        onClick={() => joinRoom(room.roomId)}
+                      >
+                        <span className="gs-roompill-code">{room.roomId}</span>
+                        <span className="gs-roompill-meta">
+                          {room.users} appareil{room.users > 1 ? 's' : ''}
+                        </span>
+                      </button>
                     ))}
                   </div>
-                )}
-              </div>
-              {roomHistory.length > 0 && (
-                <div className="gs-sheet-actions">
-                  <button
-                    type="button"
-                    className="gs-btn gs-btn--ghost"
-                    onClick={() => {
-                      clearRoomHistory();
-                      setRoomHistory([]);
-                      setHistoryOpen(false);
-                    }}
-                  >
-                    Effacer tout
-                  </button>
-                  <button type="button" className="gs-btn gs-btn--primary" onClick={() => setHistoryOpen(false)}>
-                    Fermer
-                  </button>
+                </>
+              )}
+
+              <h2 className="gs-list-title">Vos salons</h2>
+              {roomHistory.length === 0 ? (
+                <div className="gs-empty">
+                  <span className="gs-empty-icon" aria-hidden="true"><IconHistory /></span>
+                  <strong>Aucun salon récent</strong>
+                  <span>Les salons créés ou rejoints depuis cet appareil apparaîtront ici.</span>
+                </div>
+              ) : (
+                <div className="gs-history-list gs-history-list--page">
+                  {roomHistory.map(entry => (
+                    <div key={entry.roomId} className="gs-roomrow">
+                      <button
+                        type="button"
+                        className="gs-roomrow-main"
+                        onClick={() => joinRoom(entry.roomId, entry.name)}
+                      >
+                        <span className="gs-roomrow-code">{entry.roomId}</span>
+                        <span className="gs-roomrow-meta">
+                          {entry.name ? `${entry.name} · ` : ''}
+                          {formatRoomAge(entry.lastUsed)}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="gs-iconbtn gs-roomrow-forget"
+                        aria-label={`Retirer le salon ${entry.roomId}`}
+                        title="Retirer"
+                        onClick={() => setRoomHistory(forgetStoredRoom(entry.roomId))}
+                      >
+                        <IconTrash className="gs-icon gs-icon--sm" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
-          </div>
-        )}
+              {roomHistory.length > 0 && (
+                <button
+                  type="button"
+                  className="gs-btn gs-btn--ghost gs-btn--sm"
+                  onClick={() => {
+                    clearRoomHistory();
+                    setRoomHistory([]);
+                  }}
+                >
+                  Effacer l’historique
+                </button>
+              )}
+            </section>
+          )}
+        </main>
+
+        <nav className="gs-homenav" aria-label="Navigation de l'accueil">
+          <button
+            type="button"
+            className={`gs-homenav-item${homeView === 'create' ? ' is-active' : ''}`}
+            aria-current={homeView === 'create' ? 'page' : undefined}
+            onClick={() => setHomeView('create')}
+          >
+            <IconBolt className="gs-icon gs-icon--sm" />
+            Créer
+          </button>
+          <button
+            type="button"
+            className={`gs-homenav-item${homeView === 'join' ? ' is-active' : ''}`}
+            aria-current={homeView === 'join' ? 'page' : undefined}
+            onClick={() => setHomeView('join')}
+          >
+            <IconKey className="gs-icon gs-icon--sm" />
+            Code
+          </button>
+          <button
+            type="button"
+            className={`gs-homenav-item${homeView === 'rooms' ? ' is-active' : ''}`}
+            aria-current={homeView === 'rooms' ? 'page' : undefined}
+            onClick={() => {
+              setRoomHistory(loadRoomHistory());
+              setHomeView('rooms');
+            }}
+          >
+            <IconHistory className="gs-icon gs-icon--sm" />
+            Salons
+          </button>
+        </nav>
       </div>
     );
   }

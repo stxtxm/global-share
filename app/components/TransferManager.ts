@@ -200,7 +200,8 @@ export class TransferManager {
     file: { name: string; size: number; mime?: string },
     targetId: string,
     method: 'p2p' | 'relay',
-    hash?: string
+    hash?: string,
+    chunkSize?: number
   ): TransferState {
     const id = `t-${++this.nextTransferId}-${Date.now().toString(36)}`;
     const t: TransferState = {
@@ -211,7 +212,9 @@ export class TransferManager {
       file,
       method,
       transport: method,
-      chunkSize: CHUNK_SIZE_DEFAULT,
+      // Surcharge (réseau local) : le destinataire s'aligne sur la valeur
+      // annoncée dans transfer-init, les reprises aussi.
+      chunkSize: chunkSize && chunkSize > 0 ? chunkSize : CHUNK_SIZE_DEFAULT,
       status: 'transferring',
       progress: 0,
       confirmed: 0,
@@ -821,7 +824,17 @@ export class TransferManager {
     this.socket.emit(event, payload);
   }
 
-  private _startAckTimeout(t: TransferState, seq: number, size: number, delay = 15000): void {
+  /**
+   * Sur le chemin direct (WebRTC), le canal est fiable et court : un ACK qui
+   * tarde plus de quelques secondes est déjà anormal, on retransmet tout de
+   * suite. Par le relais, latence et gigue imposent de laisser plus de marge.
+   */
+  private _ackTimeoutBase(t: TransferState): number {
+    return t.method === 'p2p' ? 5000 : 15000;
+  }
+
+  private _startAckTimeout(t: TransferState, seq: number, size: number, delay?: number): void {
+    const effective = delay ?? this._ackTimeoutBase(t);
     if (t.ackedSeqs.has(seq)) return;
     const previous = t.ackTimers.get(seq);
     if (previous) clearTimeout(previous);
@@ -835,8 +848,8 @@ export class TransferManager {
       t.attempts += 1;
       // Le chunk est déjà dans pending : on le retransmet sans repasser par sendChunk.
       this._transmitChunk(t, seq, chunk);
-      this._startAckTimeout(t, seq, size, Math.min(delay * 2, 60000));
-    }, delay);
+      this._startAckTimeout(t, seq, size, Math.min(effective * 2, 60000));
+    }, effective);
     t.ackTimers.set(seq, timer);
   }
 
