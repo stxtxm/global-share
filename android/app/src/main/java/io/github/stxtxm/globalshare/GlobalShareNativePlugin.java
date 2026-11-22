@@ -1,6 +1,8 @@
 package io.github.stxtxm.globalshare;
 
 import android.Manifest;
+import android.os.Handler;
+import android.os.Looper;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -21,6 +23,21 @@ import com.getcapacitor.annotation.Permission;
                     strings = {Manifest.permission.REQUEST_INSTALL_PACKAGES})
         })
 public class GlobalShareNativePlugin extends Plugin {
+    private static final long FIRST_CHECK_DELAY_MS = 8_000;
+    private static final long CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable periodicCheck = new Runnable() {
+        @Override
+        public void run() {
+            // Comme sur desktop : une vérification de fond silencieuse. Une
+            // mise à jour disponible publie l'état « available », ce qui rend
+            // l'encart visible sans que l'utilisateur ait à chercher.
+            UpdateManager.checkForUpdates(false);
+            mainHandler.postDelayed(this, CHECK_INTERVAL_MS);
+        }
+    };
+    private boolean scheduled;
 
     @Override
     public void load() {
@@ -39,6 +56,11 @@ public class GlobalShareNativePlugin extends Plugin {
                 onUiThread(() -> notifyListeners("updateOpen", new JSObject()));
             }
         });
+
+        if (!scheduled) {
+            scheduled = true;
+            mainHandler.postDelayed(periodicCheck, FIRST_CHECK_DELAY_MS);
+        }
     }
 
     private void onUiThread(Runnable action) {

@@ -24,6 +24,15 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.14] — 2026-11-22
+
+### Corrigé
+
+- **Android : vérification automatique des mises à jour** ajoutée au
+  démarrage de l'APK (8 s) puis toutes les 6 h, comme sur desktop. Une version
+  disponible ouvre maintenant l'encart sans que l'utilisateur ait à appuyer sur
+  « Rechercher ».
+
 ## [1.0.13] — 2026-11-22
 
 ### Ajouté
@@ -206,7 +215,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.13...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.14...HEAD
+[1.0.14]: https://github.com/stxtxm/global-share/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/stxtxm/global-share/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/stxtxm/global-share/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/stxtxm/global-share/compare/v1.0.10...v1.0.11
