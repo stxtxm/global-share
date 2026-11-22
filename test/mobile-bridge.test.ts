@@ -24,6 +24,7 @@ const plugin = {
   finishDownload: async () => ({}),
   openDownload: async () => ({}),
   revealDownload: async () => void calls.push({ name: 'revealDownload' }),
+  deleteDownload: async (args: unknown) => { calls.push({ name: 'deleteDownload', args }); return { deleted: true }; },
   getServiceState: async () => ({ running: true }),
   addListener: async (name: string, listener: (value: unknown) => void) => {
     listeners.set(name, listener);
@@ -90,4 +91,11 @@ test('le bouton Fichiers ouvre le gestionnaire système, pas un lecteur vidéo',
   calls.length = 0;
   await bridge.mobileRevealDownload();
   assert.deepEqual(calls, [{ name: 'revealDownload' }]);
+});
+
+test('la suppression retire aussi le fichier du stockage partagé', async () => {
+  calls.length = 0;
+  const result = await bridge.mobileDeleteDownload({ uri: 'content://media/42', name: 'album.flac' });
+  assert.deepEqual(result, { deleted: true });
+  assert.equal(calls[0].name, 'deleteDownload');
 });

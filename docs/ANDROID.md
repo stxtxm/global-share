@@ -174,8 +174,16 @@ Depuis la v1.0.32 :
   du FLAC sur Android) : `mimeFromName()` dans `app/lib/downloads.ts` renvoie
   `audio/flac`, `audio/mpeg`, etc. Les fichiers audio reçoivent une icône dédiée
   dans la liste.
-- L'URI MediaStore est conservée dans `record.path` : le bouton « Ouvrir » et le
-  bouton « Dossier » apparaissent donc aussi sur mobile.
+- L'URI MediaStore est conservée dans `record.path` : les boutons « Fichiers » et
+  « Écouter » apparaissent donc aussi sur mobile, pour **tous** les types de
+  fichiers (pas seulement le FLAC). « Fichiers » ouvre directement le dossier
+  `Téléchargements/GlobalShare` dans l'app du système ; « Écouter » affiche un
+  choisir d'application.
+- **Retirer** supprime aussi le fichier du stockage partagé via
+  `deleteDownload()` (URI MediaStore, ou recherche par nom pour les anciennes
+  entrées) : l'historique et le fichier sur le téléphone restent cohérents.
+- `finishDownload()` vérifie le retour de `MediaStore.update()` : si l'entrée a
+  disparu, une erreur est remontée au lieu d'enregistrer une URI invalide.
 
 ## Limites
 

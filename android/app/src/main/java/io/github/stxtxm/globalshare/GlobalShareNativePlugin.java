@@ -275,8 +275,11 @@ public class GlobalShareNativePlugin extends Plugin {
                     && uriText.startsWith("content://")) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                getContext().getContentResolver()
+                int updated = getContext().getContentResolver()
                         .update(Uri.parse(uriText), values, null, null);
+                if (updated == 0) {
+                    result.put("error", "Le fichier n'est plus présent dans Téléchargements.");
+                }
             }
         } catch (Exception error) {
             result.put("error", "Fichier écrit mais pas encore indexé : " + error.getMessage());
@@ -333,6 +336,63 @@ public class GlobalShareNativePlugin extends Plugin {
         } catch (Exception error) {
             result.put("error", "Impossible d'ouvrir l'application Fichiers : "
                     + error.getMessage());
+        }
+        call.resolve(result);
+    }
+
+    /**
+     * Supprime le fichier du stockage partagé (et pas seulement de l'historique
+     * IndexedDB). Accepte l'URI MediaStore renvoyée à l'enregistrement, ou le
+     * nom de fichier pour les anciennes entrées dont l'URI a été perdue.
+     */
+    @PluginMethod
+    public void deleteDownload(PluginCall call) {
+        JSObject result = new JSObject();
+        String uriText = call.getString("uri");
+        String name = call.getString("name");
+        try {
+            android.content.Context context = getContext();
+            boolean deleted = false;
+            if (uriText != null && uriText.startsWith("content://")) {
+                Uri uri = Uri.parse(uriText);
+                String authority = uri.getAuthority();
+                if (authority != null && authority.endsWith(".fileprovider")) {
+                    // Ancien chemin Android ≤ 9 : FileProvider ne sait pas
+                    // supprimer, on retrouve le fichier par son chemin.
+                    java.util.List<String> segments = uri.getPathSegments();
+                    String filePart = segments.isEmpty() ? "" : segments.get(segments.size() - 1);
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
+                    File file = new File(dir, filePart);
+                    deleted = file.exists() && file.delete();
+                    if (deleted) {
+                        MediaScannerConnection.scanFile(context,
+                                new String[]{file.getAbsolutePath()}, null, null);
+                    }
+                } else {
+                    deleted = context.getContentResolver().delete(uri, null, null) > 0;
+                }
+            }
+            if (!deleted && name != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                String selection = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
+                        + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
+                String[] args = {name, "%GlobalShare%"};
+                deleted = context.getContentResolver().delete(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, selection, args) > 0;
+            }
+            if (!deleted && name != null) {
+                File dir = new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
+                File file = new File(dir, name);
+                deleted = file.exists() && file.delete();
+                if (deleted) {
+                    MediaScannerConnection.scanFile(context,
+                            new String[]{file.getAbsolutePath()}, null, null);
+                }
+            }
+            result.put("deleted", deleted);
+        } catch (Exception error) {
+            result.put("error", "Suppression impossible : " + error.getMessage());
         }
         call.resolve(result);
     }

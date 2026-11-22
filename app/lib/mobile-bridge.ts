@@ -26,6 +26,7 @@ interface GlobalShareNativePlugin {
   finishDownload(options: { uri?: string; mime?: string }): Promise<{ error?: string }>;
   openDownload(options: { uri: string; mime?: string; name?: string }): Promise<{ error?: string }>;
   revealDownload(): Promise<{ error?: string }>;
+  deleteDownload(options: { uri?: string; name: string }): Promise<{ deleted?: boolean; error?: string }>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -230,6 +231,17 @@ export async function mobileFinishDownload(options: {
 }): Promise<{ error?: string }> {
   try {
     return (await nativePlugin()?.finishDownload(options)) ?? {};
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/** Supprime le fichier du stockage partagé (Retirer dans l'app). */
+export async function mobileDeleteDownload(options: {
+  uri?: string; name: string;
+}): Promise<{ deleted?: boolean; error?: string }> {
+  try {
+    return (await nativePlugin()?.deleteDownload(options)) ?? { error: 'Pont Android indisponible.' };
   } catch (error) {
     return { error: String(error) };
   }

@@ -34,6 +34,7 @@ import '../lib/mobile-bridge';
 import {
   isMobileHost,
   mobileFinishTransfer,
+  mobileDeleteDownload,
   mobileKeepAlive,
   mobileRevealDownload,
   mobileRequestBatteryExemption,
@@ -1565,10 +1566,23 @@ export default function GlobalShare() {
     }
     // Android : le fichier est dans MediaStore ; seul un intent ACTION_VIEW
     // peut lancer le lecteur FLAC/audio système (blob: n'est pas openable).
-    if (isMobileHost() && record.path) {
-      const error = await mobileOpenDownload({
-        uri: record.path, mime: record.mime, name: record.name,
-      });
+    if (isMobileHost()) {
+      if (!record.path) {
+        showToast('warning', "Ce fichier n'est pas enregistré sur le téléphone. Recevez-le à nouveau.");
+        return;
+      }
+      if (!record.path.startsWith('content://') && !record.path.startsWith('file://')) {
+        showToast('warning', "Emplacement du fichier invalide.");
+        return;
+      }
+      // Un startActivity réussi peut ouvrir un lecteur qui plante sans lever
+      // d'erreur : on borne l'attente et on affiche toujours un retour clair.
+      const error = await Promise.race([
+        mobileOpenDownload({ uri: record.path, mime: record.mime, name: record.name }),
+        new Promise<string>(resolve =>
+          setTimeout(() => resolve("L'ouverture a mis trop de temps."), 10_000)
+        ),
+      ]);
       if (error) showToast('error', error);
       return;
     }
@@ -1617,7 +1631,16 @@ export default function GlobalShare() {
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-  }, [appSettings.confirmDelete, appSettings.language]);
+    // Sur Android, retirer la ligne doit AUSSI supprimer le fichier écrit dans
+    // Téléchargements/GlobalShare, sinon il reste introuvable dans l'app.
+    if (isMobileHost()) {
+      const result = await mobileDeleteDownload({ uri: record.path, name: record.name });
+      if (result.error) showToast('warning', result.error);
+      else if (result.deleted) {
+        showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
+      }
+    }
+  }, [appSettings.confirmDelete, appSettings.language, showToast]);
 
   const clearDownloadHistory = useCallback(async () => {
     if (appSettings.confirmDelete && !window.confirm(

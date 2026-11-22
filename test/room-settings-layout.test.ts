@@ -46,6 +46,10 @@ test('sur mobile, Ouvrir mène à Fichiers et Écouter affiche un choisir', () =
   assert.ok(component.includes('Écouter'));
 });
 
+test('Retirer supprime aussi le fichier du stockage Android', () => {
+  assert.ok(component.includes('mobileDeleteDownload({ uri: record.path'));
+});
+
 test('le libellé « Salon » s’efface sur les écrans étroits', () => {
   assert.match(css, /@media \(max-width: 480px\)[\s\S]*?\.gs-room-chip-label\s*\{\s*display:\s*none/);
 });
