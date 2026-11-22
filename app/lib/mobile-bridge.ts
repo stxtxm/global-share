@@ -25,6 +25,7 @@ interface GlobalShareNativePlugin {
   }): Promise<{ uri?: string; path?: string; error?: string }>;
   finishDownload(options: { uri?: string; mime?: string }): Promise<{ error?: string }>;
   openDownload(options: { uri: string; mime?: string; name?: string }): Promise<{ error?: string }>;
+  revealDownload(): Promise<{ error?: string }>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -234,7 +235,17 @@ export async function mobileFinishDownload(options: {
   }
 }
 
-/** Ouvre le fichier avec l'application système adaptée (ACTION_VIEW). */
+/** Ouvre l'application Fichiers sur Téléchargements/GlobalShare. */
+export async function mobileRevealDownload(): Promise<string> {
+  try {
+    const result = await nativePlugin()?.revealDownload();
+    return result?.error ?? (result ? '' : "Application Fichiers indisponible.");
+  } catch (error) {
+    return String(error);
+  }
+}
+
+/** Ouvre le fichier avec l'application système choisie (ACTION_VIEW + chooser). */
 export async function mobileOpenDownload(options: {
   uri: string; mime?: string; name?: string;
 }): Promise<string> {

@@ -35,6 +35,7 @@ import {
   isMobileHost,
   mobileFinishTransfer,
   mobileKeepAlive,
+  mobileRevealDownload,
   mobileRequestBatteryExemption,
   mobileStartTransfer,
   mobileStopTransfer,
@@ -1592,6 +1593,14 @@ export default function GlobalShare() {
   }, [downloadUrl, showToast]);
 
   const revealDownload = useCallback(async (record: DownloadRecord) => {
+    // Android : ouvrir directement l'app Fichiers dans Téléchargements/GlobalShare.
+    // C'est le comportement attendu pour un FLAC : l'utilisateur choisit son
+    // lecteur audio depuis les Fichiers, sans qu'un lecteur vidéo casse tout.
+    if (isMobileHost()) {
+      const error = await mobileRevealDownload();
+      if (error) showToast('error', error);
+      return;
+    }
     if (!record.path) return;
     const error = await window.globalshareDesktop?.revealDownload(record.path);
     if (error) showToast('error', error);
@@ -2200,22 +2209,47 @@ export default function GlobalShare() {
                         </span>
                       </div>
                       <div className="gs-file-actions">
-                        <button
-                          type="button"
-                          className="gs-dl"
-                          onClick={() => void openDownload(f)}
-                        >
-                          <IconOpen className="gs-icon gs-icon--sm" />
-                          Ouvrir
-                        </button>
-                        {f.path && (
-                          <button
-                            type="button"
-                            className="gs-dl gs-dl--ghost"
-                            onClick={() => void revealDownload(f)}
-                          >
-                            Dossier
-                          </button>
+                        {isMobileHost() ? (
+                          <>
+                            <button
+                              type="button"
+                              className="gs-dl"
+                              onClick={() => void revealDownload(f)}
+                            >
+                              <IconFolder className="gs-icon gs-icon--sm" />
+                              Fichiers
+                            </button>
+                            {f.path && (
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost"
+                                onClick={() => void openDownload(f)}
+                              >
+                                <IconMusic className="gs-icon gs-icon--sm" />
+                                Écouter
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="gs-dl"
+                              onClick={() => void openDownload(f)}
+                            >
+                              <IconOpen className="gs-icon gs-icon--sm" />
+                              Ouvrir
+                            </button>
+                            {f.path && (
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost"
+                                onClick={() => void revealDownload(f)}
+                              >
+                                Dossier
+                              </button>
+                            )}
+                          </>
                         )}
                         <button
                           type="button"

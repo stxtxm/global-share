@@ -301,16 +301,38 @@ public class GlobalShareNativePlugin extends Plugin {
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(Uri.parse(uriText),
                     mime != null ? mime : "application/octet-stream");
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (intent.resolveActivity(getContext().getPackageManager()) == null) {
-                result.put("error", "Aucune application installée pour ouvrir ce fichier.");
-                call.resolve(result);
-                return;
-            }
-            getContext().startActivity(intent);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            // Chooser obligatoire : un ACTION_VIEW direct peut sélectionner un
+            // lecteur vidéo qui déclare */* et plante sur un FLAC (l'app
+            // semblait alors figée au retour). L'utilisateur choisit son lecteur.
+            Intent chooser = Intent.createChooser(intent, "Écouter avec");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(chooser);
         } catch (Exception error) {
             result.put("error", "Ouverture impossible : " + error.getMessage());
+        }
+        call.resolve(result);
+    }
+
+    /**
+     * Ouvre l'application Fichiers du système directement dans
+     * Téléchargements/GlobalShare. Depuis là, l'utilisateur peut écouter le FLAC
+     * avec le lecteur de son choix, sans qu'un lecteur vidéo ne soit imposé.
+     */
+    @PluginMethod
+    public void revealDownload(PluginCall call) {
+        JSObject result = new JSObject();
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            Uri folder = Uri.parse(
+                    "content://com.android.externalstorage.documents/document/primary%3ADownload%2FGlobalShare");
+            intent.setData(folder);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (Exception error) {
+            result.put("error", "Impossible d'ouvrir l'application Fichiers : "
+                    + error.getMessage());
         }
         call.resolve(result);
     }

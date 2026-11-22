@@ -20,6 +20,10 @@ const plugin = {
   stopTransfer: async () => void calls.push({ name: 'stopTransfer' }),
   keepAlive: async (args: unknown) => void calls.push({ name: 'keepAlive', args }),
   requestBatteryExemption: async () => void calls.push({ name: 'requestBatteryExemption' }),
+  saveDownload: async () => ({}),
+  finishDownload: async () => ({}),
+  openDownload: async () => ({}),
+  revealDownload: async () => void calls.push({ name: 'revealDownload' }),
   getServiceState: async () => ({ running: true }),
   addListener: async (name: string, listener: (value: unknown) => void) => {
     listeners.set(name, listener);
@@ -80,4 +84,10 @@ test('un appel natif rejeté ne propage pas son erreur', async () => {
   } finally {
     plugin.keepAlive = original;
   }
+});
+
+test('le bouton Fichiers ouvre le gestionnaire système, pas un lecteur vidéo', async () => {
+  calls.length = 0;
+  await bridge.mobileRevealDownload();
+  assert.deepEqual(calls, [{ name: 'revealDownload' }]);
 });

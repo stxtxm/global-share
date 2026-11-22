@@ -161,11 +161,15 @@ Depuis la v1.0.32 :
   écrit les morceaux dans cette URI, puis rend le fichier visible (`IS_PENDING = 0`).
   Sur Android ≤ 9 (minSdk 24), il écrit dans le dossier public et lance un
   `MediaScannerConnection`.
-- `openDownload()` lance un intent `ACTION_VIEW` avec l'URI `content://` renvoyée
-  — seul moyen fiable d'ouvrir un FLAC avec le lecteur système. Le manifeste
-  déclare les `<queries>` audio/vidéo/image/scheme `content` nécessaires à la
-  visibilité des paquets sur Android 11+, et `WRITE_EXTERNAL_STORAGE` plafonné à
-  `maxSdkVersion="28"` pour les anciennes versions.
+- `revealDownload()` ouvre directement l'**application Fichiers** dans
+  `Téléchargements/GlobalShare` : c'est l'action par défaut du bouton « Fichiers »,
+  l'utilisateur y choisit son lecteur audio. `openDownload()` (bouton « Écouter »)
+  lance un **choisir** `ACTION_VIEW` avec l'URI `content://` : un lecteur vidéo qui
+  déclare `*/*` n'est plus lancé automatiquement (il plantait sur un FLAC et
+  l'application semblait figée au retour). Le manifeste déclare les `<queries>`
+  audio/vidéo/image/scheme `content` nécessaires à la visibilité des paquets sur
+  Android 11+, et `WRITE_EXTERNAL_STORAGE` plafonné à `maxSdkVersion="28"` pour
+  les anciennes versions.
 - Le MIME est inféré depuis l'extension quand `File.type` est vide (cas fréquent
   du FLAC sur Android) : `mimeFromName()` dans `app/lib/downloads.ts` renvoie
   `audio/flac`, `audio/mpeg`, etc. Les fichiers audio reçoivent une icône dédiée

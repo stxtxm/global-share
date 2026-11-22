@@ -40,6 +40,12 @@ test('la mini-barre permet aussi d’annuler un transfert (mobile)', () => {
   assert.ok(css.includes('.gs-minirow-cancel'), 'style du bouton absent du CSS');
 });
 
+test('sur mobile, Ouvrir mène à Fichiers et Écouter affiche un choisir', () => {
+  assert.match(component, /onClick=\{\(\) => void revealDownload\(f\)\}/);
+  assert.ok(component.includes('Fichiers'));
+  assert.ok(component.includes('Écouter'));
+});
+
 test('le libellé « Salon » s’efface sur les écrans étroits', () => {
   assert.match(css, /@media \(max-width: 480px\)[\s\S]*?\.gs-room-chip-label\s*\{\s*display:\s*none/);
 });

@@ -31,6 +31,7 @@ const plugin = {
     return {};
   },
   openDownload: async () => '',
+  revealDownload: async () => {},
   addListener: async () => ({ remove: async () => {} }),
 };
 
