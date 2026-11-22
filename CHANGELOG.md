@@ -22,6 +22,42 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.23] — 2026-11-22
+
+### Ajouté
+
+- **Continuité en arrière-plan sur le bureau (Fedora, Debian, Windows, AppImage)**
+  — l'équivalent du service avant-plan Android :
+  - Fermer la fenêtre (croix) replie l'application dans la zone de
+    notification ; les transferts et la connexion continuent. Ce comportement
+    est demandé **une seule fois** (« Continuer en arrière-plan » / « Quitter »,
+    avec « Ne plus demander ») puis mémorisé — la convention de demande
+    d'autorisation du bureau. Le menu du tray et « Fichier → Quitter » quittent
+    toujours réellement.
+  - **Anti-veille système** pendant un transfert (`powerSaveBlocker`) :
+    l'ordinateur ne s'endort plus au milieu d'un fichier, quel que soit le plan
+    d'énergie, sans réglage manuel.
+  - Une notification bureau prévient de l'arrivée d'un fichier quand la
+    fenêtre est fermée ou cachée.
+
+- **Bouton « Annuler » sur chaque transfert actif** (envoi et réception, en
+  cours ou en pause) : finie l'obligation de quitter le salon pour arrêter un
+  transfert. L'annulation informe l'autre appareil, qui retire la ligne.
+
+### Corrigé
+
+- **Débit plafonné à ~170 Ko/s dans tous les cas** : les chunks de fichiers
+  circulaient en JSON texte (64 Ko → ~250 Ko sérialisés, parsés et
+  re-sérialisés deux fois, y compris dans le Durable Object). Les chunks
+  relais partent désormais en **pièce jointe binaire** WebSocket, forwardés à
+  l'identique par le serveur — le débit n'est plus limité que par le réseau
+  (déploiement Worker effectué dès le push ; les anciens clients restent
+  compatibles).
+- Boucle d'envoi : suppression du délai artificiel par chunk (5–25 ms, soit
+  ~40 blocs/s maximum) — la fenêtre de chunks en vol pilote le débit.
+- `user-left` jamais émis pour un client sans identité stable : le salon
+  gardait un « fantôme » pour toujours (test de protocole désormais au vert).
+
 ## [1.0.22] — 2026-11-22
 
 ### Corrigé
@@ -351,7 +387,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.22...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.23...HEAD
+[1.0.23]: https://github.com/stxtxm/global-share/compare/v1.0.22...v1.0.23
 [1.0.22]: https://github.com/stxtxm/global-share/compare/v1.0.21...v1.0.22
 [1.0.21]: https://github.com/stxtxm/global-share/compare/v1.0.20...v1.0.21
 [1.0.20]: https://github.com/stxtxm/global-share/compare/v1.0.19...v1.0.20

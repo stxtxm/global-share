@@ -1,6 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell } = require('electron');
+const {
+  app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell,
+  Notification, powerSaveBlocker,
+} = require('electron');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
@@ -21,6 +24,66 @@ const PACKAGED_WEB_ROOT = app.isPackaged
   ? path.join(process.resourcesPath, 'web')
   : path.join(__dirname, '..', 'out');
 let WEB_ROOT = PACKAGED_WEB_ROOT;
+
+// ---- Arrière-plan : icône tray + comportement de la croix ------------------
+// Comme le service avant-plan sous Android : la fenêtre fermée n'arrête pas
+// l'application, les transferts et la socket continuent ; l'appareil ne doit
+// pas se mettre en veille pendant un transfert (powerSaveBlocker, plus bas).
+// Le choix de la croix (« continuer en arrière-plan » ou « quitter ») est
+// demandé une seule fois puis mémorisé — équivalent de la demande de
+// permission Android, tenant à la convention des apps de bureau.
+let tray = null;
+let quitRequested = false;
+
+const PREFS_FILE = () => path.join(app.getPath('userData'), 'prefs.json');
+
+function loadPrefs() {
+  try {
+    return JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(prefs) {
+  try {
+    fs.writeFileSync(PREFS_FILE(), JSON.stringify(prefs));
+  } catch {
+    // Préférences non critiques : perdues plutôt que bloquer l'app.
+  }
+}
+
+function showMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else if (staticServer) {
+    mainWindow = createWindow(staticServer.address().port);
+  }
+}
+
+function createTray() {
+  if (tray) return;
+  try {
+    const image = nativeImage.createFromPath(ICON_FILE);
+    tray = new Tray(image.isEmpty() ? image : image.resize({ width: 24, height: 24 }));
+    tray.setToolTip('GlobalShare tourne en arrière-plan');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Ouvrir GlobalShare', click: showMainWindow },
+      { type: 'separator' },
+      {
+        label: 'Quitter',
+        click: () => {
+          quitRequested = true;
+          app.quit();
+        },
+      },
+    ]));
+    tray.on('click', showMainWindow);
+  } catch {
+    // Environnement sans zone de notification : l'app fonctionne pareil.
+  }
+}
 
 // Activation des mises à jour web uniquement dans la version installée :
 // ce module ne connaît ni Electron ni le réseau, tout est injecté ici.
@@ -123,10 +186,35 @@ function registerDownloadHandlers() {
       await fs.promises.mkdir(dir, { recursive: true });
       const target = freeFileName(dir, safeFileName(payload?.name));
       await fs.promises.writeFile(target, Buffer.from(bytes));
+      // Fenêtre réduite ou cachée : prévenir qu'un fichier est arrivé, comme
+      // le service avant-plan informe sur Android.
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        try {
+          new Notification({
+            title: 'GlobalShare',
+            body: `Fichier reçu : ${path.basename(target)}`,
+            icon: ICON_FILE,
+          }).show();
+        } catch { /* notifications indisponibles : rien d'option */ }
+      }
       return { path: target };
     } catch (error) {
       return { error: `Enregistrement impossible : ${String(error?.message || error)}` };
     }
+  });
+
+  // Transferts actifs : suspendre la mise en veille de la machine (équivalent
+  // du wake lock Android) tant qu'un fichier circule.
+  let powerBlockerId = null;
+  ipcMain.handle('globalshare:set-transfers-active', (_event, count) => {
+    const active = Number(count) > 0;
+    if (active && powerBlockerId === null) {
+      powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    } else if (!active && powerBlockerId !== null) {
+      powerSaveBlocker.stop(powerBlockerId);
+      powerBlockerId = null;
+    }
+    return true;
   });
 
   const insideDownloads = (filePath) => {
@@ -257,6 +345,43 @@ function createWindow(port) {
     if (mainWindow === window) mainWindow = null;
   });
 
+  // Croix de la fenêtre : une première fois, demander si les transferts doivent
+  // continuer en arrière-plan (équivalent de la demande de permission
+  // Android). Le choix est mémorisé ; le tray et « Fichier → Quitter »
+  // quittent toujours réellement.
+  window.on('close', (event) => {
+    if (quitRequested) return;
+    const prefs = loadPrefs();
+    if (prefs.closeAction === 'background') {
+      event.preventDefault();
+      window.hide();
+      return;
+    }
+    if (prefs.closeAction === 'quit') return;
+    event.preventDefault();
+    void dialog.showMessageBox(window, {
+      type: 'question',
+      buttons: ["Continuer en arrière-plan", "Quitter", "Annuler"],
+      defaultId: 0,
+      cancelId: 2,
+      checkboxLabel: 'Ne plus demander',
+      checkboxChecked: false,
+      title: 'GlobalShare',
+      message: 'Laisser GlobalShare continuer en arrière-plan ?',
+      detail: 'La fenêtre se replie dans la zone de notification et les transferts en cours continuent. Vous retrouverez l\'application dans le tray, avec « Quitter » dans son menu.',
+    }).then(({ response, checkboxChecked }) => {
+      if (response === 2) return; // Annulé : la fenêtre reste ouverte.
+      if (checkboxChecked) {
+        savePrefs({ ...loadPrefs(), closeAction: response === 0 ? 'background' : 'quit' });
+      }
+      if (response === 0) window.hide();
+      else {
+        quitRequested = true;
+        app.quit();
+      }
+    }).catch(() => { /* boîte impossible : ne pas fermer brutalement */ });
+  });
+
   // Un lien sortant (dont le lien de salon vers le site) part dans le
   // navigateur par défaut, jamais dans une fenêtre Electron sans barre d'adresse.
   const openExternal = (url) => {
@@ -347,6 +472,13 @@ function buildMenu() {
 async function start() {
   app.setAppUserModelId(APP_ID);
   registerDownloadHandlers();
+  createTray();
+
+  // Menu « Fichier → Quitter », raccourcis clavier : quitter pour de vrai,
+  // sans passer par la demande de la croix.
+  app.on('before-quit', () => {
+    quitRequested = true;
+  });
 
   if (!fs.existsSync(path.join(WEB_ROOT, 'index.html'))) {
     dialog.showErrorBox(

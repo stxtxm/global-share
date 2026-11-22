@@ -486,6 +486,15 @@
   border-color: var(--gs-border);
 }
 
+.gs-btn--danger {
+  color: var(--gs-danger);
+}
+
+.gs-btn--danger:active {
+  border-color: rgba(251, 113, 133, 0.6);
+  background: rgba(251, 113, 133, 0.12);
+}
+
 .gs-btn--block {
   width: 100%;
 }

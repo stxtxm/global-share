@@ -128,6 +128,40 @@ async function main() {
   }
   console.log('binary relay ok');
 
+  // transfer-chunk binaire : le contenu de fichier doit repartir intact vers
+  // le destinataire, avec l'identité de l'expéditeur ajoutée.
+  const chunkPromise = waitFor(bob, 'transfer-chunk');
+  alice.emit('transfer-chunk', {
+    target: bob.id,
+    transferId: 't-1.test',
+    seq: 7,
+    size: 5,
+    chunk: new Uint8Array([9, 8, 7, 6, 5]),
+  });
+  const [chunk] = await chunkPromise;
+  if (chunk.from !== alice.id) throw new Error('chunk from mismatch');
+  if (chunk.seq !== 7) throw new Error('chunk seq mismatch');
+  if (Array.from(chunk.chunk).join(',') !== '9,8,7,6,5') {
+    throw new Error('chunk payload mismatch');
+  }
+  console.log('binary transfer-chunk relay ok');
+
+  // transfer-chunk texte (anciens clients) : toujours relayé par le chemin JSON.
+  const textChunkPromise = waitFor(bob, 'transfer-chunk');
+  alice.emit('transfer-chunk', {
+    target: bob.id,
+    transferId: 't-2.test',
+    seq: 1,
+    size: 3,
+    chunk: [4, 5, 6],
+  });
+  const [textChunk] = await textChunkPromise;
+  if (textChunk.seq !== 1) throw new Error('text chunk seq mismatch');
+  if (Array.from(textChunk.chunk).join(',') !== '4,5,6') {
+    throw new Error('text chunk payload mismatch');
+  }
+  console.log('text transfer-chunk relay ok');
+
   const metaPromise = waitFor(bob, 'relay-data');
   alice.emit('relay-data', {
     target: bob.id,
@@ -174,7 +208,9 @@ async function main() {
   console.log(`burst ok (${received.length} chunks, ${received.length * size} bytes)`);
 
   const bobId = bob.id;
-  const leftPromise = waitFor(alice, 'user-left');
+  // Le départ n'est annoncé qu'après la grâce de reconnexion (30 s) : le
+  // minuteur du test doit couvrir ce délai, sinon le test échoue à tort.
+  const leftPromise = waitFor(alice, 'user-left', 40_000);
   bob.disconnect();
   const [leftId] = await leftPromise;
   if (leftId !== bobId) throw new Error('user-left id mismatch');

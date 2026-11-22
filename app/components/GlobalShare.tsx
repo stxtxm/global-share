@@ -353,6 +353,8 @@ declare global {
       }) => Promise<{ path?: string; error?: string }>;
       openDownload: (filePath: string) => Promise<string>;
       revealDownload: (filePath: string) => Promise<string>;
+      /** Prévient l'arrière-plan (anti-veille, tray) du nombre de transferts actifs. */
+      setTransfersActive?: (count: number) => Promise<unknown>;
     } & DesktopUpdateBridge;
   }
 }
@@ -485,6 +487,9 @@ export default function GlobalShare() {
       mobileStopTransfer();
       nativeTransferStartedRef.current = false;
     }
+    // Bureau : anti-veille système pendant les transferts (équivalent du
+    // service avant-plan Android) ; ne fait rien sur le web/le mobile.
+    void window.globalshareDesktop?.setTransfersActive?.(nativeTransferCount);
   }, [nativeTransferCount, nativeTransferProgress]);
 
   useEffect(() => {
@@ -686,11 +691,11 @@ export default function GlobalShare() {
         // sinon une pause ou une coupure laissait un trou définitif dans le
         // fichier, et la reprise ne pouvait plus aboutir.
         if (manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) sendT.nextSeq++;
-        const speedRatio = Math.min(sendT.speed / 2_000_000, 1);
-        transferTimeoutRef.current = setTimeout(
-          () => sendLoop(),
-          lan ? 0 : 5 + Math.floor(20 * (1 - speedRatio))
-        );
+        // Le flow control, c'est la fenêtre de chunks en vol (et le plafond de
+        // tampon SCTP en direct) : plus de délai artificiel par chunk, qui
+        // plafonnait le débit à ~40 blocs/s en relais comme en direct. Une
+        // micro-pause garde la page réactive ; en LAN, zéro.
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), lan ? 0 : 2);
       } finally {
         sendLoopRunningRef.current = false;
       }
@@ -1862,6 +1867,18 @@ export default function GlobalShare() {
                         onClick={() => (t.status === 'paused' ? managerRef.current?.resume(t.id) : managerRef.current?.pause(t.id))}
                       >
                         {t.status === 'paused' ? '▶ Reprendre' : '⏸ Pause'}
+                      </button>
+                    )}
+                    {/* Annulation d'un transfert actif, envoi comme réception :
+                        plus besoin de quitter le salon. */}
+                    {(t.status === 'transferring' || t.status === 'paused') && (
+                      <button
+                        type="button"
+                        className="gs-btn gs-btn--ghost gs-btn--sm gs-btn--danger"
+                        style={{ flexShrink: 0 }}
+                        onClick={() => managerRef.current?.cancel(t.id, 'Annulé')}
+                      >
+                        Annuler
                       </button>
                     )}
                     {t.direction === 'send' && t.status === 'interrupted' && !fileRefs.current.has(t.id) && (

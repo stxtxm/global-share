@@ -502,7 +502,8 @@ export class TransferManager {
     transferId: string;
     seq: number;
     size: number;
-    chunk: number[] | Uint8Array;
+    /** Binaire socket.io (ArrayBuffer), TypedArray direct, ou JSON (anciens clients). */
+    chunk: number[] | Uint8Array | ArrayBuffer;
     target: string;
     /** Chemin réel de ce chunk ; absent = relais (les chunks socket passent par là). */
     via?: 'p2p' | 'relay';
@@ -811,11 +812,16 @@ export class TransferManager {
       t.transport = 'relay';
       this.onStatus(t);
     }
+    // Le chunk part en pièce jointe binaire (socket.io replace le TypedArray
+    // par une pièce jointe WS reconstruite à l'arrivée) : le relais ne
+    // sérialise ni ne parse plus le contenu. L'ancien format JSON
+    // (`Array.from`) restait lisible côté destinataire mais plafonnait le
+    // débit à quelques centaines de Ko/s.
     this._emit('transfer-chunk', {
       transferId: t.id,
       seq,
       size: chunk.length,
-      chunk: Array.from(chunk),
+      chunk,
       target: t.targetId,
     });
   }

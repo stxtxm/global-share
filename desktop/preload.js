@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('globalshareDesktop', {
   openDownload: (filePath) => ipcRenderer.invoke('globalshare:open-download', filePath),
   revealDownload: (filePath) => ipcRenderer.invoke('globalshare:reveal-download', filePath),
 
+  // Nombre de transferts actifs : l'arrière-plan (anti-veille système) est
+  // maintenu tant que des fichiers circulent, fenêtre fermée ou pas.
+  setTransfersActive: (count) => ipcRenderer.invoke('globalshare:set-transfers-active', count),
+
   // Mises à jour : l'état est poussé par le main, les actions sont demandées
   // par l'interface. Les callbacks sont sans argument côté page.
   getUpdateState: () => ipcRenderer.invoke('globalshare:update-state'),

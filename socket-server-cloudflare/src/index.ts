@@ -608,6 +608,22 @@ export class GlobalRoom {
         ],
         attachments
       );
+      return;
+    }
+
+    // Chunks de fichiers en binaire (le client remplace le TypedArray par une
+    // pièce jointe, reconstituée chez le destinataire) : le contenu n'est ni
+    // parsé ni resérialisé, la vitesse du relais n'est plus plafonnée par le
+    // JSON. Les anciens clients envoient toujours du texte, géré plus haut.
+    if (eventName === 'transfer-chunk') {
+      this.sendBinaryEvent(
+        target,
+        [
+          'transfer-chunk',
+          { ...(payload as Record<string, unknown>), from: this.peerIdOf(client) },
+        ],
+        attachments
+      );
     }
   }
 
@@ -631,6 +647,10 @@ export class GlobalRoom {
     if (peerId) {
       if (this.bySession.get(peerId) === client) this.bySession.delete(peerId);
       if (roomId) this.scheduleLeave(roomId, peerId);
+    } else if (roomId) {
+      // Sans identité stable, pas de grâce de reconnexion possible : le départ
+      // est annoncé immédiatement (sinon le salon garde un fantôme à jamais).
+      this.broadcastEvent(roomId, 'user-left', client.id);
     }
 
     this.stopPingTimerIfIdle();
