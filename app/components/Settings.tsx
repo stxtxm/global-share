@@ -147,9 +147,13 @@ export function Settings({ isOpen, onClose, setSettingsOpen }: SettingsProps) {
 
   // Load settings on mount
   useEffect(() => {
-    const saved = loadSettings();
-    setSettings(saved);
-    setTempSettings(saved);
+    // Différé : évite un setState synchrone dans le corps de l'effet
+    // (rendu en cascade — règle eslint react-compiler).
+    queueMicrotask(() => {
+      const saved = loadSettings();
+      setSettings(saved);
+      setTempSettings(saved);
+    });
   }, []);
 
   // Manage body overflow when modal is open
@@ -158,7 +162,7 @@ export function Settings({ isOpen, onClose, setSettingsOpen }: SettingsProps) {
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
-      setIsClosing(false);
+      queueMicrotask(() => setIsClosing(false));
     } else {
       document.body.style.overflow = '';
     }
