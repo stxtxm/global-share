@@ -499,15 +499,14 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 22px;
-  padding: 18px var(--gs-gutter) calc(28px + env(safe-area-inset-bottom));
+  gap: 20px;
+  padding: 10px var(--gs-gutter) calc(30px + env(safe-area-inset-bottom));
 }
 
 .gs-hero h1 {
-  margin: 0 0 10px;
-  font-size: clamp(1.8rem, 7.2vw, 2.5rem);
-  line-height: 1.1;
+  margin: 0 0 8px;
+  font-size: clamp(1.65rem, 6.6vw, 2.2rem);
+  line-height: 1.12;
   letter-spacing: -0.035em;
   font-weight: 800;
   background: linear-gradient(180deg, #ffffff, #c3c7d8);
@@ -518,16 +517,216 @@
 
 .gs-hero p {
   margin: 0;
-  max-width: 42ch;
-  font-size: 0.94rem;
+  max-width: 44ch;
+  font-size: 0.92rem;
   line-height: 1.55;
   color: var(--gs-dim);
 }
 
+/* Création instantanée : le plus petit chiffre de salon libre. */
+.gs-instant {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  text-align: left;
+  padding: 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(167, 139, 250, 0.34);
+  background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(34, 211, 238, 0.07)),
+    var(--gs-surface);
+  color: var(--gs-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 26px 52px -34px rgba(139, 92, 246, 0.6);
+  transition: transform 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+
+.gs-instant:active {
+  transform: scale(0.985);
+  filter: brightness(1.08);
+}
+
+.gs-instant:focus-visible {
+  outline: none;
+  border-color: rgba(167, 139, 250, 0.8);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.16);
+}
+
+.gs-instant-digit {
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  flex: none;
+  border-radius: 19px;
+  font-size: 2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 14px 26px -14px rgba(139, 92, 246, 0.85);
+}
+
+.gs-instant-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gs-instant-text strong {
+  font-size: 1.06rem;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.gs-instant-text span {
+  font-size: 0.8rem;
+  color: var(--gs-dim);
+}
+
+.gs-instant-arrow {
+  flex: none;
+  color: #c4b5fd;
+}
+
+/* Sections de l'accueil : salons ouverts, salons récents. */
+.gs-list-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--gs-dim);
+}
+
+.gs-list-more {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gs-accent);
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.gs-list-more:active {
+  opacity: 0.7;
+}
+
+.gs-roompills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gs-roompill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 10px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--gs-border-strong);
+  background: var(--gs-surface);
+  color: var(--gs-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.gs-roompill:active {
+  transform: scale(0.96);
+  border-color: rgba(167, 139, 250, 0.55);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.gs-roompill-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.98rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.gs-roompill-meta {
+  font-size: 0.72rem;
+  color: var(--gs-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Historique des salons, dans la feuille modale. */
+.gs-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gs-roomrow {
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+  animation: gs-item-in 0.22s ease both;
+}
+
+.gs-roomrow-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: var(--gs-tap);
+  padding: 10px 14px;
+  border-radius: var(--gs-radius-sm);
+  border: 1px solid var(--gs-border);
+  background: var(--gs-surface);
+  color: var(--gs-text);
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.gs-roomrow-main:active {
+  border-color: rgba(167, 139, 250, 0.55);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.gs-roomrow-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.gs-roomrow-meta {
+  font-size: 0.74rem;
+  color: var(--gs-dim);
+}
+
+.gs-roomrow-forget {
+  align-self: center;
+  color: var(--gs-dim);
+}
+
+.gs-empty--sheet {
+  padding: 16px 6px;
+}
+
+/* Formulaire secondaire : rejoindre avec un code connu. */
 .gs-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 13px;
   padding: 16px;
   border-radius: var(--gs-radius);
   border: 1px solid var(--gs-border);
@@ -540,12 +739,15 @@
 .gs-field {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
+.gs-label,
 .gs-field label {
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   color: var(--gs-dim);
 }
 
@@ -576,33 +778,10 @@
 
 .gs-input--code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 1.15rem;
+  font-size: 1.12rem;
   font-weight: 700;
-  letter-spacing: 0.26em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-}
-
-.gs-hint {
-  font-size: 0.75rem;
-  color: #737b8e;
-}
-
-.gs-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.gs-steps li {
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--gs-border);
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 0.72rem;
-  color: var(--gs-dim);
 }
 
 /* --- Contenu du salon ---------------------------------------------------- */

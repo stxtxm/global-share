@@ -36,6 +36,17 @@ import {
   mobileUpdateTransfer,
 } from '../lib/mobile-bridge';
 import { UpdateBanner, UpdateTrigger } from './UpdateManager';
+import {
+  fetchLiveRooms,
+  clearRoomHistory,
+  forgetRoom as forgetStoredRoom,
+  formatRoomAge,
+  loadRoomHistory,
+  pickInstantCode,
+  rememberRoom,
+  type LiveRoom,
+  type RoomHistoryEntry,
+} from '../lib/rooms';
 
 const MAX_IN_FLIGHT_CHUNKS = 8;
 import './GlobalShare.css';
@@ -282,6 +293,16 @@ function IconDevices({ className = 'gs-icon' }: IconProps) {
   );
 }
 
+function IconHistory({ className = 'gs-icon' }: IconProps) {
+  return (
+    <svg {...iconProps} className={className}>
+      <path d="M4 5.5v4h4" />
+      <path d="M4.6 9.5a8 8 0 1 1-.6 3" />
+      <path d="M12 8.5V12l2.8 1.8" />
+    </svg>
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
@@ -340,6 +361,11 @@ export default function GlobalShare() {
   // Encart de mise à jour : ouvert depuis le bouton de la barre supérieure,
   // depuis le menu Aide d'Electron, ou automatiquement quand une maj arrive.
   const [updateOpen, setUpdateOpen] = useState(false);
+  // Accueil instantané : salons ouverts à cet instant, historique local des
+  // salons de cet appareil, et menu déroulant correspondant.
+  const [liveRooms, setLiveRooms] = useState<LiveRoom[]>([]);
+  const [roomHistory, setRoomHistory] = useState<RoomHistoryEntry[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null);
@@ -819,6 +845,9 @@ export default function GlobalShare() {
       } catch {
         // Stockage refusé : on ne pourra simplement pas rejoindre tout seul.
       }
+      // Historique local : le salon remonte en tête de l'accueil.
+      rememberRoom(effectiveRoomId, effectiveName);
+      setRoomHistory(loadRoomHistory());
       setStep('room');
       // Retour en ligne : les transferts interrompus repartent d'eux-mêmes, le
       // temps que le pair se réenregistre dans le salon.
@@ -905,8 +934,26 @@ export default function GlobalShare() {
     });
   }, [joinRoom]);
 
-  const exitRoom = useCallback(() => {
-    try {
+  // ---- Accueil : historique local + salons ouverts en direct ----
+  // Jetés un coup d'œil seulement quand on est sur l'accueil ; l'échec réseau
+  // n'affiche rien, l'accueil doit rester instantané.
+  useEffect(() => {
+    if (step !== 'welcome') return;
+    setRoomHistory(loadRoomHistory());
+    let cancelled = false;
+    const refresh = async () => {
+      const rooms = await fetchLiveRooms();
+      if (!cancelled) setLiveRooms(rooms);
+    };
+    void refresh();
+    const id = setInterval(() => void refresh(), 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [step]);
+
+  const exitRoom = useCallback(() => {    try {
       window.sessionStorage.removeItem(LAST_ROOM_KEY);
     } catch {
       // ignore
@@ -1234,6 +1281,10 @@ export default function GlobalShare() {
 
   // ---- Écran d accueil ----
   if (step === 'welcome') {
+    // Suggestion instantanée : le plus petit chiffre de salon sans personne
+    // dedans, recalculé à chaque rafraîchissement des salons ouverts.
+    const instantCode = pickInstantCode(liveRooms.map(room => room.roomId));
+    const live = [...liveRooms].sort((a, b) => a.roomId.localeCompare(b.roomId));
     return (
       <div className="gs-app gs-app--welcome">
         <div className="gs-glow" aria-hidden="true" />
@@ -1242,17 +1293,96 @@ export default function GlobalShare() {
             <span className="gs-brand-mark"><IconBolt /></span>
             <span>GlobalShare</span>
           </Link>
-          <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
+          <div className="gs-topbar-right">
+            <button
+              type="button"
+              className="gs-iconbtn"
+              onClick={() => {
+                setRoomHistory(loadRoomHistory());
+                setHistoryOpen(true);
+              }}
+              aria-label="Salons récents"
+              title="Salons récents"
+            >
+              <IconHistory />
+            </button>
+            <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />
+          </div>
         </header>
         <UpdateBanner open={updateOpen} onOpenChange={setUpdateOpen} />
         <main className="gs-welcome-main">
           <div className="gs-hero">
             <h1>Partagez un fichier, pas un compte</h1>
-            <p>Le même code sur deux appareils suffit. Le fichier part directement, sans inscription.</p>
+            <p>Passez le même code aux deux appareils. Direct, sans inscription.</p>
           </div>
+
+          {/* Création instantanée : le premier chiffre de salon libre */}
+          <button
+            type="button"
+            className="gs-instant"
+            onClick={() => joinRoom(instantCode)}
+          >
+            <span className="gs-instant-digit" aria-hidden="true">{instantCode}</span>
+            <span className="gs-instant-text">
+              <strong>Créer le salon {instantCode}</strong>
+              <span>Un seul chiffre à retenir, libre à l’instant</span>
+            </span>
+            <IconBolt className="gs-icon gs-icon--sm gs-instant-arrow" />
+          </button>
+
+          {live.length > 0 && (
+            <section className="gs-live" aria-label="Salons ouverts maintenant">
+              <h2 className="gs-list-title">Salons ouverts</h2>
+              <div className="gs-roompills">
+                {live.map(room => (
+                  <button
+                    key={room.roomId}
+                    type="button"
+                    className="gs-roompill"
+                    onClick={() => joinRoom(room.roomId)}
+                  >
+                    <span className="gs-roompill-code">{room.roomId}</span>
+                    <span className="gs-roompill-meta">
+                      {room.users} appareil{room.users > 1 ? 's' : ''}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {roomHistory.length > 0 && (
+            <section className="gs-live" aria-label="Vos salons récents">
+              <h2 className="gs-list-title">
+                Vos salons
+                <button
+                  type="button"
+                  className="gs-list-more"
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  Tout voir
+                </button>
+              </h2>
+              <div className="gs-roompills">
+                {roomHistory.slice(0, 3).map(entry => (
+                  <button
+                    key={entry.roomId}
+                    type="button"
+                    className="gs-roompill"
+                    onClick={() => joinRoom(entry.roomId, entry.name)}
+                  >
+                    <span className="gs-roompill-code">{entry.roomId}</span>
+                    <span className="gs-roompill-meta">{formatRoomAge(entry.lastUsed)}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Rejoindre avec un code connu ou un code généré */}
           <div className="gs-card">
-            <div className="gs-field">
-              <label htmlFor="gs-name">Votre appareil</label>
+            <div className="gs-field gs-field--row">
+              <label htmlFor="gs-name" className="gs-label">Votre appareil</label>
               <input
                 id="gs-name"
                 className="gs-input"
@@ -1263,23 +1393,23 @@ export default function GlobalShare() {
                 enterKeyHint="next"
               />
             </div>
-            <div className="gs-field">
-              <label htmlFor="gs-room">Code du salon</label>
+            <div className="gs-field gs-field--row">
+              <label htmlFor="gs-room" className="gs-label">Code</label>
               <input
                 id="gs-room"
                 className="gs-input gs-input--code"
                 value={roomId}
                 onChange={e => setRoomId(e.target.value.toUpperCase())}
-                placeholder="A1B2C3"
+                placeholder="1, 42 ou A1B2C3"
                 onKeyDown={handleKeyDown}
                 autoCapitalize="characters"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
                 maxLength={12}
+                inputMode="text"
                 enterKeyHint="go"
               />
-              <span className="gs-hint">Le même code sur les deux appareils.</span>
             </div>
             <button
               type="button"
@@ -1295,15 +1425,82 @@ export default function GlobalShare() {
               onClick={() => setRoomId(generateRoomId())}
             >
               <IconBolt className="gs-icon gs-icon--sm" />
-              Générer un code
+              Générer un code privé
             </button>
           </div>
-          <ul className="gs-steps" aria-label="Comment ça marche">
-            <li>1. Code partagé</li>
-            <li>2. Appareils reliés</li>
-            <li>3. Envoi direct</li>
-          </ul>
         </main>
+
+        {historyOpen && (
+          <div className="gs-overlay" onClick={() => setHistoryOpen(false)}>
+            <div
+              className="gs-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="gs-history-title"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="gs-sheet-handle" aria-hidden="true" />
+              <div className="gs-sheet-title" id="gs-history-title">Salons récents</div>
+              <div className="gs-sheet-body">
+                {roomHistory.length === 0 ? (
+                  <div className="gs-empty gs-empty--sheet">
+                    <span className="gs-empty-icon" aria-hidden="true"><IconHistory /></span>
+                    <strong>Aucun salon récent</strong>
+                    <span>Les salons créés ou rejoints depuis cet appareil apparaîtront ici.</span>
+                  </div>
+                ) : (
+                  <div className="gs-history-list">
+                    {roomHistory.map(entry => (
+                      <div key={entry.roomId} className="gs-roomrow">
+                        <button
+                          type="button"
+                          className="gs-roomrow-main"
+                          onClick={() => {
+                            setHistoryOpen(false);
+                            joinRoom(entry.roomId, entry.name);
+                          }}
+                        >
+                          <span className="gs-roomrow-code">{entry.roomId}</span>
+                          <span className="gs-roomrow-meta">
+                            {entry.name ? `${entry.name} · ` : ''}
+                            {formatRoomAge(entry.lastUsed)}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="gs-iconbtn gs-roomrow-forget"
+                          aria-label={`Retirer le salon ${entry.roomId}`}
+                          title="Retirer"
+                          onClick={() => setRoomHistory(forgetStoredRoom(entry.roomId))}
+                        >
+                          <IconTrash className="gs-icon gs-icon--sm" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {roomHistory.length > 0 && (
+                <div className="gs-sheet-actions">
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn--ghost"
+                    onClick={() => {
+                      clearRoomHistory();
+                      setRoomHistory([]);
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    Effacer tout
+                  </button>
+                  <button type="button" className="gs-btn gs-btn--primary" onClick={() => setHistoryOpen(false)}>
+                    Fermer
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

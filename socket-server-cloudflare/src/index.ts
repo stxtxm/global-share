@@ -155,6 +155,34 @@ export default {
       return handleTurn(env, request.headers.get('Origin'));
     }
 
+    if (url.pathname === '/rooms') {
+      // Salons réellement ouverts (avec les déconnexions gracieuses en
+      // attente) : la page d'accueil s'en sert pour créer un salon d'un
+      // chiffre garanti libre, et pour lister les salons existants.
+      if (request.method !== 'GET') {
+        return new Response('Method not allowed.', { status: 405 });
+      }
+      if (!isAllowedOrigin(request.headers.get('Origin'))) {
+        return new Response('Origin not allowed.', { status: 403 });
+      }
+      const id = env.ROOMS.idFromName('global');
+      const response = await env.ROOMS.get(id)
+        .fetch(new Request('https://do.internal/rooms', { method: 'GET' }));
+      const body = await response.text();
+      const origin = request.headers.get('Origin');
+      return new Response(body, {
+        status: response.status,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          // Même politique CORS que le WebSocket : même origine, ou « * » pour
+          // les clients natifs (APK, desktop) sans en-tête Origin.
+          'access-control-allow-origin': origin && ALLOWED_ORIGINS.has(origin) ? origin : '*',
+          vary: 'Origin',
+        },
+      });
+    }
+
     if (url.pathname.startsWith('/socket.io/')) {
       const upgrade = request.headers.get('Upgrade');
       if (upgrade?.toLowerCase() !== 'websocket') {
@@ -190,6 +218,18 @@ export class GlobalRoom {
   async fetch(request: Request): Promise<Response> {
     const upgrade = request.headers.get('Upgrade');
     if (upgrade?.toLowerCase() !== 'websocket') {
+      // Instantané des salons, demandé par le Worker (https://do.internal/rooms).
+      const url = new URL(request.url);
+      if (url.hostname === 'do.internal' && url.pathname === '/rooms') {
+        const rooms = [...this.rooms.entries()]
+          .filter(([, users]) => users.size > 0)
+          .map(([room, users]) => ({ roomId: room, users: users.size }))
+          .sort((a, b) => b.users - a.users || a.roomId.localeCompare(b.roomId))
+          .slice(0, 100);
+        return new Response(JSON.stringify({ rooms }), {
+          headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+        });
+      }
       return new Response('Expected a WebSocket upgrade.', { status: 400 });
     }
 

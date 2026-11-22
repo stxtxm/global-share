@@ -22,6 +22,28 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
    déploiement, sans réinstallation : l'entrée doit le préciser, sinon on croit
    à tort qu'une nouvelle version de l'application est nécessaire.
 
+## [1.0.18] — 2026-11-22
+
+### Ajouté
+
+- **Création instantanée à un chiffre** : sur l'accueil, une grande carte
+  « Créer le salon 1 » (ou 2, 3…) propose le plus petit chiffre de salon qui
+  n'a personne dedans à cet instant — un appui et on y est. Si les neuf
+  chiffres sont occupés, le code s'étend à deux chiffres.
+- **Salons ouverts en direct** : la liste réelle des salons servis par le
+  serveur (avec leur nombre d'appareils) s'affiche sur l'accueil et se
+  rejoint d'un appui. Nouvel endpoint `GET /rooms` du serveur Socket.IO.
+- **Menu « Salons récents »** : l'icône horloge de la barre supérieure ouvre
+  la liste des salons créés ou rejoints depuis l'appareil (12 derniers),
+  rejoints d'un appui, oubliables un par un ou en bloc.
+
+### Modifié
+
+- Accueil réorganisé pour aller vite : création instantanée en premier,
+  salons ouverts, salons récents, puis le code aléatoire classique en bas.
+  Titres de section, pastilles et formulaires resserrés ; pas de changement
+  du salon actif ni du moteur de transfert.
+
 ## [1.0.17] — 2026-11-22
 
 ### Modifié
@@ -259,7 +281,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.17...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.18...HEAD
+[1.0.18]: https://github.com/stxtxm/global-share/compare/v1.0.17...v1.0.18
 [1.0.17]: https://github.com/stxtxm/global-share/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/stxtxm/global-share/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/stxtxm/global-share/compare/v1.0.14...v1.0.15

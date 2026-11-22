@@ -91,6 +91,9 @@ Update that value if the Worker name/subdomain changes, then push or merge to
 ## API
 
 - `GET /health` — health check.
+- `GET /rooms` — snapshot of currently open rooms:
+  `{"rooms":[{"roomId":"1","users":2}]}` (max 100, live rooms with their
+  connected device count). Same CORS policy as the WebSocket.
 - `GET /socket.io/?EIO=4&transport=websocket` — Socket.IO WebSocket endpoint.
 - Events: `join-room`, `room-users`, `user-joined`, `user-left`, `offer`,
   `answer`, `ice-candidate`, `relay-data`.
