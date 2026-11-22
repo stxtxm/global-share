@@ -67,6 +67,8 @@ export interface TransferState {
   /** Dernière réconciliation envoyée au pair (anti-tempête), côté réception. */
   lastResyncAt?: number;
   lastResyncBytes?: number;
+  /** Nombre de resync successives au même octet (sortie de boucle infinie). */
+  resyncCount: number;
 }
 
 export interface TransferInitPayload {
@@ -276,6 +278,7 @@ export class TransferManager {
       integrity: 'unknown',
       eofTimer: null,
       awaitingResync: false,
+      resyncCount: 0,
     };
     this.transfers.set(id, t);
     this._announce(t, false);
@@ -329,6 +332,7 @@ export class TransferManager {
       integrity: 'unknown',
       eofTimer: null,
       awaitingResync: true,
+      resyncCount: 0,
       error: 'Fichier à resélectionner',
     };
     this.transfers.set(t.id, t);
@@ -387,6 +391,7 @@ export class TransferManager {
       integrity: 'unknown',
       eofTimer: null,
       awaitingResync: false,
+      resyncCount: 0,
     };
     this.transfers.set(id, t);
     this.onUpdate(t);
@@ -625,7 +630,12 @@ export class TransferManager {
         t.rttMs = t.rttMs === 0 ? rtt : t.rttMs * 0.7 + rtt * 0.3;
       }
     }
-    t.ackAttempts.delete(payload.seq);
+    // On ne remet JAMAIS le budget à zéro sur un ACK, même arrivé dans les
+    // temps : c'était le cercle vicieux « retransmission → ACK tardif → budget
+    // remis à zéro → retransmission » qui figeait le transfert à 50 % sur un
+    // relais saturé. Le compteur reste comme historique de ce chunk ; _seekTo
+    // (reprise) et clear() s'en chargent. Un chunk acquitté n'est plus
+    // retransmis de toute façon (son minuteur est effacé juste après).
     const ackTimer = t.ackTimers.get(payload.seq);
     if (ackTimer) clearTimeout(ackTimer);
     t.ackTimers.delete(payload.seq);
@@ -649,6 +659,15 @@ export class TransferManager {
       // Répondre où reprendre : sinon l'expéditeur réémet l'EOF en boucle sans
       // jamais connaître notre état (lui à 100 %, nous figés à 25 %).
       const have = this._prefixBytes(t);
+      t.resyncCount = t.lastResyncBytes === have ? t.resyncCount + 1 : 0;
+      if (t.resyncCount >= 3) {
+        const reason = `Transfert bloqué : il manque des données à ${have} octets.`;
+        this._setStatus(t, 'failed', reason);
+        this._emit('transfer-end', {
+          transferId: t.id, status: 'failed', reason, target: t.targetId,
+        });
+        return;
+      }
       if (t.lastResyncBytes !== have || Date.now() - (t.lastResyncAt ?? 0) > 5000) {
         t.lastResyncAt = Date.now();
         t.lastResyncBytes = have;
@@ -848,6 +867,15 @@ export class TransferManager {
     t.pending.clear();
     t.ackedSeqs.clear();
     const clamped = Math.max(0, Math.min(bytes, t.file.size));
+    // Si le destinataire redemande trois fois la même position, la reprise ne
+    // fait que recycler la même frontière : on échoue proprement avec un
+    // message explicite plutôt que de rester figé à 50 % indéfiniment.
+    if (t.lastResyncBytes === clamped && t.resyncCount >= 2) {
+      this.cancel(t.id, `Transfert bloqué : rien n'arrive à ${clamped} octets.`);
+      return;
+    }
+    t.resyncCount = t.lastResyncBytes === clamped ? t.resyncCount + 1 : 0;
+    t.lastResyncBytes = clamped;
     // La reprise se fait toujours sur une frontière de chunk.
     const aligned = Math.floor(clamped / t.chunkSize) * t.chunkSize;
     t.awaitingResync = false;
@@ -859,6 +887,7 @@ export class TransferManager {
     t.window = null;
     t.sentAt.clear();
     t.ackAttempts.clear();
+    t.rttMs = 0;
     t.status = 'transferring';
     t.error = undefined;
     t.lastActivity = Date.now();
@@ -936,15 +965,19 @@ export class TransferManager {
    * suite. Par le relais, latence et gigue imposent de laisser plus de marge.
    */
   private _ackTimeoutBase(t: TransferState): number {
-    // L'ancien délai fixe de 15 s immobilisait un créneau pendant un quart de
-    // minute sur un simple ACK perdu. On le dimensionne maintenant d'après le
-    // RTT mesuré (5× la moyenne lissée, au moins 3 s).
-    if (t.rttMs > 0) return Math.min(20_000, Math.max(3000, Math.round(t.rttMs * 5)));
-    return t.method === 'p2p' ? 5000 : 8000;
+    // Plancher de 8 s : avec 12 Mo en vol sur le relais, un ACK met plusieurs
+    // secondes à revenir dès que la file est pleine. Un plancher à 3 s
+    // déclenchait 24 réémissions simultanées et un livelock (plus de
+    // progression, débit pourtant non nul). Le RTT ne fait qu'augmenter la
+    // marge, jamais la réduire sous ce plancher.
+    if (t.rttMs > 0) return Math.min(30_000, Math.max(8000, Math.round(t.rttMs * 6)));
+    return t.method === 'p2p' ? 8000 : 12000;
   }
 
   private _startAckTimeout(t: TransferState, seq: number, size: number, delay?: number): void {
-    const effective = delay ?? this._ackTimeoutBase(t);
+    // Étale déterministiquement les minuteurs des chunks d'une même rafale :
+    // sinon les 24 expirent ensemble et retransmettent 12 Mo d'un coup.
+    const effective = delay ?? this._ackTimeoutBase(t) + (seq % 8) * 250;
     if (t.ackedSeqs.has(seq)) return;
     const previous = t.ackTimers.get(seq);
     if (previous) clearTimeout(previous);
@@ -967,18 +1000,17 @@ export class TransferManager {
       // Le chunk est déjà dans pending : on le retransmet sans repasser par sendChunk.
       t.sentAt.set(seq, Date.now());
       this._transmitChunk(t, seq, chunk);
-      this._startAckTimeout(t, seq, size, Math.min(effective * 2, 20_000));
+      this._startAckTimeout(t, seq, size, Math.min(effective * 2, 45_000));
     }, effective);
     t.ackTimers.set(seq, timer);
   }
 
   private _updateReceiverProgress(t: TransferState): void {
-    // La progression est comptée en octets réellement stockés (somme des blocs
-    // uniques), jamais en nombre de chunks : des clients anciens (APK 1.0.17)
-    // annoncent le chunkSize de transfer-init mais envoient des blocs plus
-    // grands en réseau local, ce qui figeait la barre (ex. 25 %) pendant que
-    // l'expéditeur, lui, affichait 100 %.
-    t.confirmed = Math.min(t.receivedBytes, t.file.size);
+    // La barre affiche le PRÉFIXE CONTIGU, pas la somme des blocs reçus : avec
+    // un trou au milieu, l'ancien compteur pouvait afficher ~100 % alors que
+    // le fichier ne pouvait pas être reconstruit. ~120 chunks pour 60 Mo, le
+    // parcours est négligeable, et le pourcentage devient diagnostique.
+    t.confirmed = this._prefixBytes(t);
     t.progress =
       t.file.size > 0 ? Math.min(100, Math.round((t.confirmed / t.file.size) * 100)) : 100;
     this.onStatus(t);

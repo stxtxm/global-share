@@ -146,17 +146,18 @@ async function main() {
   }
   console.log('binary transfer-chunk relay ok');
 
-  // Régression : 24 chunks binaires émis d'un coup (fenêtre du client). Les
-  // headers Socket.IO arrivent avant leurs pièces jointes ; un seul emplacement
-  // « pendingBinary » écrasait le header courant et perdait des chunks, ce qui
-  // déclenchait des retransmissions après 15 s et effondrait le débit relayé.
+  // Régression : 24 chunks de 512 Ko émis d'un coup (12 Mo, la vraie fenêtre
+  // du client en v1.0.29+). Les headers Socket.IO arrivent avant leurs pièces
+  // jointes ; un seul emplacement « pendingBinary » écrasait le header courant
+  // et perdait des chunks, ce qui déclenchait des retransmissions et un
+  // livelock (transfert figé à 50 %). Ce test couvre la taille de production.
   const burstChunks = 24;
-  const burstSize = 128 * 1024;
+  const burstSize = 512 * 1024;
   const burstReceived = new Map();
   await new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`burst binaire: ${burstReceived.size}/${burstChunks} chunks reçus`)),
-      20_000
+      40_000
     );
     const onChunk = ({ seq, chunk }) => {
       const bytes = new Uint8Array(chunk);
@@ -187,7 +188,7 @@ async function main() {
       });
     }
   });
-  console.log(`binary pipelined transfer-chunk burst ok (${burstReceived.size} chunks)`);
+  console.log(`binary pipelined transfer-chunk burst ok (${burstReceived.size} chunks, ${burstReceived.size * burstSize / 1024 / 1024} Mo)`);
 
   // transfer-chunk texte (anciens clients) : toujours relayé par le chemin JSON.
   const textChunkPromise = waitFor(bob, 'transfer-chunk');

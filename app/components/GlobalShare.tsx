@@ -876,7 +876,16 @@ export default function GlobalShare() {
         // Même réseau local et chemin direct ouvert : blocs plus gros, pipeline
         // plus profond et pauses supprimées. Sinon, réglages conservateurs.
         const lan = lanPeersRef.current.has(sendT.targetId) && sendT.method === 'p2p';
-        const maxInFlight = lan ? MAX_IN_FLIGHT_CHUNKS_LAN : MAX_IN_FLIGHT_CHUNKS;
+        // Une fenêtre fixe de 24 × 512 Ko = 12 Mo sature le relais sur un lien
+        // lent : les ACK mettent alors plus de temps que le timeout et le
+        // transfert livelocke. On vise ~6 Mo en vol, réduits encore quand le
+        // RTT mesuré augmente (file d'attente qui se remplit).
+        const byteTarget = 6 * 1024 * 1024;
+        const byBytes = Math.max(4, Math.floor(byteTarget / sendT.chunkSize));
+        const rttFactor = sendT.rttMs > 0 ? Math.min(1, 600 / Math.max(600, sendT.rttMs)) : 1;
+        const maxInFlight = lan
+          ? MAX_IN_FLIGHT_CHUNKS_LAN
+          : Math.max(4, Math.min(MAX_IN_FLIGHT_CHUNKS, Math.round(byBytes * rttFactor)));
         if (sendT.pending.size >= maxInFlight) {
           transferTimeoutRef.current = setTimeout(() => sendLoop(), lan ? 0 : 20);
           return;

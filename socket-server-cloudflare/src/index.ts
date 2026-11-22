@@ -32,7 +32,9 @@ interface Client {
   binaryQueue: Promise<void>;
 }
 
-const MAX_PENDING_BINARIES = 64;
+// Assez pour plusieurs fenêtres d'envoi (24 chunks × 512 Ko) même si le
+// récepteur accusé plus lentement : un débordement ferait perdre des chunks.
+const MAX_PENDING_BINARIES = 256;
 
 const PING_INTERVAL_MS = 25_000;
 const MAX_ROOM_LENGTH = 64;
@@ -553,6 +555,7 @@ export class GlobalRoom {
     // certaine profondeur, on abandonne le plus ancien (client défaillant)
     // pour ne pas laisser la file croître sans borne.
     if (client.pendingBinaries.length >= MAX_PENDING_BINARIES) {
+      console.warn('pendingBinaries overflow: dropping oldest binary event header');
       client.pendingBinaries.shift();
     }
     client.pendingBinaries.push({
@@ -739,7 +742,11 @@ export class GlobalRoom {
         client.ws.send(attachment);
       }
     } catch {
-      this.handleClose(client);
+      // Une saturation passagère de la socket ne doit PAS fermer la connexion :
+      // fermer ici perdrait tous les chunks en vol et déclencherait un cycle
+      // disconnect/resync (le transfert restait figé à 50 %). Le timer de ping
+      // fermera une socket réellement morte.
+      console.warn('binary send failed; letting the ping watchdog decide');
     }
   }
 

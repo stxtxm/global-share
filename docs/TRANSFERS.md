@@ -13,7 +13,7 @@ déduplication, reprise octet par octet et contrôle SHA-256.
 | Taille d'un chunk (relais) | **512 Ko** | 4× moins de messages dans le Durable Object et 4× moins d'ACK qu'à 128 Ko. Le destinataire s'aligne sur la taille réelle du premier chunk reçu, donc un ancien client peut recevoir les nouveaux chunks. |
 | Taille d'un chunk (LAN P2P) | 256 Ko | Le canal SCTP a une faible latence : pas besoin de blocs plus gros. |
 | Chunks en vol | 24 (relais), 32 (LAN) | 12 Mo de données en vol sur le relais : le tuyau reste plein même avec un RTT de plusieurs centaines de ms. |
-| Timeout d'ACK | `max(3 s, 5 × RTT mesuré)`, plafonné à 20 s | L'ancien délai fixe de 15 s immobilisait un créneau pendant un quart de minute sur un ACK perdu. |
+| Timeout d'ACK | `max(8 s, 6 × RTT mesuré)`, plafonné à 30 s | Un plancher à 3 s provoquait des retransmissions prématurées et un livelock avec 12 Mo en vol. |
 | Budget de retransmissions | 3 **par chunk** | Un budget global annulait tout le fichier après 4 incidents éparpillés. |
 
 ## Ce qui a été corrigé pour le débit
@@ -53,6 +53,38 @@ déduplication, reprise octet par octet et contrôle SHA-256.
 
 6. **Réglage « Tentatives » conservé** dans une ref et réappliqué à chaque
    recréation du gestionnaire (reconnexion, changement de salon).
+
+## Correction du blocage à ~50 % (v1.0.30)
+
+Un fichier de 60 Mo (~120 chunks) pouvait se figer vers la moitié alors que le
+débit affiché restait non nul. C'était un **livelock de retransmissions**, pas
+une perte de connexion :
+
+1. Le timeout plancher avait été réduit à 3 s alors que 24 × 512 Ko = 12 Mo
+   sont en vol. Sur un relais chargé, les ACK mettent plus de 3 s à revenir.
+2. Les 24 minuteurs, armés dans la même rafale, expiraient presque ensemble →
+   24 réémissions → file d'attente doublée → nouveaux ACK encore plus lents.
+3. Chaque ACK tardif **remettait le budget de tentatives à zéro**, donc le
+   transfert ne progressait plus mais ne s'annulait jamais.
+
+Correctifs appliqués :
+
+- timeout relais plancher **8 s** (12 s sans RTT mesuré), le RTT ne pouvant
+  qu'augmenter la marge, avec étalement déterministe des minuteurs
+  (`seq % 8 × 250 ms`) pour éviter l'expiration simultanée ;
+- **budget de tentatives jamais remis à zéro** sur un ACK — un chunk acquitté
+  n'est plus retransmis de toute façon (son minuteur est supprimé) ;
+- fenêtre d'envoi **adaptative** : ~6 Mo en vol, réduite à ~3 Mo si le RTT
+  augmente, au lieu de 12 Mo fixes ;
+- progression affichée = **préfixe contigu** (un trou devient visible au lieu
+  d'un faux 100 %) et sortie explicite de la boucle EOF ↔ resync après 3
+  tentatives à la même position, avec un message d'erreur clair ;
+- `rttMs` réinitialisé sur reprise, Durable Object : file de headers portée à
+  256 et `ws.send()` en échec ne ferme plus la socket (le watchdog ping s'en
+  charge) — fermer perdait tous les chunks en vol ;
+- test de protocole porté à **24 × 512 Ko = 12 Mo** (la vraie configuration)
+  et test unitaire « aucun ACK lent ne doit provoquer de retransmission
+  prématurée à 9 s ».
 
 ## Protocole (pour les clients anciens)
 
