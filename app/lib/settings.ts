@@ -324,28 +324,69 @@ export function getSetting<T extends keyof AppSettings>(
 // Theme Application Helpers
 // ============================================================================
 
+/** Couleurs des barres système (Android/iOS) pour chaque thème effectif. */
+const SYSTEM_THEME_COLORS = {
+  light: '#eef0f7',
+  dark: '#0a0b10',
+} as const;
+
 /**
- * Apply theme to the document element.
- * This function should be called when theme settings change.
- * 
- * @param {'system' | 'light' | 'dark'} theme - The theme to apply
- * 
+ * Résout le thème « Auto » en clair ou sombre d'après les préférences du système.
+ * Sans `window` (SSR, tests Node), la baseline sombre est utilisée.
+ */
+export function resolveTheme(theme: AppSettings['theme']): 'light' | 'dark' {
+  if (theme !== 'system') return theme;
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/**
+ * Synchronise les métadonnées du document avec le thème effectif.
+ *
+ * `theme-color` pilote la barre de navigation et la barre de statut dans le
+ * WebView Android / Capacitor : sans mise à jour, le bas de l'écran reste noir
+ * même quand l'application est en mode clair.
+ */
+export function syncSystemTheme(effective: 'light' | 'dark'): void {
+  if (typeof document === 'undefined') return;
+  const html = document.documentElement;
+  html.dataset.theme = effective;
+  html.style.colorScheme = effective;
+
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+  }
+  meta.content = SYSTEM_THEME_COLORS[effective];
+
+  const scheme = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
+  if (scheme) scheme.content = effective;
+}
+
+/**
+ * Applique le thème au document : classes CSS + couleurs natives du WebView.
+ *
  * @example
  * ```typescript
- * applyTheme('dark');
- * // document now has gs-theme--dark class
+ * applyTheme('light'); // html.gs-theme--light + theme-color clair
  * ```
  */
-export function applyTheme(theme: 'system' | 'light' | 'dark'): void {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return;
-
+export function applyTheme(theme: AppSettings['theme']): void {
+  if (typeof document === 'undefined') return;
+  const effective = resolveTheme(theme);
   const html = document.documentElement;
-  if (theme === 'system') {
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    html.classList.toggle('gs-theme--light', !systemDark);
-  } else {
-    html.classList.toggle('gs-theme--light', theme === 'light');
-  }
+  html.classList.toggle('gs-theme--light', effective === 'light');
+  html.classList.toggle('gs-theme--dark', effective === 'dark');
+  syncSystemTheme(effective);
+}
+
+/** Applique en une seule passe thème, couleur d'accent et langue. */
+export function applyAppearance(settings: AppSettings): void {
+  applyTheme(settings.theme);
+  applyAccentColor(settings.accentColor);
+  applyLanguage(settings.language);
 }
 
 /**

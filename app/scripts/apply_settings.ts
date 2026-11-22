@@ -45,7 +45,6 @@ if (content.includes(roomEnd) && content.indexOf(roomEnd) > content.lastIndexOf(
 }
 
 // 5. Add button to welcome topbar
-const welcomeTopbar = '            <UpdateTrigger open={updateOpen} onToggle={() => setUpdateOpen(value => !value)} />\n            <button \\n              type="button" \\n              className="gs-iconbtn"\n              onClick={() => setSettingsOpen(true)}\n              aria-label="Paramètres"\n              title="Paramètres"\n            >\n              <IconSettings className="gs-icon" />\n            </button>';
 
 // Find the UpdateTrigger in welcome header and add settings button after it
 const welcomeTopbarPattern = /(\s+<UpdateTrigger open=\{updateOpen\} onToggle=\{\(\) => setUpdateOpen\(value => !value\)\} \/>\n\s+<div className="gs-topbar-right">)/;
@@ -55,7 +54,6 @@ if (welcomeTopbarPattern.test(content)) {
 }
 
 // 6. Add button to room topbar
-const roomTopbarPattern = /(<span className=\"`gs-status gs-status--\${connectionStatus}\"`\s+role="status">[\s\S]*?<\/span>)/;
 const roomTopbarReplacement = '$1\n          <button\n            type="button"\n            className="gs-iconbtn"\n            onClick={() => setSettingsOpen(true)}\n            aria-label="Paramètres"\n            title="Paramètres"\n          >\n            <IconSettings className="gs-icon" />\n          </button>';
 
 content = content.replace(

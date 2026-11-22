@@ -1,6 +1,6 @@
 {
   "name": "global-share",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "nativeVersion": 2,
   "private": true,
   "scripts": {
@@ -10,7 +10,7 @@
     "lint": "eslint",
     "dev:all": "concurrently \"npm run dev\" \"npm --prefix socket-server-cloudflare run dev -- --port 3001\"",
     "test:protocol": "npm --prefix socket-server-cloudflare run test:protocol",
-    "test:unit": "node --experimental-strip-types --test test/transfer-pause.test.ts test/downloads.test.ts test/peer-leave.test.ts test/update.test.ts test/updater-main.test.ts test/web-updates.test.ts test/rooms.test.ts test/settings-i18n.test.ts",
+    "test:unit": "node --experimental-strip-types --test test/transfer-pause.test.ts test/downloads.test.ts test/peer-leave.test.ts test/update.test.ts test/updater-main.test.ts test/web-updates.test.ts test/rooms.test.ts test/settings-i18n.test.ts test/theme.test.ts",
     "desktop": "npm run build:desktop && electron desktop",
     "build:desktop": "node scripts/build-desktop.mjs",
     "dist": "npm run build:desktop && electron-builder",

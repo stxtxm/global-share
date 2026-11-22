@@ -30,7 +30,7 @@ test('les espaces réservés sont remplacés dans les dialogues', () => {
 });
 
 test('chaque couleur d’accent possède un libellé traduit', () => {
-  assert.equal(ACCENT_SWATCHES.length, 7);
+  assert.equal(ACCENT_SWATCHES.length, 10);
   for (const swatch of ACCENT_SWATCHES) {
     for (const lang of ['fr', 'en', 'es', 'de', 'it']) {
       assert.notEqual(translate(lang, swatch.labelKey), swatch.labelKey);
