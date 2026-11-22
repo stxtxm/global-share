@@ -20,6 +20,7 @@ interface GlobalShareNativePlugin {
   stopTransfer(): Promise<unknown>;
   keepAlive(options: { enabled: boolean }): Promise<unknown>;
   requestBatteryExemption(): Promise<unknown>;
+  getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
 
@@ -90,6 +91,15 @@ function subscribe(event: string, listener: (value: unknown) => void): () => voi
   };
 }
 
+/** Un appel natif rejeté (service interdit en arrière-plan, permission refusée)
+ *  ne doit jamais devenir une rejection non gérée : le silence rendait le
+ *  blocage impossible à diagnostiquer. */
+function invoke(result: Promise<unknown> | undefined): void {
+  void result?.catch((error) => {
+    console.warn('[GlobalShare] appel natif refusé', error);
+  });
+}
+
 const bridgeListeners = new Set<() => void>();
 
 /** Abonné par l'interface : prévient React que le pont natif est disponible. */
@@ -123,6 +133,9 @@ export function ensureMobileBridge(): boolean {
     dismissUpdate: () => plugin.dismissUpdate(),
     onUpdateState: (listener) => subscribe('updateState', listener),
     onUpdateOpen: (listener) => subscribe('updateOpen', () => listener()),
+    // Tick émis par le service avant-plan toutes les 10 s : il tourne même
+    // quand les timers du WebView sont bridés par la veille (Chrome 88+).
+    onServiceTick: (listener) => subscribe('serviceTick', () => listener()),
   };
   bridgeListeners.forEach((listener) => listener());
   return true;
@@ -156,16 +169,21 @@ export function mobileStartTransfer(count: number, progress: number): void {
       // Refus : le service démarre quand même (Android affiche alors sa propre
       // notification de gestion des tâches).
     }
-    await plugin.startTransfer({ count, progress });
+    invoke(plugin.startTransfer({ count, progress }));
   })();
 }
 
 export function mobileUpdateTransfer(count: number, progress: number): void {
-  void nativePlugin()?.updateTransferProgress({ count, progress });
+  invoke(nativePlugin()?.updateTransferProgress({ count, progress }));
 }
 
 export function mobileStopTransfer(): void {
-  void nativePlugin()?.stopTransfer();
+  invoke(nativePlugin()?.stopTransfer());
+}
+
+/** Transferts terminés : le service reste vivant si la session est ouverte. */
+export function mobileFinishTransfer(): void {
+  invoke(nativePlugin()?.updateTransferProgress({ count: 0, progress: 0 }));
 }
 
 /**
@@ -173,7 +191,12 @@ export function mobileStopTransfer(): void {
  * que la socket survive à l'arrière-plan et à la veille, même sans transfert.
  */
 export function mobileKeepAlive(enabled: boolean): void {
-  void nativePlugin()?.keepAlive({ enabled });
+  invoke(nativePlugin()?.keepAlive({ enabled }));
+}
+
+/** État natif (wake locks, service) pour le diagnostic dans les réglages. */
+export function mobileServiceState(): Promise<unknown> | undefined {
+  return nativePlugin()?.getServiceState?.();
 }
 
 /**
@@ -181,5 +204,5 @@ export function mobileKeepAlive(enabled: boolean): void {
  * installation côté natif (le plugin ignore les redemandes).
  */
 export function mobileRequestBatteryExemption(): void {
-  void nativePlugin()?.requestBatteryExemption();
+  invoke(nativePlugin()?.requestBatteryExemption());
 }

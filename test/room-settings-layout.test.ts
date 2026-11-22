@@ -30,6 +30,16 @@ test('le bouton réglages du haut est visible sur mobile et placé à gauche', (
   assert.ok(!css.includes('gs-hide-on-mobile'), 'ancienne règle mobile toujours présente');
 });
 
+test('la mini-barre permet aussi d’annuler un transfert (mobile)', () => {
+  const mini = component.slice(
+    component.indexOf('<div className={`gs-minibar'),
+    component.indexOf('gs-minibar-track')
+  );
+  assert.ok(mini.includes('gs-minirow-cancel'), 'bouton Annuler absent de la mini-barre');
+  assert.ok(mini.includes('cancelTransfer(t.id)'), 'le bouton doit appeler cancelTransfer');
+  assert.ok(css.includes('.gs-minirow-cancel'), 'style du bouton absent du CSS');
+});
+
 test('le libellé « Salon » s’efface sur les écrans étroits', () => {
   assert.match(css, /@media \(max-width: 480px\)[\s\S]*?\.gs-room-chip-label\s*\{\s*display:\s*none/);
 });

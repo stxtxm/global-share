@@ -10,7 +10,9 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -47,8 +49,32 @@ public final class TransferForegroundService extends Service {
     private static volatile int progress;
     private static volatile boolean keepAlive;
 
+    /** Le plugin relaie ce tick vers le WebView pour battre le throttling JS. */
+    public interface TickListener { void onTick(); }
+    private static volatile TickListener tickListener;
+
+    public static void setTickListener(TickListener listener) {
+        tickListener = listener;
+    }
+
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private final Handler watchdog = new Handler(Looper.getMainLooper());
+    private final Runnable watchdogTick = new Runnable() {
+        @Override
+        public void run() {
+            try {
+                // Un lock perdu (ROM agressive, service recréé) est repris ici.
+                acquireLocks();
+                showNotification();
+                TickListener listener = tickListener;
+                if (listener != null) listener.onTick();
+            } catch (Exception ignored) {
+                // Le service doit survivre à une erreur ponctuelle de notification.
+            }
+            watchdog.postDelayed(this, 10_000);
+        }
+    };
 
     /** Session salon connectée : la connexion doit survivre à l'arrière-plan. */
     public static void setKeepAlive(Context context, boolean enabled) {
@@ -105,6 +131,16 @@ public final class TransferForegroundService extends Service {
         context.stopService(intent);
     }
 
+    public static boolean isRunning() {
+        return keepAlive || activeTransfers > 0;
+    }
+
+    public static boolean isBatteryOptimized(android.content.Context context) {
+        PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        return power != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && !power.isIgnoringBatteryOptimizations(context.getPackageName());
+    }
+
     private static int clamp(int value) {
         return Math.max(0, Math.min(100, value));
     }
@@ -114,6 +150,10 @@ public final class TransferForegroundService extends Service {
         super.onCreate();
         createChannel();
         acquireLocks();
+        // Tick natif : les timers du WebView sont bridés à 1/min après 5 min
+        // masqués (Chrome 88+), même avec un PARTIAL_WAKE_LOCK. Ce tick, lui,
+        // tourne tant que le service est vivant et pilote la reprise côté JS.
+        watchdog.postDelayed(watchdogTick, 10_000);
     }
 
     @Override
@@ -131,6 +171,7 @@ public final class TransferForegroundService extends Service {
                 progress = clamp(percent);
             }
         }
+        acquireLocks();
         showNotification();
         // START_STICKY : si le système relance le service, la notification et
         // le wake lock sont rétablis avec le dernier état connu.
@@ -151,16 +192,19 @@ public final class TransferForegroundService extends Service {
 
     private void acquireLocks() {
         try {
-            PowerManager manager = (PowerManager) getSystemService(POWER_SERVICE);
-            if (manager != null) {
-                wakeLock = manager.newWakeLock(
-                        PowerManager.PARTIAL_WAKE_LOCK, "GlobalShare:transfer");
-                wakeLock.acquire();
+            if (wakeLock == null || !wakeLock.isHeld()) {
+                PowerManager manager = (PowerManager) getSystemService(POWER_SERVICE);
+                if (manager != null) {
+                    wakeLock = manager.newWakeLock(
+                            PowerManager.PARTIAL_WAKE_LOCK, "GlobalShare:transfer");
+                    wakeLock.acquire();
+                }
             }
         } catch (Exception ignored) {
             // Refusé par le constructeur : la notification reste active.
         }
         try {
+            if (wifiLock != null && wifiLock.isHeld()) return;
             WifiManager wifi = (WifiManager) getApplicationContext()
                     .getSystemService(WIFI_SERVICE);
             if (wifi != null) {
@@ -221,6 +265,7 @@ public final class TransferForegroundService extends Service {
 
     @Override
     public void onDestroy() {
+        watchdog.removeCallbacks(watchdogTick);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         super.onDestroy();

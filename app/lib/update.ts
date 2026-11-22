@@ -108,6 +108,7 @@ export interface DesktopUpdateBridge {
   dismissUpdate?: () => Promise<unknown>;
   onUpdateState?: (listener: (state: unknown) => void) => (() => void) | void;
   onUpdateOpen?: (listener: () => void) => (() => void) | void;
+  onServiceTick?: (listener: () => void) => (() => void) | void;
 }
 
 export function formatUpdateBytes(value: number): string {

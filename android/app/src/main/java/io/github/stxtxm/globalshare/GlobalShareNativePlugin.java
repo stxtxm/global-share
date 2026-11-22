@@ -3,6 +3,9 @@ package io.github.stxtxm.globalshare;
 import android.Manifest;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -67,6 +70,10 @@ public class GlobalShareNativePlugin extends Plugin {
             scheduled = true;
             mainHandler.postDelayed(periodicCheck, FIRST_CHECK_DELAY_MS);
         }
+        // Le service émet un tick toutes les 10 s : on le relaie vers le JS,
+        // dont les timers sont bridés quand l'écran est éteint (veille).
+        TransferForegroundService.setTickListener(() ->
+                onUiThread(() -> notifyListeners("serviceTick", new JSObject())));
     }
 
     private void onUiThread(Runnable action) {
@@ -143,8 +150,35 @@ public class GlobalShareNativePlugin extends Plugin {
     @PluginMethod
     public void keepAlive(PluginCall call) {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", Boolean.FALSE));
+        if (enabled) {
+            // Android 13+ : la notification du service doit être autorisée
+            // AVANT le premier startForeground, sinon le démarrage échoue.
+            try {
+                android.content.Context context = getContext();
+                if (Build.VERSION.SDK_INT >= 33
+                        && ContextCompat.checkSelfPermission(context,
+                                Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED
+                        && getActivity() != null) {
+                    ActivityCompat.requestPermissions(getActivity(),
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1001);
+                }
+            } catch (Exception ignored) {
+                // Permissions refusées : le service démarre quand même avec la
+                // notification de gestion des tâches affichée par Android.
+            }
+        }
         TransferForegroundService.setKeepAlive(getContext(), enabled);
         call.resolve();
+    }
+
+    /** État du service pour le diagnostic (Notification, réglages). */
+    @PluginMethod
+    public void getServiceState(PluginCall call) {
+        JSObject state = new JSObject();
+        state.put("running", TransferForegroundService.isRunning());
+        state.put("batteryOptimized", TransferForegroundService.isBatteryOptimized(getContext()));
+        call.resolve(state);
     }
 
     /**
@@ -161,11 +195,13 @@ public class GlobalShareNativePlugin extends Plugin {
         boolean alreadyIgnored = power != null
                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                     || power.isIgnoringBatteryOptimizations(packageName));
-        if (alreadyIgnored || prefs.getBoolean("batteryAsked", false)) {
+        if (alreadyIgnored) {
             call.resolve();
             return;
         }
-        prefs.edit().putBoolean("batteryAsked", true).apply();
+        // Ne jamais persister « déjà demandé » AVANT l'affichage : un refus ou
+        // une activité indisponible laissait le flag à true pour toujours et
+        // Doze coupait le réseau en veille sans qu'on puisse redemander.
         android.app.Activity activity = getActivity();
         if (activity == null) {
             call.resolve();
@@ -175,6 +211,7 @@ public class GlobalShareNativePlugin extends Plugin {
             Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:" + packageName));
             activity.startActivity(intent);
+            prefs.edit().putBoolean("batteryAsked", true).apply();
         } catch (Exception ignored) {
             // Écran sans ce réglage : on n'insiste pas.
         }

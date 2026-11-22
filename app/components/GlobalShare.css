@@ -1693,6 +1693,29 @@
   gap: 8px;
 }
 
+/* Annulation directe depuis la mini-barre (surface toujours visible sur mobile). */
+.gs-minirow-cancel {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--gs-border);
+  border-radius: 9px;
+  background: var(--gs-surface);
+  color: var(--gs-dim);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.gs-minirow-cancel:active {
+  color: var(--gs-danger);
+  border-color: var(--gs-danger);
+}
+
 
 .gs-minirow-name {
   font-size: 0.82rem;

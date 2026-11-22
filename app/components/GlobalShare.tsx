@@ -31,6 +31,7 @@ import type { DesktopUpdateBridge } from '../lib/update';
 // Installe le pont Capacitor dans l'APK avant le premier rendu.
 import '../lib/mobile-bridge';
 import {
+  mobileFinishTransfer,
   mobileKeepAlive,
   mobileRequestBatteryExemption,
   mobileStartTransfer,
@@ -613,21 +614,18 @@ export default function GlobalShare() {
       return;
     }
     void keepScreenAwake();
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return;
-      // Le navigateur relâche le verrou dès que la page passe en arrière-plan :
-      // on le redemande au retour, sinon l'écran s'éteint au milieu du transfert.
-      void keepScreenAwake();
-      const socket = socketRef.current;
-      if (socket && !socket.connected) socket.connect();
-      managerRef.current?.resumeInterrupted();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      void releaseScreenWakeLock();
-    };
+    return () => { void releaseScreenWakeLock(); };
   }, [hasActiveTransfers]);
+
+  const kickSendLoop = useCallback(() => {
+    // Ne jamais ignorer un kick : en veille, les signaux d'ACK sont rares et
+    // chacun doit pouvoir relancer la boucle. On réarme simplement le timer.
+    if (sendLoopKickRef.current !== null) clearTimeout(sendLoopKickRef.current);
+    sendLoopKickRef.current = setTimeout(() => {
+      sendLoopKickRef.current = null;
+      sendLoopRef.current?.();
+    }, 0);
+  }, []);
 
   // Android : le service avant-plan et le wake lock partiel maintiennent le
   // WebView et le réseau en vie quand l'écran est verrouillé. Sur desktop/web,
@@ -649,7 +647,9 @@ export default function GlobalShare() {
       mobileStartTransfer(nativeTransferCount, nativeTransferProgress);
       nativeTransferStartedRef.current = true;
     } else if (nativeTransferCount === 0 && nativeTransferStartedRef.current) {
-      mobileStopTransfer();
+      // Transfert terminé mais SALON TOUJOURS OUVERT : ne surtout pas couper le
+      // service, sinon le prochain transfert part en veille sans protection.
+      mobileFinishTransfer();
       nativeTransferStartedRef.current = false;
     }
     // Bureau : anti-veille système pendant les transferts (équivalent du
@@ -663,12 +663,48 @@ export default function GlobalShare() {
     }
   }, [nativeTransferCount, nativeTransferProgress]);
 
-  // Salon ouvert et connecté : le service avant-plan reste actif même sans
-  // transfert, pour que la socket survive à l'arrière-plan et à la veille.
-  // Sur desktop/web, mobileKeepAlive ne fait rien.
+  // Le service avant-plan doit vivre pendant TOUT le salon, y compris quand le
+  // réseau tombe en veille : c'est précisément là qu'il faut garder le CPU et
+  // le Wi-Fi éveillés pour que la socket puisse se reconnecter. L'ancien code
+  // appelait keepAlive(false) sur `disconnected`, ce qui éteignait le service
+  // (et le wake lock) au moment exact du besoin.
   useEffect(() => {
-    mobileKeepAlive(step === 'room' && connectionStatus !== 'disconnected');
-  }, [step, connectionStatus]);
+    if (step === 'room') mobileKeepAlive(true);
+  }, [step]);
+
+  // Le tick natif (toutes les 10 s, tant que le wake lock est tenu) remplace
+  // les timers JS bridés par Chromium après 5 min d'écran éteint. Il relance
+  // la boucle d'envoi et la reprise sans dépendre du WebView.
+  useEffect(() => {
+    if (step !== 'room') return;
+    const off = window.globalshareMobile?.onServiceTick?.(() => {
+      mobileKeepAlive(true);
+      const socket = socketRef.current;
+      if (socket && !socket.connected) socket.connect();
+      managerRef.current?.resumeInterrupted();
+      // Appel direct (pas un setTimeout) : c'est tout l'intérêt du tick natif.
+      sendLoopRef.current?.();
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, [step, kickSendLoop]);
+
+  // Retour au premier plan : le listener vit pour toute la session salon (et
+  // non dans l'effet hasActiveTransfers, qui se démontait dès que les transferts
+  // passaient en `interrupted` — le retour au premier plan ne relançait rien).
+  useEffect(() => {
+    if (step !== 'room') return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      void keepScreenAwake();
+      mobileKeepAlive(true);
+      const socket = socketRef.current;
+      if (socket && !socket.connected) socket.connect();
+      managerRef.current?.resumeInterrupted();
+      kickSendLoop();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [step, kickSendLoop]);
 
   // Rechargement de l'historique conservé (IndexedDB) au démarrage.
   useEffect(() => {
@@ -702,19 +738,36 @@ export default function GlobalShare() {
     if (transfersSyncTimerRef.current !== null) return;
     transfersSyncTimerRef.current = setTimeout(() => {
       transfersSyncTimerRef.current = null;
-      setTransfers(managerRef.current?.getAll() ?? []);
+      // Filet de sécurité : même si le manager garde un transfert terminal,
+      // il ne doit jamais réapparaître dans la liste après une annulation.
+      const terminal = new Set(['cancelled', 'completed', 'failed']);
+      setTransfers((managerRef.current?.getAll() ?? []).filter(t => !terminal.has(t.status)));
     }, 200);
   }, []);
 
   // Un ACK libère un créneau : relancer la boucle d'envoi tout de suite plutôt
   // que d'attendre son tick (les timers des WebView mobiles sont bridés en
   // arrière-plan, ce qui faisait chuter le débit après quelques secondes).
-  const kickSendLoop = useCallback(() => {
-    if (sendLoopKickRef.current !== null) return;
-    sendLoopKickRef.current = setTimeout(() => {
-      sendLoopKickRef.current = null;
-      sendLoopRef.current?.();
-    }, 0);
+  // Annulation robuste : le manager supprime maintenant le transfert de son
+  // registre et coupe tous ses timers. On gère aussi la ligne « orpheline »
+  // (ancien transfert resté à l'écran après une recréation du manager) et on
+  // annule le rafraîchissement groupé en attente pour éviter toute résurgence.
+  const cancelTransfer = useCallback((id: string) => {
+    const manager = managerRef.current;
+    if (!manager?.get(id)) {
+      setTransfers(prev => prev.filter(t => t.id !== id));
+      fileRefs.current.delete(id);
+      void deleteSend(id);
+      return;
+    }
+    manager.cancel(id, 'Annulé');
+    if (transfersSyncTimerRef.current !== null) {
+      clearTimeout(transfersSyncTimerRef.current);
+      transfersSyncTimerRef.current = null;
+    }
+    setTransfers(prev => prev.filter(t => t.id !== id));
+    fileRefs.current.delete(id);
+    void deleteSend(id);
   }, []);
 
   useEffect(() => {
@@ -727,7 +780,9 @@ export default function GlobalShare() {
         onUpdate: (t) => {
           // Nouveau transfert : ajout immédiat. Sinon, rafraîchissement groupé
           // (voir syncTransfers) : un setState par chunk saturait le rendu.
-          setTransfers(prev => (prev.some(x => x.id === t.id) ? [...prev] : [...prev, t]));
+          if (t.status !== 'cancelled' && t.status !== 'completed' && t.status !== 'failed') {
+            setTransfers(prev => (prev.some(x => x.id === t.id) ? [...prev] : [...prev, t]));
+          }
           syncTransfers();
         },
         onComplete: (t) => {
@@ -781,9 +836,9 @@ export default function GlobalShare() {
     s.on('transfer-end', (p) => manager.onTransferEnd(p));
     s.on('transfer-resync', (p) => {
       manager.onTransferResync(p);
-      // Le destinataire vient de fixer une nouvelle position de reprise :
-      // relancer la boucle évite un transfert bloqué à son ancien pourcentage.
-      kickSendLoop();
+      // Ne relancer la boucle que si le transfert est toujours actif : un
+      // resync en vol après une annulation ne doit pas le faire revivre.
+      if (manager.get(p.transferId)?.status === 'transferring') kickSendLoop();
     });
 
     // Les chunks reçus sont écrits au fil de l'eau : un onglet tué par le
@@ -1166,6 +1221,9 @@ export default function GlobalShare() {
       // Exemption d'optimisation de batterie : demandée une seule fois par
       // installation côté natif, au premier salon rejoint.
       mobileRequestBatteryExemption();
+      // Réassérer le maintien natif : le service peut avoir été relancé par le
+      // système pendant la veille (START_STICKY) avec un état périmé.
+      mobileKeepAlive(true);
       // Retour en ligne : les transferts interrompus repartent d'eux-mêmes, le
       // temps que le pair se réenregistre dans le salon.
       setTimeout(() => managerRef.current?.resumeInterrupted(), 600);
@@ -1173,6 +1231,9 @@ export default function GlobalShare() {
     socket.on('disconnect', (reason) => {
       console.log('Disconnected:', reason);
       setConnectionStatus('disconnected');
+      // Ne PAS couper le service ici : la coupure réseau est justement le
+      // moment où le wake lock doit rester pour permettre la reconnexion.
+      mobileKeepAlive(true);
       // Le canal direct est caduc : il sera renégocié avec les mêmes
       // identités. Le transfert, lui, est conservé et reprendra au retour.
       Object.keys(peersRef.current).forEach(destroyPeer);
@@ -1181,6 +1242,7 @@ export default function GlobalShare() {
     });
     socket.on('connect_error', () => {
       setConnectionStatus('disconnected');
+      mobileKeepAlive(true);
       if (!connectErrorShownRef.current) {
         connectErrorShownRef.current = true;
         setConnectErrorMessage('Impossible de se connecter au serveur.');
@@ -1285,6 +1347,8 @@ export default function GlobalShare() {
     }
     fileRefs.current.clear();
     setTransfers([]);
+    // Sortie du salon : là seulement le service avant-plan doit s'arrêter.
+    mobileStopTransfer();
     setStep('welcome');
     setConnectionStatus('disconnected');
     setRoomId('');
@@ -2193,7 +2257,7 @@ export default function GlobalShare() {
                         type="button"
                         className="gs-btn gs-btn--ghost gs-btn--sm gs-btn--danger"
                         style={{ flexShrink: 0 }}
-                        onClick={() => managerRef.current?.cancel(t.id, 'Annulé')}
+                        onClick={() => cancelTransfer(t.id)}
                       >
                         Annuler
                       </button>
@@ -2217,7 +2281,7 @@ export default function GlobalShare() {
                         className="gs-btn gs-btn--ghost gs-btn--sm"
                         style={{ flexShrink: 0 }}
                         title={t.error ?? 'Transfert interrompu'}
-                        onClick={() => managerRef.current?.cancel(t.id, 'Annulé')}
+                        onClick={() => cancelTransfer(t.id)}
                       >
                         Annuler
                       </button>
@@ -2291,6 +2355,15 @@ export default function GlobalShare() {
                     <div className="gs-minirow-head">
                       <span className="gs-minirow-name" title={t.file.name}>{t.file.name}</span>
                       <span className="gs-minirow-pct">{t.progress}%</span>
+                      <button
+                        type="button"
+                        className="gs-minirow-cancel"
+                        onClick={() => cancelTransfer(t.id)}
+                        aria-label="Annuler le transfert"
+                        title="Annuler le transfert"
+                      >
+                        ✕
+                      </button>
                     </div>
                     {appSettings.showProgressBar && (
                       <div className="gs-bar">

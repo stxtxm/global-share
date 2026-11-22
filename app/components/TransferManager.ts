@@ -398,11 +398,44 @@ export class TransferManager {
     return t;
   }
 
-  cancel(id: string, reason: string): void {
+  private _isTerminal(status: TransferStatus): boolean {
+    return status === 'cancelled' || status === 'completed' || status === 'failed';
+  }
+
+  /**
+   * Arrêt COMPLET d'un transfert. `cancel()` historiquement ne faisait que
+   * changer le statut : le transfert restait dans le Map (donc réinjecté dans
+   * l'UI par getAll() 200 ms plus tard) et la boucle d'EOF continuait à
+   * réémettre toutes les 2 s. C'est le même nettoyage que clear() applique à
+   * tous les transferts à la sortie du salon — et c'est pour ça que quitter
+   * le salon « fonctionnait » alors que le bouton Annuler ne faisait rien.
+   */
+  private _stop(t: TransferState): void {
+    for (const timer of t.ackTimers.values()) clearTimeout(timer);
+    t.ackTimers.clear();
+    this._clearEofTimer(t);
+    t.pending.clear();
+    t.buffer.clear();
+    t.ackAttempts.clear();
+    t.sentAt.clear();
+    this.finishing.delete(t.id);
+    this.chunkStore?.clear(t.id);
+    // Indispensable : sinon getAll() remet la ligne annulée dans l'interface.
+    this.transfers.delete(t.id);
+  }
+
+  /** Transfert encore actif et du bon côté, ou undefined. */
+  private _active(id: string, direction?: 'send' | 'receive'): TransferState | undefined {
     const t = this.transfers.get(id);
+    if (!t || this._isTerminal(t.status)) return undefined;
+    if (direction && t.direction !== direction) return undefined;
+    return t;
+  }
+
+  cancel(id: string, reason: string): void {
+    const t = this._active(id);
     if (!t) return;
     this._setStatus(t, 'cancelled', reason);
-    this.chunkStore?.clear(t.id);
     this._emit('transfer-cancel', {
       transferId: t.id,
       reason,
@@ -411,6 +444,7 @@ export class TransferManager {
     // `_setStatus` ne prévient que du changement d'état : sans cet appel, la
     // ligne annulée restait affichée « En cours » dans l'interface locale.
     this.onCancel(t, reason);
+    this._stop(t);
   }
 
   /**
@@ -506,6 +540,10 @@ export class TransferManager {
     // ignore les EOF suivants, donc les répéter ne coûte rien.
     if (t.status !== 'transferring' || t.eofTimer) return;
     const emitEof = () => {
+      if (t.status !== 'transferring' || !this.transfers.has(t.id)) {
+        this._clearEofTimer(t);
+        return;
+      }
       this._emit('transfer-eof', {
         transferId: t.id,
         size: t.file.size,
@@ -578,8 +616,8 @@ export class TransferManager {
     via?: 'p2p' | 'relay';
   }): void {
     if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
-    if (!t || t.direction !== 'receive') return;
+    const t = this._active(payload.transferId, 'receive');
+    if (!t) return;
     if (t.buffer.has(payload.seq)) {
       // Chunk déjà reçu mais ACK perdu : on le renvoie.
       this._sendAck(t, payload.seq, payload.size);
@@ -616,8 +654,8 @@ export class TransferManager {
     target: string;
   }): void {
     if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
-    if (!t || t.direction !== 'send') return;
+    const t = this._active(payload.transferId, 'send');
+    if (!t) return;
     if (t.ackedSeqs.has(payload.seq)) return;
     t.ackedSeqs.add(payload.seq);
     t.confirmed += payload.size;
@@ -649,8 +687,8 @@ export class TransferManager {
 
   onTransferEof(payload: { transferId: string; size: number; target: string }): void {
     if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
-    if (!t || t.direction !== 'receive') return;
+    const t = this._active(payload.transferId, 'receive');
+    if (!t) return;
     t.lastActivity = Date.now();
     // L'expéditeur réémet l'EOF tant qu'il n'a pas d'ACK : n'acquitter qu'une
     // fois tout arrivé, et ne reconstruire le fichier qu'une seule fois.
@@ -685,10 +723,9 @@ export class TransferManager {
 
   onTransferEofAck(payload: { transferId: string; initiator: string; target: string }): void {
     if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
-    if (!t || t.direction !== 'send') return;
+    const t = this._active(payload.transferId, 'send');
+    if (!t) return;
     this._clearEofTimer(t);
-    if (t.status === 'completed') return;
     this._setStatus(t, 'completed', 'Fichier reçu avec succès');
     this._emit('transfer-end', {
       transferId: t.id,
@@ -697,10 +734,11 @@ export class TransferManager {
       target: t.targetId,
     });
     this.onComplete(t);
+    this._stop(t);
   }
 
   onTransferCancel(payload: { transferId: string; reason: string; target: string }): void {    if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
+    const t = this._active(payload.transferId);
     if (!t) return;
     this._clearEofTimer(t);
     this._setStatus(t, 'cancelled', payload.reason ?? "Annulé par lautre partie");
@@ -711,6 +749,7 @@ export class TransferManager {
       target: t.targetId,
     });
     this.onCancel(t, payload.reason ?? 'Cancelled by peer');
+    this._stop(t);
   }
 
   /**
@@ -723,8 +762,8 @@ export class TransferManager {
     haveBytes?: number;
   }): void {
     if (payload.target !== this.selfId) return;
-    const t = this.transfers.get(payload.transferId);
-    if (!t || t.direction !== 'send') return;
+    const t = this._active(payload.transferId, 'send');
+    if (!t) return;
     this._seekTo(t, typeof payload.haveBytes === 'number' ? payload.haveBytes : 0);
   }
 
@@ -740,7 +779,10 @@ export class TransferManager {
     // Côté réception, seul le contrôle local termine le transfert : l'annonce
     // de l'expéditeur ne doit pas court-circuiter la vérification du fichier.
     if (t.direction === 'receive' && payload.status === 'completed') return;
-    if (t.status === payload.status) return;
+    if (this._isTerminal(t.status)) {
+      this._stop(t);
+      return;
+    }
     this._clearEofTimer(t);
     if (payload.status === 'completed' || payload.status === 'cancelled') {
       this._setStatus(t, payload.status, payload.reason ?? 'End of transfer');
@@ -752,6 +794,7 @@ export class TransferManager {
       });
       if (payload.status === 'completed') this.onComplete(t);
       else this.onCancel(t, payload.reason ?? 'Cancelled');
+      this._stop(t);
     } else {
       this._setStatus(t, 'failed', payload.reason ?? 'Erreur côté pair');
       this._emit('transfer-end', {
@@ -761,6 +804,7 @@ export class TransferManager {
         target: t.targetId,
       });
       this.onError(t, payload.reason ?? 'Transfer failed');
+      this._stop(t);
     }
   }
 
@@ -861,6 +905,7 @@ export class TransferManager {
 
   /** Repositionne un envoi au premier octet manquant chez le destinataire. */
   private _seekTo(t: TransferState, bytes: number): void {
+    if (this._isTerminal(t.status)) return;
     for (const timer of t.ackTimers.values()) clearTimeout(timer);
     t.ackTimers.clear();
     this._clearEofTimer(t);
@@ -1071,7 +1116,7 @@ export class TransferManager {
   private async _finishReceive(t: TransferState): Promise<void> {
     // Un même transfert ne se termine qu'une fois : sinon le fichier était
     // proposé (et téléchargé) autant de fois que l'expéditeur réémettait l'EOF.
-    if (t.status === 'completed' || this.finishing.has(t.id)) return;
+    if (this._isTerminal(t.status) || t.status === 'completed' || this.finishing.has(t.id)) return;
     this.finishing.add(t.id);
     try {
       // Assembler par séquences contiguës de 0, en sommant les longueurs réelles
@@ -1137,6 +1182,8 @@ export class TransferManager {
       );
     } finally {
       this.finishing.delete(t.id);
+      this.transfers.delete(t.id);
+      this.chunkStore?.clear(t.id);
     }
   }
 

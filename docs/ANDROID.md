@@ -10,23 +10,56 @@ commun aux deux.
 
 ## Transfert écran verrouillé
 
-Trois mécanismes se complètent :
+Quatre mécanismes se complètent :
 
 1. **Wake lock d'écran** (`app/lib/wake-lock.ts`) : empêche l'extinction
-   automatique pendant un transfert, comme dans la PWA.
+   automatique pendant un transfert quand l'écran est allumé. Le navigateur le
+   relâque dès que la page passe en arrière-plan : il est redemandé au retour
+   au premier plan, mais ce n'est **pas** lui qui maintient le CPU en veille.
 2. **Service avant-plan** (`TransferForegroundService.java`) : notification
-   permanente, `PARTIAL_WAKE_LOCK` (CPU éveillé) et verrou Wi-Fi haute
-   performance. Il est démarré par le plugin dès qu'un transfert est actif et
-   arrêté quand la liste est vide. Sans lui, Android suspend le WebView dès que
-   l'écran se verrouille.
-3. **Reprise IndexedDB** (`app/lib/resume-store.ts`) : si Android tue quand même
+   permanente, `PARTIAL_WAKE_LOCK` (CPU éveillé, sans timeout) et verrou Wi-Fi
+   basse latence. Il vit **pendant tout le salon**, pas seulement pendant les
+   transferts : `mobileKeepAlive(true)` est envoyé à l'entrée dans le salon et
+   réaffirmé sur `connect`, `disconnect`, au retour au premier plan et à chaque
+   tick. Un transfert terminé appelle `mobileFinishTransfer()` ( compteur à 0 )
+   et **non** `mobileStopTransfer()` : seul le bouton de sortie du salon arrête
+   le service.
+3. **Tick natif → WebView** (watchdog du service, toutes les 10 s) : c'est le
+   point essentiel pour tenir « des heures en veille ». Chromium bride les
+   timers JS d'une page masquée à 1/s puis 1/min après 5 minutes (même avec un
+   wake lock CPU). Le watchdog natif, lui, continue de tourner : il réacquiert
+   les verrous si besoin, rafraîchit la notification et émet `serviceTick`. Le
+   WebView y réagit en reconnectant la socket, en relançant les transferts
+   interrompus et en appelant directement la boucle d'envoi — sans dépendre des
+   `setTimeout` bridés.
+4. **Reprise IndexedDB** (`app/lib/resume-store.ts`) : si Android tue quand même
    le processus (pression mémoire, Doze), les chunks déjà reçus sont conservés
    et le transfert reprend à partir du dernier accusé de réception.
 
-La continuité est donc « meilleur effort + reprise transparente » : un
-verrouillage manuel, un changement de réseau ou une mise à jour du système peut
-toujours interrompre la connexion, mais le transfert reprend sans renvoyer le
-fichier depuis le début.
+### Pourquoi ça se bloquait après quelques minutes
+
+Trois bugs se combinaient (corrigés en v1.0.31) :
+
+- `mobileStopTransfer()` était appelé dès que le compteur de transferts tombait
+  à 0, et `TransferForegroundService.stop()` remettait `keepAlive = false` :
+  le service s'éteignait définitivement après le premier transfert terminé.
+- L'effet `mobileKeepAlive(step === 'room' && status !== 'disconnected')`
+  coupait le service sur `disconnected` — exactement quand la veille coupe le
+  Wi-Fi et qu'il faut au contraire garder le CPU éveillé pour se reconnecter.
+- Le listener `visibilitychange` vivait dans un effet conditionné aux
+  transferts actifs : il était démonté dès que les transferts passaient en
+  `interrupted`, donc le retour au premier plan ne relançait rien.
+
+À cela s'ajoutait le throttling des timers WebView décrit plus haut, et une
+exemption de batterie marquée « déjà demandée » avant même l'affichage du
+dialogue système (donc jamais redemandée après un refus). Le flag n'est maintenant
+posé qu'après l'ouverture effective du réglage, et l'état est exposé au JS via
+`getServiceState()` pour le diagnostic.
+
+**Important** : sur les ROM agressives (Xiaomi, Samsung, Oppo…), l'exemption
+« Ne pas optimiser » et l'autorisation de démarrage automatique du fabricant
+restent nécessaires. Vérifiez que la notification « GlobalShare » reste visible
+en permanence : si elle disparaît, le service a été tué par le système.
 
 Permissions déclarées dans `android/app/src/main/AndroidManifest.xml` :
 `INTERNET`, `ACCESS_NETWORK_STATE`, `FOREGROUND_SERVICE`,

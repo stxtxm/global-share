@@ -86,6 +86,31 @@ Correctifs appliqués :
   et test unitaire « aucun ACK lent ne doit provoquer de retransmission
   prématurée à 9 s ».
 
+## Bouton « Annuler » (v1.0.31)
+
+Le bouton est désormais un arrêt complet, identique au nettoyage qui se
+produisait quand on quittait le salon — c'est précisément pour cela que quitter
+le salon « fonctionnait » alors que le bouton ne faisait rien.
+
+`TransferManager.cancel()` et `onTransferCancel()` appellent un helper `_stop()`
+qui :
+
+- coupe les `ackTimers` **et** l'`eofTimer` (l'ancienne closure `emitEof` se
+  reprogrammait toutes les 2 s sans jamais vérifier le statut) ;
+- vide `pending`, `buffer`, `ackAttempts`, `sentAt` et le `chunkStore` côté
+  réception (les chunks partiels n'étaient effacés que du côté expéditeur) ;
+- **retire le transfert du `Map` interne** : sinon `getAll()` le réinjectait
+  dans l'interface 200 ms plus tard, donnant l'impression que le clic n'avait
+  rien fait ;
+- empêche tout handler socket (`transfer-chunk`, `transfer-ack`, `transfer-eof`,
+  `transfer-resync`, `transfer-end`) de faire revivre un transfert terminal ou
+  d'enregistrer le fichier après annulation.
+
+Côté interface, `syncTransfers()` filtre aussi les statuts terminaux, le timer
+de rafraîchissement en attente est annulé sur clic, et les lignes orphelines
+(manager recréé après reconnexion) sont retirées. Un bouton « Annuler » a été
+ajouté dans la mini-barre, seule surface toujours visible sur mobile.
+
 ## Protocole (pour les clients anciens)
 
 - `transfer-init` annonce la taille des chunks ; le récepteur ignore l'annonce
