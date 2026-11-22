@@ -102,6 +102,9 @@ const actions = {
   check: () => void getBridge()?.checkForUpdates?.(),
   download: () => void getBridge()?.downloadUpdate?.(),
   install: () => void getBridge()?.installUpdate?.(),
+  openInstaller: () => void getBridge()?.openInstaller?.().then((error) => {
+    if (error) applyState({ ...currentState, status: 'error', message: String(error) });
+  }),
   dismiss: () => {
     // Retour immédiat : le main publiera l'état confirmé juste après.
     applyState({ ...currentState, status: 'idle', message: '', percent: 0 });
@@ -333,6 +336,13 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
       break;
     case 'error':
       title = 'Mise à jour impossible';
+      if (typeof getBridge()?.openInstaller === 'function') {
+        buttons.push({
+          label: 'Ouvrir le paquet',
+          primary: true,
+          run: actions.openInstaller,
+        });
+      }
       buttons.push({
         label: 'Réessayer',
         primary: true,

@@ -106,6 +106,7 @@ export interface DesktopUpdateBridge {
   downloadUpdate?: () => Promise<unknown>;
   installUpdate?: () => Promise<unknown>;
   dismissUpdate?: () => Promise<unknown>;
+  openInstaller?: () => Promise<unknown>;
   onUpdateState?: (listener: (state: unknown) => void) => (() => void) | void;
   onUpdateOpen?: (listener: () => void) => (() => void) | void;
   onServiceTick?: (listener: () => void) => (() => void) | void;

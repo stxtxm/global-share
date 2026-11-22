@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, ipcMain } = require('electron');
+const { app, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -171,10 +171,56 @@ function installCommand(type, installer) {
 
 function elevatedCommand([command, args]) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) return [command, args];
-  // pkexec ouvre la boîte de mot de passe de la session, sans shell. Les
-  // arguments doivent être dépliés (un tableau imbriqué serait joint en une
-  // seule chaîne que dnf refuse).
-  return hasCommand('pkexec') ? ['pkexec', [command, ...args]] : null;
+  if (!hasCommand('pkexec')) return null;
+  // pkexec réinitialise l'environnement : la session graphique (DISPLAY,
+  // XAUTHORITY, DBUS, XDG_RUNTIME_DIR) doit être retransmise explicitement,
+  // sinon aucun agent polkit ne peut afficher la boîte de mot de passe sur
+  // Fedora/GNOME Wayland et la commande échoue avec « requires root ».
+  const passthrough = [
+    'DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
+    'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'XDG_CURRENT_DESKTOP',
+  ]
+    .filter((key) => Boolean(process.env[key]))
+    .map((key) => `${key}=${process.env[key]}`);
+  // `env` est résolu par pkexec dans un environnement sain ; les arguments du
+  // gestionnaire de paquets restent dépliés (dnf refuse un tableau imbriqué).
+  return ['pkexec', ['env', ...passthrough, command, ...args]];
+}
+
+/** Traduit les erreurs pkexec/polkit en message actionnable. */
+function friendlyInstallError(output, type) {
+  const text = String(output || '');
+  const lower = text.toLowerCase();
+  if (lower.includes('not authorized') || lower.includes('not authorised')
+      || lower.includes('requires root') || lower.includes('must be setuid root')
+      || lower.includes('polkit') || lower.includes('authentication')) {
+    return 'La demande de mot de passe administrateur a échoué (polkit/pkexec). '
+      + 'Utilisez « Ouvrir le paquet » : le gestionnaire de fichiers lancera l’installation '
+      + 'avec la fenêtre de mot de passe de votre session.';
+  }
+  if (lower.includes('gpg') || lower.includes('signature') || lower.includes('key')) {
+    return 'Le paquet n’a pas pu être vérifié (clé GPG). Utilisez « Ouvrir le paquet » '
+      + 'pour l’installer depuis le gestionnaire de fichiers.';
+  }
+  if (lower.includes('locked') || lower.includes('en cours')) {
+    return 'Le gestionnaire de paquets est occupé (dnf/apt verrouillé). '
+      + 'Réessayez dans quelques instants ou ouvrez le paquet manuellement.';
+  }
+  return (text || `Le gestionnaire ${type === 'deb' ? 'dpkg' : 'rpm/dnf'} a refusé l’installation.`).slice(-1500);
+}
+
+/** Ouvre le paquet téléchargé dans le gestionnaire de fichiers du système.
+ *  C'est la voie de secours quand pkexec/polkit ne peut pas demander le mot de
+ *  passe : GNOME Software / Discover gèrent eux-mêmes l'élévation. */
+async function openInstaller() {
+  if (!installerPath || !fs.existsSync(installerPath)) {
+    return 'Le paquet téléchargé est introuvable. Relancez le téléchargement.';
+  }
+  const error = await shell.openPath(installerPath);
+  if (!error) return '';
+  const dirError = await shell.openPath(path.dirname(installerPath));
+  if (dirError) return `Impossible d'ouvrir le paquet : ${error}`;
+  return "Dossier des téléchargements ouvert : lancez l'installation depuis le gestionnaire de fichiers.";
 }
 
 function runCommand([command, args]) {
@@ -416,7 +462,8 @@ async function installUpdate() {
   if (!command) {
     publish({
       status: 'error',
-      message: 'pkexec est introuvable : le mot de passe administrateur ne peut pas être demandé.',
+      message: 'pkexec est introuvable : ouvrez le paquet depuis le gestionnaire de fichiers '
+        + 'pour saisir votre mot de passe administrateur.',
     });
     return state;
   }
@@ -432,7 +479,7 @@ async function installUpdate() {
   if (!result.ok) {
     publish({
       status: 'error',
-      message: (result.output || 'Le gestionnaire de paquets a refusé l’installation.').slice(-1500),
+      message: friendlyInstallError(result.output, type),
     });
     return state;
   }
@@ -456,6 +503,7 @@ function registerIpc() {
   ipcMain.handle('globalshare:update-download', () => downloadUpdate());
   ipcMain.handle('globalshare:update-install', () => installUpdate());
   ipcMain.handle('globalshare:update-dismiss', () => dismissUpdate());
+  ipcMain.handle('globalshare:update-open-installer', () => openInstaller());
 }
 registerIpc();
 
