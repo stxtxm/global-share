@@ -24,6 +24,15 @@ numéros suivent [SemVer](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [1.0.12] — 2026-11-22
+
+### Corrigé
+
+- **Bouton de mise à jour absent sur l'APK** : le pont Capacitor pouvait être
+  injecté après l'exécution du bundle. L'installation du pont est désormais
+  retentée au chargement et pendant les premières secondes, et l'interface se
+  réabonne dès qu'il devient disponible.
+
 ## [1.0.11] — 2026-11-21
 
 ### Corrigé
@@ -180,7 +189,8 @@ de photos et de dossiers (zip côté client), pause et reprise des transferts,
 signalisation et relais sur Cloudflare Worker, identifiants TURN éphémères,
 PWA installable et interface mobile avec wake lock.
 
-[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.11...HEAD
+[Non publié]: https://github.com/stxtxm/global-share/compare/v1.0.12...HEAD
+[1.0.12]: https://github.com/stxtxm/global-share/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/stxtxm/global-share/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/stxtxm/global-share/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/stxtxm/global-share/compare/v1.0.8...v1.0.9

@@ -54,10 +54,29 @@ function subscribe(event: string, listener: (value: unknown) => void): () => voi
   };
 }
 
-function install() {
-  if (typeof window === 'undefined' || window.globalshareMobile) return;
+const bridgeListeners = new Set<() => void>();
+
+/** Abonné par l'interface : prévient React que le pont natif est disponible. */
+export function subscribeMobileBridge(listener: () => void): () => void {
+  bridgeListeners.add(listener);
+  ensureMobileBridge();
+  return () => {
+    bridgeListeners.delete(listener);
+  };
+}
+
+/**
+ * Installe le pont dès que `window.Capacitor` existe. Suivant la version
+ * d'Android, le script natif est injecté au début du document OU en fin de
+ * page : on réessaie donc au chargement et pendant les premières secondes,
+ * sinon le bouton de mise à jour n'apparaît jamais.
+ */
+export function ensureMobileBridge(): boolean {
+  if (typeof window === 'undefined' || window.globalshareMobile) {
+    return typeof window !== 'undefined' && Boolean(window.globalshareMobile);
+  }
   const plugin = nativePlugin();
-  if (!plugin) return;
+  if (!plugin) return false;
 
   window.globalshareMobile = {
     isDesktop: false,
@@ -69,14 +88,25 @@ function install() {
     onUpdateState: (listener) => subscribe('updateState', listener),
     onUpdateOpen: (listener) => subscribe('updateOpen', () => listener()),
   };
+  bridgeListeners.forEach((listener) => listener());
+  return true;
 }
 
-// Exécuté à l'import, avant le premier rendu : l'encart de mise à jour trouve
-// déjà le pont quand il s'abonne au montage.
-install();
+ensureMobileBridge();
+if (typeof window !== 'undefined') {
+  window.addEventListener('load', ensureMobileBridge);
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    ensureMobileBridge();
+    if (window.globalshareMobile || attempts >= 40) clearInterval(timer);
+  }, 200);
+}
 
 export function isMobileHost(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.globalshareMobile);
+  if (typeof window === 'undefined') return false;
+  ensureMobileBridge();
+  return Boolean(window.globalshareMobile);
 }
 
 export function mobileStartTransfer(count: number, progress: number): void {

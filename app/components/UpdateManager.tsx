@@ -9,6 +9,7 @@ import {
   type UpdateState,
   type UpdateStatus,
 } from '../lib/update';
+import { ensureMobileBridge, subscribeMobileBridge } from '../lib/mobile-bridge';
 
 // Un seul abonnement au pont Electron, partagé par le bouton et l'encart.
 const stateListeners = new Set<() => void>();
@@ -85,10 +86,12 @@ function useOpenRequest(onOpen: () => void) {
 
 // Côté serveur, aucun pont natif n'existe : `useSyncExternalStore` garde le
 // premier rendu client identique au HTML serveur, puis lit le pont au montage.
-const NOOP_SUBSCRIBE = () => () => {};
 function useHasUpdateHost(): boolean {
+  useEffect(() => {
+    ensureMobileBridge();
+  }, []);
   return useSyncExternalStore(
-    NOOP_SUBSCRIBE,
+    subscribeMobileBridge,
     () => Boolean(getBridge()),
     () => false,
   );
