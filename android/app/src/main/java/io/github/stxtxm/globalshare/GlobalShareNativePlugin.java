@@ -349,6 +349,60 @@ public class GlobalShareNativePlugin extends Plugin {
     }
 
     /**
+     * Supprime le fichier du stockage partagé. `uri` est l'URI MediaStore
+     * conservée dans l'historique ; `name` sert de repli pour les entrées
+     * anciennes ou quand l'URI n'est plus valide. Une suppression déjà
+     * effectuée (fichier retiré depuis Fichiers) est un succès : le résultat
+     * attendu est que le fichier ne soit plus là.
+     */
+    @PluginMethod
+    public void deleteDownload(PluginCall call) {
+        JSObject result = new JSObject();
+        String uriText = call.getString("uri");
+        String name = call.getString("name");
+        android.content.Context context = getContext();
+        boolean deleted = false;
+        try {
+            if (uriText != null && !uriText.isEmpty()) {
+                Uri uri = Uri.parse(uriText);
+                // MediaStore seulement : sur Android ≤ 9, l'URI FileProvider
+                // ne sait pas supprimer et le repli par nom ci-dessous s'en
+                // charge dans le dossier public.
+                if ("media".equals(uri.getAuthority())) {
+                    deleted = context.getContentResolver().delete(uri, null, null) > 0;
+                }
+            }
+            if (!deleted && name != null && !name.isEmpty()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    String selection = MediaStore.MediaColumns.DISPLAY_NAME + " = ? AND "
+                            + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
+                    String[] args = {
+                            name,
+                            "%/" + Environment.DIRECTORY_DOWNLOADS + "/GlobalShare/%"
+                    };
+                    deleted = context.getContentResolver().delete(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, selection, args) > 0;
+                } else {
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_DOWNLOADS), "GlobalShare");
+                    File file = new File(dir, name);
+                    // Refuse un nom qui sortirait du dossier partagé.
+                    if (file.getCanonicalFile().getParentFile() != null
+                            && file.getCanonicalFile().getParentFile().equals(dir.getCanonicalFile())) {
+                        deleted = file.isFile() && file.delete();
+                    }
+                }
+            }
+            result.put("deleted", true);
+        } catch (SecurityException error) {
+            result.put("error", "Android a refusé la suppression : " + error.getMessage());
+        } catch (Exception error) {
+            result.put("error", "Suppression impossible : " + error.getMessage());
+        }
+        call.resolve(result);
+    }
+
+    /**
      * Liste les fichiers RÉELLEMENT présents dans Téléchargements/GlobalShare.
      * Source de vérité indépendante de l'historique IndexedDB : permet de voir,
      * ouvrir et supprimer un fichier même si l'entrée de l'historique a été
