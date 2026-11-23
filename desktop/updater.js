@@ -171,14 +171,14 @@ function installCommand(type, installer) {
 }
 
 /**
- * PackageKit (`pkcon`) : utilise polkit via D-Bus, sans besoin que pkexec soit
- * setuid. Sur Fedora/Nobara désormais, pkexec (polkit ≥ 127) devient
- * inutilisable (« nécessite root ») tandis que `pkcon install-local` déclenche
- * bien la boîte de mot de passe et signale aussi un agent manquant.
+ * Repli PackageKit. `--allow-untrusted` est nécessaire pour un paquet local :
+ * PackageKit peut le classer « need-untrusted » même signé avec la clé
+ * importée. Ce chemin ne sert que si pkexec est inutilisable ; sinon
+ * pkexec + dnf --nogpgcheck est plus direct et ne dépend pas de cette politique.
  */
 function pkconCommand(installer) {
   if (!hasCommand('pkcon')) return null;
-  return ['pkcon', ['install-local', '-y', installer]];
+  return ['pkcon', ['--allow-untrusted', 'install-local', '-y', installer]];
 }
 
 function elevatedCommand([command, args]) {
@@ -199,14 +199,23 @@ function elevatedCommand([command, args]) {
   return ['pkexec', ['env', ...passthrough, command, ...args]];
 }
 
+function isElevationUnavailable(output) {
+  const lower = String(output || '').toLowerCase();
+  return lower.includes('must be setuid root') || lower.includes('requires root')
+    || lower.includes('polkit 127') || lower.includes('no authentication agent')
+    || lower.includes('no session for cookie');
+}
+
 /** Traduit les erreurs pkexec/pkcon/polkit en message actionnable. */
 function friendlyInstallError(output, type) {
   const text = String(output || '');
   const lower = text.toLowerCase();
-  if (lower.includes('must be setuid root') || lower.includes('requires root')
-      || lower.includes('polkit 127') || lower.includes('pkexec')) {
-    return 'Échec d’élévation : pkexec est présent mais non setuid (polkit ≥ 127 ou durcissement). '
-      + 'Utilisez « Ouvrir le paquet » pour installer avec votre mot de passe administrateur.';
+  // PackageKit reclasse un RPM local en « need-untrusted » même quand il est
+  // signé et que la clé est importée. Ce n'est pas un mot de passe invalide.
+  if (lower.includes('need-untrusted') || lower.includes('package-install-untrusted')) {
+    return 'PackageKit considère ce paquet local comme non fiable malgré sa signature. '
+      + 'Utilisez « Ouvrir le paquet », « Copier dans Fichiers », ou installez-le avec '
+      + '« sudo dnf install --nogpgcheck <fichier.rpm> ».';
   }
   if (lower.includes('no authentication agent') || lower.includes('authentication agent')) {
     return 'Aucun agent polkit graphique actif dans cette session (Fedora/Nobara/terminal). '
@@ -215,17 +224,25 @@ function friendlyInstallError(output, type) {
   if (lower.includes('no session for cookie') || lower.includes('reactivation')) {
     return 'Session polkit introuvable (polkit ≥ 127). Redémarrez l’agent polkit ou votre session.';
   }
-  if (lower.includes('not authorized') || lower.includes('not authorised') || lower.includes('authentication')) {
-    return 'Authentification refusée ou annulée par l’utilisateur. Utilisez « Ouvrir le paquet » '
-      + 'et vérifiez que votre mot de passe administrateur est valide (groupe wheel / mot de passe root).';
+  if (lower.includes('must be setuid root') || lower.includes('requires root')
+      || lower.includes('polkit 127') || lower.includes('pkexec')) {
+    return 'pkexec ne peut pas élever les privilèges sur ce système (polkit ≥ 127 ou durcissement). '
+      + 'Utilisez « Ouvrir le paquet » ou « sudo dnf install --nogpgcheck <fichier.rpm> ».';
   }
-  if (lower.includes('locked') || lower.includes('en cours')) {
-    return 'Le gestionnaire de paquets est occupé (dnf/apt verrouillé). '
-      + 'Réessayez dans quelques instants ou ouvrez le paquet manuellement.';
+  if (lower.includes('not authorized') || lower.includes('not authorised')
+      || lower.includes('authentication') || lower.includes('dismissed')
+      || lower.includes('cancelled') || lower.includes('annul')) {
+    return 'Authentification administrateur refusée ou annulée. '
+      + 'Réessayez, ou utilisez « Ouvrir le paquet » / « Copier dans Fichiers » / '
+      + '« sudo dnf install --nogpgcheck <fichier.rpm> ».';
   }
   if (lower.includes('gpg') || lower.includes('signature') || lower.includes('key')) {
     return 'Le paquet n’a pas pu être vérifié (clé GPG). Utilisez « Ouvrir le paquet » '
       + 'pour l’installer depuis le gestionnaire de fichiers.';
+  }
+  if (lower.includes('locked') || lower.includes('en cours')) {
+    return 'Le gestionnaire de paquets est occupé (dnf/apt verrouillé). '
+      + 'Réessayez dans quelques instants ou ouvrez le paquet manuellement.';
   }
   return (text || `Le gestionnaire ${type === 'deb' ? 'dpkg' : 'rpm/dnf'} a refusé l’installation.`).slice(-1500);
 }
@@ -286,32 +303,37 @@ async function revealInstaller() {
 function runCommand([command, args]) {
   return new Promise((resolve) => {
     let output = '';
-    let timedOut = false;
+    let settled = false;
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     // 5 minutes : sur un réseau souvent lent, dnf télécharge dans le cache
     // avant d'installer ; si polkit ne répond pas, on ne doit pas rester
     // bloqué « installation en cours » pour l'utilisateur.
     const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-      resolve({
+      finish({
         ok: false,
-        output: output + '\n[TIMEOUT] Le gestionnaire de paquets n’a pas répondu en 5 minutes (mot de passe bloquant ? utilisez « Ouvrir le paquet »).',
+        output: output + '\n[TIMEOUT] Le gestionnaire de paquets n’a pas répondu en 5 minutes '
+          + '(mot de passe bloquant ? utilisez « Ouvrir le paquet »).',
       });
+      child.kill('SIGKILL');
     }, 5 * 60_000);
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
     const collect = (chunk) => {
       output = (output + String(chunk)).slice(-4000);
     };
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      resolve({ ok: false, output: error.message });
-    });
+    child.on('error', (error) => finish({ ok: false, output: error.message }));
     child.on('close', (code) => {
-      clearTimeout(timer);
-      void timedOut;
-      resolve({ ok: code === 0, output: output.trim() });
+      const text = output.trim();
+      if (code !== 0) {
+        console.warn(`[GlobalShare] ${command} a échoué (code ${code}) : ${text.slice(-1500)}`);
+      }
+      finish({ ok: code === 0, output: text });
     });
   });
 }
@@ -537,12 +559,14 @@ async function installUpdate() {
     publish({ status: 'error', installerPath: null, message: 'Le paquet téléchargé est introuvable. Relancez le téléchargement.' });
     return state;
   }
-  // pkcon (PackageKit) avant pkexec : ne dépend pas du binaire setuid pkexec
-  // (défaisal sur polkit ≥ 127) et demande le mot de passe via D-Bus, avec un
-  // agent graphique si celui-ci est présent.
-  const pkcon = pkconCommand(installerPath);
+  // pkexec + dnf --nogpgcheck d'abord : chemin éprouvé sur Fedora/GNOME, et
+  // indépendant de la politique « only_trusted » de PackageKit qui reclasse
+  // les RPM locaux en need-untrusted. pkcon reste un repli quand pkexec est
+  // structurellement inutilisable (polkit ≥ 127 / non setuid / agent absent).
   const elevated = elevatedCommand(installCommand(type, installerPath));
-  if (!pkcon && !elevated) {
+  const fallback = pkconCommand(installerPath);
+  const command = elevated || fallback;
+  if (!command) {
     publish({
       status: 'error',
       installerPath,
@@ -553,15 +577,24 @@ async function installUpdate() {
   }
 
   installing = true;
-  const command = pkcon || elevated;
   publish({
     status: 'installing',
-    message: pkcon ? 'Installation via PackageKit…' : 'Installation en cours…',
+    message: elevated ? 'Installation en cours…' : 'Installation via PackageKit…',
     percent: 0,
   });
   // Valeur > 1 : barre indéterminée (pkexec/pkcon nous ne disent rien).
   setProgress(2);
-  const result = await runCommand(command);
+  let result = await runCommand(command);
+  // Repli uniquement si pkexec est structurellement indisponible, pas après
+  // une annulation/refus explicite de l'utilisateur.
+  if (!result.ok && elevated && fallback && isElevationUnavailable(result.output)) {
+    publish({
+      status: 'installing',
+      message: 'pkexec indisponible, tentative via PackageKit…',
+      percent: 0,
+    });
+    result = await runCommand(fallback);
+  }
   installing = false;
   setProgress(-1);
 

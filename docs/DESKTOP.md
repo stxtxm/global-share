@@ -72,16 +72,23 @@ Deux fichiers de métadonnées accompagnent les paquets et **doivent** être
 publiés dans la release : `latest.yml` (Windows) et `latest-linux.yml` (Linux).
 Une release en brouillon ou marquée *pre-release* est ignorée par l'auto-update.
 
-Particularités Linux : un `.rpm`/`.deb` s'installe via **`pkcon install-local`** (PackageKit, D-Bus) ou, à défaut, via **`pkexec`** qui réinitialise l'environnement. Depuis la **v1.0.39**, `DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` et `XDG_RUNTIME_DIR` sont transmis explicitement par le code afin que l'agent polkit puisse afficher la fenêtre de mot de passe (Fedora/Nobara sous GNOME Wayland).
+Particularités Linux : un `.rpm`/`.deb` s'installe en priorité via **`pkexec`** + le gestionnaire natif (`dnf --nogpgcheck -y` pour un RPM local). `pkexec` réinitialise l'environnement ; `DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY` et `XDG_CURRENT_DESKTOP` sont transmis explicitement pour que l'agent polkit affiche la boîte de mot de passe sous Fedora/GNOME Wayland.
 
-L'ordre d'installation est : PackageKit d'abord, puis pkexec, puis le paquet dans Fichiers. Les messages d'erreur traduits :
-- « Échec d'élévation : pkexec est présent mais non setuid (polkit ≥ 127 ou durcissement). »
+Quand `pkexec` est structurellement inutilisable (polkit ≥ 127, binaire non setuid, agent/session polkit absent), GlobalShare tente un repli **PackageKit** (`pkcon --allow-untrusted install-local -y`). Ce repli n'est pas utilisé après un refus/annulation explicite de l'utilisateur. PackageKit peut classer un RPM local signé en `need-untrusted` : ce cas est signalé comme un problème de politique PackageKit, pas comme un mot de passe invalide.
+
+Messages d'erreur traduits :
+- « PackageKit considère ce paquet local comme non fiable malgré sa signature. »
+- « pkexec ne peut pas élever les privilèges sur ce système (polkit ≥ 127 ou durcissement). »
 - « Aucun agent polkit graphique actif dans cette session (Fedora/Nobara/terminal). »
 - « Session polkit introuvable (polkit ≥ 127). »
-- « Authentication refused or canceled by user. Use « Ouvrir le paquet » and check your sudo password. »
+- « Authentification administrateur refusée ou annulée. »
 - « Le gestionnaire de paquets est occupé (dnf/apt verrouillé). »
 
-« **Ouvrir le paquet** » et « **Copier dans Fichiers** » (nouveau, v1.0.40) sont des replis accessibles directement depuis l'encart d'erreur.
+« **Ouvrir le paquet** » et « **Copier dans Fichiers** » sont des replis accessibles depuis l'encart d'erreur. En dernier recours :
+
+```bash
+sudo dnf install --nogpgcheck ./globalshare-<version>.x86_64.rpm
+```
 
 L'AppImage se remplace sans rien demander. Une installation par
 `dnf`/`zypper`/`apt` reste préférable quand elle est disponible.
