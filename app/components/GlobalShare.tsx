@@ -58,6 +58,7 @@ import {
   type LiveRoom,
   type RoomHistoryEntry,
 } from '../lib/rooms';
+import { clearLastRoom, loadLastRoom, rememberLastRoom } from '../lib/last-room';
 import {
   loadSettings as loadAppSettings,
   saveSettings as saveAppSettings,
@@ -185,45 +186,8 @@ const getSocketUrl = (): string => {
 // reconnexion.
 const SESSION_KEY = 'globalshare-session-id';
 // Dernier salon rejoint : un onglet restauré après avoir été tué y retourne
-// sans que l'utilisateur ait à retaper le code.
-const LAST_ROOM_KEY = 'globalshare-last-room';
-
-/**
- * Mémorise le salon courant. La copie de session suffit à un rechargement,
- * mais sur Android un balayage détruit le WebView — et son sessionStorage —
- * alors que les chunks du transfert, eux, survivent dans IndexedDB : la copie
- * `localStorage` permet de rentrer tout seul dans le salon à la réouverture,
- * ce qui déclenche la reprise (`resume` du pair, `loadChunks`/`loadSends`)
- * sans que l'utilisateur ait à retaper le code.
- */
-const rememberLastRoom = (roomId: string, name?: string): void => {
-  const payload = JSON.stringify({ roomId, name });
-  try {
-    window.sessionStorage.setItem(LAST_ROOM_KEY, payload);
-  } catch {
-    // Stockage refusé : on ne pourra simplement pas rejoindre tout seul.
-  }
-  if (!isMobileHost()) return;
-  try {
-    window.localStorage.setItem(LAST_ROOM_KEY, payload);
-  } catch {
-    // Quota ou stockage refusé : la reprise attendra une saisie manuelle.
-  }
-};
-
-/** Sortie volontaire du salon : plus rien à rejoindre automatiquement. */
-const forgetLastRoom = (): void => {
-  try {
-    window.sessionStorage.removeItem(LAST_ROOM_KEY);
-  } catch {
-    // ignore
-  }
-  try {
-    window.localStorage.removeItem(LAST_ROOM_KEY);
-  } catch {
-    // ignore
-  }
-};
+// sans que l'utilisateur ait à retaper le code (voir lib/last-room, qui gère la
+// copie durable Android et sa limite de fraîcheur).
 const getSessionId = (): string => {
   if (typeof window === 'undefined') return '';
   try {
@@ -1297,7 +1261,7 @@ export default function GlobalShare() {
       if (connectDeadlineTimeoutRef.current) { clearTimeout(connectDeadlineTimeoutRef.current); connectDeadlineTimeoutRef.current = null; }
       setConnectionStatus('connected');
       socket.emit('join-room', { roomId: effectiveRoomId, name: effectiveName, sessionId });
-      rememberLastRoom(effectiveRoomId, effectiveName);
+      rememberLastRoom(effectiveRoomId, effectiveName, { persist: isMobileHost() });
       // Historique local : le salon remonte en tête de l'accueil.
       rememberRoom(effectiveRoomId, effectiveName);
       setRoomHistory(loadRoomHistory());
@@ -1376,25 +1340,14 @@ export default function GlobalShare() {
 
   // Onglet tué par le système puis restauré : on rejoint le dernier salon tout
   // seul, sinon le pair d'en face attendrait un code que personne ne retape.
-  // Sur Android, un balayage a emporté le sessionStorage : la copie
-  // `localStorage` prend le relais pour que la reprise IndexedDB reparte seule.
+  // Sur Android, un balayage a emporté le sessionStorage : la copie durable
+  // prend le relais, mais seulement si elle date de moins de 24 h — rejoindre
+  // des jours plus tard un salon vide n'aurait plus rien à reprendre.
   const autoJoinedRef = useRef(false);
   useEffect(() => {
     if (autoJoinedRef.current || typeof window === 'undefined') return;
     if (new URLSearchParams(window.location.search).get('room')) return;
-    let stored: { roomId?: string; name?: string } | null = null;
-    try {
-      stored = JSON.parse(window.sessionStorage.getItem(LAST_ROOM_KEY) ?? 'null');
-    } catch {
-      stored = null;
-    }
-    if (!stored?.roomId && isMobileHost()) {
-      try {
-        stored = JSON.parse(window.localStorage.getItem(LAST_ROOM_KEY) ?? 'null');
-      } catch {
-        stored = null;
-      }
-    }
+    const stored = loadLastRoom({ persist: isMobileHost() });
     const storedRoom = stored?.roomId;
     if (!storedRoom) return;
     const storedName = stored?.name;
@@ -1427,7 +1380,7 @@ export default function GlobalShare() {
 
   const exitRoom = useCallback(() => {
     // Sortie volontaire : le salon ne doit plus être rejoint tout seul.
-    forgetLastRoom();
+    clearLastRoom();
     Object.keys(peersRef.current).forEach(destroyPeer);
     peersRef.current = {};
     setPeers({});

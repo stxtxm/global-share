@@ -53,7 +53,10 @@ Quatre mécanismes se complètent :
    d'origine, que l'IndexedDB ne conserve pas. Sur Android, le code du salon est
    aussi doublé dans `localStorage` (`sessionStorage` disparaît avec le WebView) :
    au redémarrage, l'app rejoint le dernier salon toute seule et la reprise
-   repart sans intervention. Quitter le salon efface les deux copies.
+   repart sans intervention. Cette copie expire après **24 h**
+   (`LAST_ROOM_TTL_MS`, `app/lib/last-room.ts`) : plus tard, le salon serait vide
+   et la reprise n'aurait aucun pair à qui se raccrocher. Quitter le salon
+   efface les deux copies.
 
 ### Pourquoi ça se bloquait après quelques minutes
 

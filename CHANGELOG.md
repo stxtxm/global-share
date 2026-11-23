@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.49] - 2026-11-23
 
 ### Added
-- **APK : l'app rejoint toute seule le dernier salon après un balayage.** Le code du salon n'était mémorisé que dans `sessionStorage`, que la destruction du WebView efface : l'app rouvrait sur l'accueil et la reprise IndexedDB attendait que l'utilisateur retape le salon. Une copie du salon est maintenant aussi écrite dans `localStorage` (Android seulement), ce qui relance la reprise des chunks reçus et des envois interrompus sans intervention. Quitter le salon efface les deux copies.
+- **APK : l'app rejoint toute seule le dernier salon après un balayage.** Le code du salon n'était mémorisé que dans `sessionStorage`, que la destruction du WebView efface : l'app rouvrait sur l'accueil et la reprise IndexedDB attendait que l'utilisateur retape le salon. Une copie du salon est maintenant aussi écrite dans `localStorage` (Android seulement), ce qui relance la reprise des chunks reçus et des envois interrompus sans intervention. Elle expire au bout de **24 h** : rouvert plusieurs jours après un balayage, le salon serait vide. Quitter le salon efface les deux copies.
 
 ### Fixed
 - **APK : la notification « GlobalShare · Connectée · reste joignable en arrière-plan » ne survit plus à la fermeture de l'app.** Le service avant-plan n'écoutait ni le retrait de la tâche (`onTaskRemoved`) ni la fermeture de l'activité (bouton Retour), et le système pouvait le relancer seul après un kill du processus ; la notification restait alors affichée indéfiniment. La fermeture arrête maintenant le service et sa notification, et le service n'est plus relancé par le système (`START_NOT_STICKY`).
