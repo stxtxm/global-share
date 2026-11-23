@@ -915,6 +915,7 @@ export default function GlobalShare() {
    *  - si MediaStore est vide, les entrées reçues deviennent non-validées et sont retirées.
    */
   const refreshMobileFiles = useCallback(async () => {
+    if (!isMobileHost()) return;
     const { files, error } = await mobileListDownloads();
     if (error) showToast('warning', error);
     setSharedFiles(files);

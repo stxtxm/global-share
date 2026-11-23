@@ -261,6 +261,7 @@ export interface SharedFile {
 
 /** Fichiers réellement présents dans Téléchargements/GlobalShare. */
 export async function mobileListDownloads(): Promise<{ files: SharedFile[]; error?: string }> {
+  if (!isMobileHost()) return { files: [] };
   const plugin = nativePlugin();
   if (typeof plugin?.listDownloads !== 'function') {
     return { files: [], error: missingNative('Liste des fichiers') };

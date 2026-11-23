@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.45] - 2026-11-23
+
+### Fixed
+- Compatibilité desktop de la synchronisation des fichiers : hors APK, les
+  helpers mobiles (`mobileListDownloads`) ne renvoient plus d'erreur « fonction
+  indisponible » et la synchronisation n'est effectuée que sur Android.
+
 ## [1.0.44] - 2026-11-23
 
 ### Fixed
