@@ -22,8 +22,19 @@ Quatre mécanismes se complètent :
    transferts : `mobileKeepAlive(true)` est envoyé à l'entrée dans le salon et
    réaffirmé sur `connect`, `disconnect`, au retour au premier plan et à chaque
    tick. Un transfert terminé appelle `mobileFinishTransfer()` ( compteur à 0 )
-   et **non** `mobileStopTransfer()` : seul le bouton de sortie du salon arrête
-   le service.
+   et **non** `mobileStopTransfer()` : le service s'arrête au bouton de sortie du
+   salon, ou dès que le dernier transfert se termine.
+   Fermer l'app (retrait des applications récentes via `onTaskRemoved`, bouton
+   Retour via `MainActivity.onDestroy` quand `isFinishing()`) appelle
+   `TransferForegroundService.detach()` : le service **et sa notification**
+   s'arrêtent, transfert en cours ou non. C'est le comportement juste, car tout
+   le transfert vit dans le WebView, détruit avec la tâche : le service ne
+   pouvait plus rien faire avancer et il ne restait que sa notification. Un
+   drapeau interne « détachée » empêche un appel JS encore en vol (tick,
+   progression) de rallumer la notification ; il n'est levé qu'à la recréation
+   de l'activité (`attach()`). Le service n'est jamais relancé par le système
+   (`START_NOT_STICKY`) : un service sans WebView ne pouvait rien faire et
+   laissait sa notification affichée indéfiniment.
 3. **Tick natif → WebView** (watchdog du service, toutes les 10 s) : c'est le
    point essentiel pour tenir « des heures en veille ». Chromium bride les
    timers JS d'une page masquée à 1/s puis 1/min après 5 minutes (même avec un
@@ -33,8 +44,15 @@ Quatre mécanismes se complètent :
    interrompus et en appelant directement la boucle d'envoi — sans dépendre des
    `setTimeout` bridés.
 4. **Reprise IndexedDB** (`app/lib/resume-store.ts`) : si Android tue quand même
-   le processus (pression mémoire, Doze), les chunks déjà reçus sont conservés
-   et le transfert reprend à partir du dernier accusé de réception.
+   le processus (pression mémoire, Doze), si l'app est balayée ou fermée pendant
+   un transfert, les chunks déjà reçus et les envois en cours sont conservés et
+   le transfert reprend à partir du dernier accusé de réception. Après un
+   balayage, la réception repart seule dès le retour dans le salon
+   (`_restoreReceive` recharge les chunks et annonce la position exacte à
+   l'expéditeur) ; un envoi interrompu propose de réassocier le fichier
+   d'origine, que l'IndexedDB ne conserve pas. Le code du salon, lui, n'est
+   mémorisé que dans `sessionStorage` : il disparaît avec le WebView, le salon
+   se rejoint donc depuis l'historique de l'accueil.
 
 ### Pourquoi ça se bloquait après quelques minutes
 
@@ -233,6 +251,12 @@ Depuis la **v1.0.40**, `nativeVersion` est passé à **6** : la coquille 5 appel
 laissait le fichier sur le téléphone. Cette version fournit la suppression
 MediaStore (ou du fichier public sur Android ≤ 9) et force le téléchargement de
 l'APK complet.
+
+Depuis la **v1.0.49**, `nativeVersion` passe à **9** : les corrections du service
+avant-plan (arrêt à la fermeture de l'app, et transfert en cours préservé) sont
+natives. Un bundle web ne les contient pas : l'APK complet doit être installé.
+(La v1.0.48, qui portait une première version de ce correctif avec
+`nativeVersion` 8, n'a jamais été publiée.)
 
 Depuis la **v1.0.41**, `nativeVersion` passe à **7** : la coquille Electron a
 changé (tray Linux/GNOME, repli minimisé) et le compteur est commun au bureau et

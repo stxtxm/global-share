@@ -83,8 +83,25 @@ public class GlobalShareNativePlugin extends Plugin {
         }
         // Le service émet un tick toutes les 10 s : on le relaie vers le JS,
         // dont les timers sont bridés quand l'écran est éteint (veille).
+        // Le service peut survivre à l'interface (transfert en cours après
+        // fermeture de l'app) : un tick envoyé à un bridge détruit ne doit pas
+        // lever d'exception sur le thread principal.
         TransferForegroundService.setTickListener(() ->
-                onUiThread(() -> notifyListeners("serviceTick", new JSObject())));
+                onUiThread(() -> {
+                    try {
+                        if (getBridge() == null || getActivity() == null) return;
+                        notifyListeners("serviceTick", new JSObject());
+                    } catch (Exception ignored) {
+                        // WebView détruit entre le tick et l'envoi.
+                    }
+                }));
+    }
+
+    @Override
+    public void handleOnDestroy() {
+        // Interface détruite : plus personne pour recevoir le tick du service.
+        TransferForegroundService.setTickListener(null);
+        super.handleOnDestroy();
     }
 
     private void onUiThread(Runnable action) {

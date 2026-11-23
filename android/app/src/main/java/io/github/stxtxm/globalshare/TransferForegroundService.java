@@ -24,21 +24,23 @@ import androidx.core.content.ContextCompat;
  *
  * - « keepAlive » : la session est ouverte et connectée ; le socket du WebView
  *   doit rester actif, transfert en cours ou pas (sinon l'appareil s'endort,
- *   la socket tombe et les pairs nous voient partir). Republicain : l'app est
+ *   la socket tombe et les pairs nous voient partir). Réaffirmé : l'app est
  *   revenue au premier plan ou a quitté le salon → l'UI envoie keepAlive=false.
  * - Les transferts : compteur affiché dans la notification (envoi et réception
  *   passent par le même compteur web).
  *
  * Le service ne s'arrête que quand les deux sont à zéro. Si Android tue quand
  * même le WebView, la reprise IndexedDB repart au dernier chunk.
+ *
+ * Fermer l'app (balayage hors des applications récentes, bouton Retour)
+ * arrête toujours le service. Tout le transfert vit dans le WebView, qui est
+ * détruit avec la tâche : le service ne pouvait donc plus rien faire avancer,
+ * il ne restait que sa notification. La reprise se fait à la réouverture, à
+ * partir des chunks conservés en IndexedDB (`app/lib/resume-store.ts`). Le
+ * booléen `detached` empêche un appel JS tardif de rallumer le service entre
+ * la fermeture et la recréation de l'activité (`attach`).
  */
 public final class TransferForegroundService extends Service {
-    public static final String ACTION_START =
-            "io.github.stxtxm.globalshare.TRANSFER_START";
-    public static final String ACTION_UPDATE =
-            "io.github.stxtxm.globalshare.TRANSFER_UPDATE";
-    public static final String ACTION_KEEP_ALIVE =
-            "io.github.stxtxm.globalshare.TRANSFER_KEEP_ALIVE";
     public static final String ACTION_STOP =
             "io.github.stxtxm.globalshare.TRANSFER_STOP";
 
@@ -48,6 +50,12 @@ public final class TransferForegroundService extends Service {
     private static volatile int activeTransfers;
     private static volatile int progress;
     private static volatile boolean keepAlive;
+    /**
+     * L'interface a disparu (Retour, balayage) et le service a été arrêté :
+     * un appel JS encore en vol ne doit pas le rallumer. Seul `attach()`, à la
+     * recréation de l'activité, lève ce drapeau.
+     */
+    private static volatile boolean detached;
 
     /** Le plugin relaie ce tick vers le WebView pour battre le throttling JS. */
     public interface TickListener { void onTick(); }
@@ -76,24 +84,27 @@ public final class TransferForegroundService extends Service {
         }
     };
 
+    /** Session à maintenir : demandée par le salon et interface encore ouverte. */
+    private static boolean sessionActive() {
+        return keepAlive && !detached;
+    }
+
     /** Session salon connectée : la connexion doit survivre à l'arrière-plan. */
     public static void setKeepAlive(Context context, boolean enabled) {
+        if (detached) return;
         keepAlive = enabled;
         if (enabled) {
-            Intent intent = new Intent(context, TransferForegroundService.class);
-            intent.setAction(ACTION_KEEP_ALIVE);
-            ContextCompat.startForegroundService(context, intent);
+            requestStart(context);
         } else if (activeTransfers == 0) {
-            context.stopService(new Intent(context, TransferForegroundService.class));
+            stopService(context);
         }
     }
 
     public static void start(Context context, int count, int percent) {
+        if (detached) return;
         activeTransfers = Math.max(1, count);
         progress = clamp(percent);
-        Intent intent = new Intent(context, TransferForegroundService.class);
-        intent.setAction(ACTION_START);
-        ContextCompat.startForegroundService(context, intent);
+        requestStart(context);
     }
 
     public static void update(Context context, int count, int percent) {
@@ -101,38 +112,61 @@ public final class TransferForegroundService extends Service {
             finishTransfers(context);
             return;
         }
+        if (detached) return;
         activeTransfers = count;
         progress = clamp(percent);
-        Intent intent = new Intent(context, TransferForegroundService.class);
-        intent.setAction(ACTION_UPDATE);
-        ContextCompat.startForegroundService(context, intent);
+        requestStart(context);
     }
 
-    /** Transferts terminés : le service ne reste que si la session le demande. */
+    /**
+     * Dernier transfert terminé : le service s'arrête de lui-même s'il n'a plus
+     * de session à maintenir (app fermée ou salon quitté). C'est ce chemin qui
+     * retire la notification après la fermeture de l'app pendant un transfert.
+     */
     private static void finishTransfers(Context context) {
         activeTransfers = 0;
         progress = 0;
-        if (!keepAlive) {
-            context.stopService(new Intent(context, TransferForegroundService.class));
+        if (!sessionActive()) {
+            stopService(context);
             return;
         }
         // Session toujours ouverte : on ne garde que la connexion.
-        Intent intent = new Intent(context, TransferForegroundService.class);
-        intent.setAction(ACTION_KEEP_ALIVE);
-        ContextCompat.startForegroundService(context, intent);
+        requestStart(context);
     }
 
+    /** Arrêt demandé par l'UI (sortie du salon) : plus rien à maintenir. */
     public static void stop(Context context) {
         activeTransfers = 0;
         progress = 0;
         keepAlive = false;
-        Intent intent = new Intent(context, TransferForegroundService.class);
-        intent.setAction(ACTION_STOP);
-        context.stopService(intent);
+        // L'interface est vivante : elle pourra redemander le service.
+        detached = false;
+        stopService(context);
+    }
+
+    /**
+     * L'interface disparaît : bouton Retour (`MainActivity.onDestroy`) ou
+     * balayage hors des applications récentes (`onTaskRemoved`). Le WebView
+     * étant détruit avec la tâche, plus aucun transfert ne peut avancer : le
+     * service s'arrête toujours, et sa notification avec. `detached` reste
+     * posé pour qu'un appel JS encore en vol ne le rallume pas ; le transfert
+     * reprend depuis IndexedDB à la réouverture de l'app.
+     */
+    public static void detach(Context context) {
+        keepAlive = false;
+        activeTransfers = 0;
+        progress = 0;
+        detached = true;
+        stopService(context);
+    }
+
+    /** L'interface est de retour (activité recréée) : le salon peut re-demander. */
+    public static void attach() {
+        detached = false;
     }
 
     public static boolean isRunning() {
-        return keepAlive || activeTransfers > 0;
+        return !detached && (keepAlive || activeTransfers > 0);
     }
 
     public static boolean isBatteryOptimized(android.content.Context context) {
@@ -145,10 +179,37 @@ public final class TransferForegroundService extends Service {
         return Math.max(0, Math.min(100, value));
     }
 
+    /**
+     * Démarre le service sans laisser un refus système remonter dans la boucle
+     * principale : Android 12+ interdit un service avant-plan lancé depuis
+     * l'arrière-plan (`ForegroundServiceStartNotAllowedException`). L'instance
+     * déjà vivante suffit dans ce cas, elle rafraîchit sa notification.
+     */
+    private static void requestStart(Context context) {
+        try {
+            ContextCompat.startForegroundService(
+                    context, new Intent(context, TransferForegroundService.class));
+        } catch (Exception ignored) {
+            // Refus système : état statique conservé, prochain tick au premier plan.
+        }
+    }
+
+    private static void stopService(Context context) {
+        try {
+            context.stopService(new Intent(context, TransferForegroundService.class));
+        } catch (Exception ignored) {
+            // Service déjà arrêté : rien à faire.
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
-        createChannel();
+        try {
+            createChannel();
+        } catch (Exception ignored) {
+            // Canal déjà créé ou NotificationManager indisponible.
+        }
         acquireLocks();
         // Tick natif : les timers du WebView sont bridés à 1/min après 5 min
         // masqués (Chrome 88+), même avec un PARTIAL_WAKE_LOCK. Ce tick, lui,
@@ -158,24 +219,65 @@ public final class TransferForegroundService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent == null ? ACTION_START : intent.getAction();
-        if (ACTION_STOP.equals(action)) {
+        // Relance par le système sans intention (processus tué) : plus aucun
+        // WebView ne pilote le service, une notification « Connectée » ou
+        // « Transfert en cours » resterait affichée indéfiniment, app fermée.
+        if (intent == null) {
+            shutdown();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_STOP.equals(intent.getAction())) {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (intent != null && !ACTION_KEEP_ALIVE.equals(action)) {
-            int count = intent.getIntExtra("count", activeTransfers);
-            int percent = intent.getIntExtra("progress", progress);
-            if (count > 0) {
-                activeTransfers = count;
-                progress = clamp(percent);
-            }
+        // Interface fermée entre-temps : l'appel a été émis avant `detach`,
+        // il ne doit pas rallumer la notification.
+        if (detached) {
+            shutdown();
+            return START_NOT_STICKY;
         }
         acquireLocks();
-        showNotification();
-        // START_STICKY : si le système relance le service, la notification et
-        // le wake lock sont rétablis avec le dernier état connu.
-        return START_STICKY;
+        try {
+            showNotification();
+        } catch (Exception error) {
+            // startForeground refusé (type non autorisé, arrière-plan) : un
+            // service qui n'a pas pu se déclarer au premier plan doit
+            // s'arrêter, sinon Android lève une ANR « did not call
+            // startForeground ». On sort proprement, sans crash.
+            shutdown();
+            return START_NOT_STICKY;
+        }
+        // Jamais START_STICKY : un service relancé sans WebView ne peut plus
+        // rien faire et laissait sa notification en place pour toujours.
+        return START_NOT_STICKY;
+    }
+
+    /**
+     * L'utilisateur retire l'app des applications récentes : le WebView qui
+     * demandait le maintien du salon n'existe plus, le service s'arrête.
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        detach(this);
+        super.onTaskRemoved(rootIntent);
+    }
+
+    /** Arrêt complet : état statique, notification, verrous et service. */
+    private void shutdown() {
+        activeTransfers = 0;
+        progress = 0;
+        keepAlive = false;
+        // `detached` n'est pas remis à zéro ici : c'est ce qui empêche un appel
+        // JS tardif de relancer le service après la fermeture. Seul `attach()`
+        // (activité recréée) le lève.
+        watchdog.removeCallbacks(watchdogTick);
+        releaseLocks();
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (Exception ignored) {
+            // Service déjà retiré du premier plan : rien à retirer.
+        }
+        stopSelf();
     }
 
     private void createChannel() {
@@ -263,11 +365,27 @@ public final class TransferForegroundService extends Service {
         }
     }
 
+    /**
+     * Un verrou déjà relâché (ou relâché entre le test et l'appel) lève une
+     * RuntimeException : `onDestroy` n'a pas le droit de planter l'app.
+     */
+    private void releaseLocks() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception ignored) {
+            // Wake lock déjà relâché par le système.
+        }
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Exception ignored) {
+            // Verrou Wi-Fi déjà relâché par le système.
+        }
+    }
+
     @Override
     public void onDestroy() {
         watchdog.removeCallbacks(watchdogTick);
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        releaseLocks();
         super.onDestroy();
     }
 

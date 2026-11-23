@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.49] - 2026-11-23
+
+### Fixed
+- **APK : la notification « GlobalShare · Connectée · reste joignable en arrière-plan » ne survit plus à la fermeture de l'app.** Le service avant-plan n'écoutait ni le retrait de la tâche (`onTaskRemoved`) ni la fermeture de l'activité (bouton Retour), et le système pouvait le relancer seul après un kill du processus ; la notification restait alors affichée indéfiniment. La fermeture arrête maintenant le service et sa notification, et le service n'est plus relancé par le système (`START_NOT_STICKY`).
+- Cela vaut aussi avec un transfert en cours : tout le transfert vit dans le WebView, détruit avec la tâche, donc le service ne pouvait plus rien faire avancer et seule sa notification « Transfert en cours » restait. Le transfert reprend à la réouverture depuis les chunks conservés dans IndexedDB. Un drapeau interne « détachée » empêche un appel JS encore en vol de rallumer la notification ; il n'est levé qu'à la recréation de l'activité.
+- Robustesse du service : un refus de `startForeground`/`startForegroundService` (Android 12+, arrière-plan) ou un wake lock déjà relâché ne peut plus faire planter l'app.
+- `nativeVersion` passe à **9** : la correction est native, un bundle web ne la contient pas, l'APK complet doit être installé.
+
 ## [1.0.47] - 2026-11-23
 
 ### Added
