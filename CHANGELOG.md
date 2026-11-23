@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.44] - 2026-11-23
+
+### Fixed
+- **Incoherence bidirectionnelle « Fichiers reçus » / « Sur cet appareil »** :
+  - Après effacement du fichier depuis Fichiers (sur le téléphone ou Fichiers
+    de votre APK), la liste reçue est rafraîchie via `refreshMobileFiles()`.
+  - « Sur cet appareil » vide (aucune entrée de MediaStore) ⇒ les entrées reçues
+    non-validées sont retirées de la liste Fichiers reçus à l'ouverture de
+    l'onglet et à la réactivation.
+
+### Added
+- **« Effacer tout » (Sur cet appareil)** : supprime en masse les fichiers
+  sur MediaStore/Fichiers, avec confirmation.
+
 ## [1.0.43] - 2026-11-23
 
 ### Fixed

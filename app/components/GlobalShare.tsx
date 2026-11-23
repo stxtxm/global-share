@@ -908,12 +908,23 @@ export default function GlobalShare() {
     }
   }, []);
 
-  // Lecture du stockage partagé à l'ouverture de l'onglet : montre les fichiers
-  // même quand l'historique IndexedDB est vide ou périmé.
-  const loadSharedFiles = useCallback(async () => {
-    const result = await mobileListDownloads();
-    setSharedFiles(result.files);
-    if (result.error) showToast('warning', result.error);
+  /**
+   * Coherence bi-directionnelle entre la liste « Fichiers reçus » et la liste
+   * « Sur cet appareil » :
+   *  - un fichier effacé depuis Fichiers sur le téléphone disparaît de la liste reçue ;
+   *  - si MediaStore est vide, les entrées reçues deviennent non-validées et sont retirées.
+   */
+  const refreshMobileFiles = useCallback(async () => {
+    const { files, error } = await mobileListDownloads();
+    if (error) showToast('warning', error);
+    setSharedFiles(files);
+    setDownloads(prev =>
+      prev.filter(record =>
+        !record.path
+          ? files.some(file => file.name === record.name)
+          : files.some(file => file.uri === record.path),
+      ),
+    );
   }, [showToast]);
 
   // L'onglet Téléchargements peut être ouvert plusieurs fois ; on relit le
@@ -921,19 +932,13 @@ export default function GlobalShare() {
   // fichiers depuis Fichiers, la liste évolue par elle-même).
   useEffect(() => {
     if (tab !== 'downloads' || !isMobileHost()) return;
-    let cancelled = false;
-    void loadSharedFiles().then(() => {
-      if (!cancelled) return;
-    });
+    void refreshMobileFiles();
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void loadSharedFiles();
+      if (document.visibilityState === 'visible') void refreshMobileFiles();
     };
     document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [tab, loadSharedFiles]);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [tab, refreshMobileFiles]);
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
@@ -1671,16 +1676,13 @@ export default function GlobalShare() {
         showToast('warning', `Suppression impossible : ${record.name} reste dans la liste.`);
         return;
       }
-      setSharedFiles(prev => prev.filter(file =>
-        record.path ? file.uri !== record.path : file.name !== record.name
-      ));
       showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
-      void loadSharedFiles();
+      void refreshMobileFiles();
     }
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-  }, [appSettings.confirmDelete, appSettings.language, showToast, loadSharedFiles]);
+  }, [appSettings.confirmDelete, appSettings.language, showToast, refreshMobileFiles]);
 
   const clearDownloadHistory = useCallback(async () => {
     if (appSettings.confirmDelete && !window.confirm(
@@ -1695,9 +1697,9 @@ export default function GlobalShare() {
       for (const file of downloads) {
         await mobileDeleteDownload({ uri: file.path, name: file.name });
       }
-      await loadSharedFiles();
+      await refreshMobileFiles();
     }
-  }, [appSettings.confirmDelete, appSettings.language, loadSharedFiles, downloads]);
+  }, [appSettings.confirmDelete, appSettings.language, refreshMobileFiles, downloads]);
 
   // ---- Enregistrement des fichiers reçus ----
   // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
@@ -2350,7 +2352,7 @@ export default function GlobalShare() {
                         for (const file of sharedFiles) {
                           await mobileDeleteDownload({ uri: file.uri, name: file.name });
                         }
-                        await loadSharedFiles();
+                        await refreshMobileFiles();
                       })()}
                     >
                       Effacer tout
