@@ -173,12 +173,17 @@ Depuis la v1.0.32 :
   Android 11+, et `WRITE_EXTERNAL_STORAGE` plafonné à `maxSdkVersion="28"` pour
   les anciennes versions.
 
-Depuis la v1.0.38, depuis vos retours, « Fichiers » recours à un
-`Intent.createChooser` construit avec `EXTRA_INITIAL_URI` : la navigation
-dans le dossier est affichée par Google Files, sans activation liée à son
-résolution par package name (le redémarrage direct de `com.google.android.apps.nbu.files`
-échouait avec une SecurityException « uid »). La fenêtre s'ouvre donc même quand
-les autres tentatives (DocumentsUI, launchers) échoueraient. À partir de la
+Depuis la v1.0.38 puis v1.0.43, depuis vos retours, « Fichiers » ne dépend plus
+du contexte app :
+1. **`ACTION_OPEN_DOCUMENT_TREE`** (DocumentsUI ≥ Android 11, v1.0.43) :
+   DocumentsUI ouvre lui-même l'arbre des documents, sans contrainte de
+   permission depuis notre app — évite l'erreur
+   « UID does not have permission to content://com.android.externalstorage.documents/… » ;
+2. **Lancement de Google Files / DocumentsUI** par `getLaunchIntentForPackage` ;
+3. **`ACTION_OPEN_DOCUMENT` + createChooser** (v1.0.38) : repli robuste.
+
+Vous pouvez aussi dans « Fichiers » activer **« Fichiers reçus »** depuis
+l'onglet Téléchargements. À partir de la
 v1.0.40, « Fichiers » réaffiche aussi les fichiers présents sur le téléphone
 via `listDownloads()` dans l'onglet Téléchargements.
 - Le MIME est inféré depuis l'extension quand `File.type` est vide (cas fréquent

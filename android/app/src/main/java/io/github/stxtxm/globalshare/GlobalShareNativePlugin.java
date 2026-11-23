@@ -320,12 +320,12 @@ public class GlobalShareNativePlugin extends Plugin {
     }
 
     /**
-     * Ouvre le gestionnaire de fichiers dans Téléchargements/GlobalShare.
-     * Sur Pixel 9a, un lancement direct par nom de paquet échoue avec une
-     * SecurityException liée à l'UID (10415). Le chemin qui fonctionne est le
-     * même que « Écouter » : ACTION_VIEW + createChooser depuis le contexte
-     * applicatif. Le choisir affiche notamment Google Files, qui ouvre le
-     * dossier grâce à EXTRA_INITIAL_URI.
+     * Ouvre le gestionnaire de fichiers du système dans Téléchargements/GlobalShare.
+     * Ordre d'essai : (1) ACTION_OPEN_DOCUMENT_TREE via DocumentsUI (nécessite
+     * un agent de permission DocumentsUI, ci-dessous Android 11 via
+     * DocumentsContract.EXTRA_INITIAL_URI), (2) lancement direct de Google Files
+     * ou DocumentsUI par nom de paquet, (3) ACTION_OPEN_DOCUMENT fallback (n'a
+     * pas besoin d'URI grant fourni par nous).
      */
     @PluginMethod
     public void revealDownload(PluginCall call) {
@@ -333,15 +333,51 @@ public class GlobalShareNativePlugin extends Plugin {
         try {
             Uri folder = DocumentsContract.buildDocumentUri(
                     "com.android.externalstorage.documents", "primary:Download/GlobalShare");
+
+            // 1) ACTION_OPEN_DOCUMENT_TREE : DocumentsUI gère lui-même
+            // l'identification, c'est pourquoi notre SecurityException UID
+            // n'a plus lieu.
+            Intent tree = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // EXTRA_INITIAL_URI depuis Android 11 : initial URI du dossier
+                // ouvert dès le démarrage du sélecteur.
+                tree.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
+            }
+            tree.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (tree.resolveActivity(getContext().getPackageManager()) != null) {
+                getContext().startActivity(tree);
+                call.resolve(result);
+                return;
+            }
+
+            // 2) Google Files (Pixel) / DocumentsUI par nom de paquet.
+            String[] managers = {
+                    "com.google.android.apps.nbu.files",
+                    "com.google.android.documentsui",
+                    "com.android.documentsui"
+            };
+            for (String pkg : managers) {
+                Intent launch = getContext().getPackageManager().getLaunchIntentForPackage(pkg);
+                if (launch == null) continue;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    launch.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
+                }
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(launch);
+                call.resolve(result);
+                return;
+            }
+
+            // 3)ACTION_OPEN_DOCUMENT avec createChooser (dFeel galement le même
+            // chemin que « Écouter ») : robuste si ACTION_OPEN_DOCUMENT_TREE
+            // ne résout pas d'app cible.
             Intent view = new Intent(Intent.ACTION_VIEW);
             view.setData(folder);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                view.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
-            }
             view.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             Intent chooser = Intent.createChooser(view, "Ouvrir le dossier avec");
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             getContext().startActivity(chooser);
+            call.resolve(result);
         } catch (Exception error) {
             result.put("error", "Ouverture du gestionnaire impossible : " + error.getMessage());
         }

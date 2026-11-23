@@ -1,7 +1,7 @@
 {
   "name": "global-share",
-  "version": "1.0.42",
-  "nativeVersion": 6,
+  "version": "1.0.43",
+  "nativeVersion": 7,
   "private": true,
   "scripts": {
     "dev": "next dev",

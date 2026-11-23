@@ -13,11 +13,14 @@ const plugin = readFileSync(
 const manifest = readFileSync(`${root}android/app/src/main/AndroidManifest.xml`, 'utf8');
 const pkg = JSON.parse(readFileSync(`${root}package.json`, 'utf8')) as { nativeVersion: number };
 
-test('revealDownload utilise le même choisir que Écouter (évite l UID error)', () => {
-  assert.match(plugin, /DocumentsContract\.buildDocumentUri/);
-  assert.match(plugin, /Intent\.createChooser\(view, "Ouvrir le dossier avec"\)/);
+test('revealDownload utilise ACTION_OPEN_DOCUMENT_TREE, puis replis packet', () => {
+  assert.match(plugin, /Intent\.ACTION_OPEN_DOCUMENT_TREE/);
   assert.match(plugin, /DocumentsContract\.EXTRA_INITIAL_URI/);
-  assert.ok(!plugin.includes('getLaunchIntentForPackage'), 'lancement direct supprimé (uid 10415)');
+  assert.match(plugin, /getLaunchIntentForPackage\(pkg\)/);
+  assert.match(manifest, /com\.google\.android\.apps\.nbu\.files/);
+  assert.match(plugin, /Intent\.ACTION_OPEN_DOCUMENT/);
+  assert.match(plugin, /Intent\.createChooser\(view, "Ouvrir le dossier avec"\)/);
+  assert.match(plugin, /FLAG_GRANT_READ_URI_PERMISSION/);
 });
 
 test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
@@ -27,7 +30,7 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  assert.equal(pkg.nativeVersion, 6);
+  assert.equal(pkg.nativeVersion, 7);
 });
 
 test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () => {

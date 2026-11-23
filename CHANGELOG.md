@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.43] - 2026-11-23
+
+### Fixed
+- **Erreur absolue « Fichiers » sur Pixel 9a** : ACTION_OPEN_DOCUMENT_TREE
+  sur la racine `primary:Download/GlobalShare` via DocumentsUI (nécessite
+  Android 11+), repli lancement Google Files, puis replis `ACTION_OPEN_DOCUMENT`
+  et createChooser. Plus de SecurityException « UID 10415 ».
+
 ## [1.0.42] - 2026-11-23
 
 ### Fixed
