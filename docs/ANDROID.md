@@ -50,9 +50,10 @@ Quatre mécanismes se complètent :
    balayage, la réception repart seule dès le retour dans le salon
    (`_restoreReceive` recharge les chunks et annonce la position exacte à
    l'expéditeur) ; un envoi interrompu propose de réassocier le fichier
-   d'origine, que l'IndexedDB ne conserve pas. Le code du salon, lui, n'est
-   mémorisé que dans `sessionStorage` : il disparaît avec le WebView, le salon
-   se rejoint donc depuis l'historique de l'accueil.
+   d'origine, que l'IndexedDB ne conserve pas. Sur Android, le code du salon est
+   aussi doublé dans `localStorage` (`sessionStorage` disparaît avec le WebView) :
+   au redémarrage, l'app rejoint le dernier salon toute seule et la reprise
+   repart sans intervention. Quitter le salon efface les deux copies.
 
 ### Pourquoi ça se bloquait après quelques minutes
 
