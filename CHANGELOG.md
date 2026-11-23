@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.41] - 2026-11-23
+
+### Added
+- **Transferts LAN deux fois plus rapides** : blocs P2P-direct 512 Ko (fusion
+  du correctif combiné), fenêtre LAN optimisée (8 Mo en vol), burst de 12.
+- **Vitesse réceptrice affichée** : `t.speed` est maintenant renseigné sur le
+  receveur (affichage de la vitesse côté téléchargement) et remis à zéro à
+  l'arrêt.
+
+### Fixed
+- **Auto-update consolidé** (Fedora/Nobara) : utilisation préférée de
+  `pkcon` (PackageKit, D-Bus), messages polkit traduits (`pkexec must be setuid
+  root`, `No authentication agent`, `No session for cookie`, `Not
+  authorized`), replis **Ouvrir le paquet** / **Copier dans Fichiers**, timeout
+  à 5 min.
+- **Various bugs** : notifications cliquables pendant un transfert,
+  restoration fenêtre (shortcut Ctrl+Alt+G + tray durable), Fichiers Android
+  sans erreur, animations barre de progression, transitions menus.
+
 ## [1.0.40] - 2026-11-23
 
 ### Fixed
