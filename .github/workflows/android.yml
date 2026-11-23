@@ -23,6 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -37,21 +38,33 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      # Cache les dépendances Gradle et le wrapper entre les tags. Sans lui,
+      # chaque release retélécharge AGP et toutes les bibliothèques AndroidX.
+      - uses: gradle/actions/setup-gradle@v6
 
       # ubuntu-latest fournit déjà le SDK et sdkmanager : l'action
       # android-actions/setup-android tente d'installer le paquet `tools`,
       # retiré des dépôts Google, et échoue depuis 2025.
+      # Le SDK 36 est souvent déjà dans l'image : on ne le réinstalle que s'il
+      # manque, au lieu de payer sdkmanager à chaque APK.
       - name: Install Android SDK 36
         run: |
-          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           test -x "$SDKMANAGER" || {
             echo "::error::sdkmanager introuvable ($SDKMANAGER)"; exit 1;
           }
+          if [ -d "$SDK_ROOT/platforms/android-36" ] && [ -d "$SDK_ROOT/build-tools/36.0.0" ]; then
+            echo "SDK Android 36 déjà présent"
+            exit 0
+          fi
           yes | "$SDKMANAGER" --licenses > /dev/null
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Sync version with tag
         env:

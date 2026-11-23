@@ -20,8 +20,12 @@ Dans **Settings → Pages**, la source doit être **« GitHub Actions »** (et n
 - à chaque **push sur `main`**, ce qui couvre le **merge d'une pull request** ;
 - manuellement via **Actions → Deploy to GitHub Pages → Run workflow**.
 
-Avant de publier, le workflow exécute `npm run test:unit`, puis `npm run lint`
-et `npx tsc --noEmit` : un build qui ne passe pas ces étapes n'est pas déployé.
+Les pushes qui ne touchent que de la documentation (`**/*.md`, `docs/**`,
+`LICENSE`) sont ignorés : ils ne peuvent pas modifier l'export statique. Un
+lancement manuel reste possible pour forcer un déploiement.
+
+Avant de publier, le workflow exécute `npm run test:unit`, `npm run lint` et
+`npx tsc --noEmit` : un build qui ne passe pas ces étapes n'est pas déployé.
 
 ### URL du Worker
 
@@ -76,20 +80,53 @@ par n'importe qui dans le bundle public.
 ## 2. Backend — Cloudflare Worker
 
 Le Worker est déployé automatiquement par le même workflow, **avant** le
-frontend : `worker` et `test` démarrent en parallèle, puis `build` et `deploy`
-suivent.
+frontend : `worker`, `test` et `build` démarrent en parallèle, puis `deploy`
+attend les trois.
 
 Un échec du job `worker` **ne bloque pas** la publication du site. Le job
-`build` porte la condition :
+`deploy` porte la condition :
 
 ```yaml
-if: always() && needs.worker.result != 'cancelled' && needs.test.result == 'success'
+if: >-
+  always()
+  && needs.build.result == 'success'
+  && needs.test.result == 'success'
+  && needs.worker.result != 'cancelled'
 ```
 
-C'est volontaire : une panne Cloudflare (jeton expiré, API indisponible) ne doit
-pas empêcher de publier un client statique, qui n'a besoin d'aucune nouvelle
-version du Worker. Le job `worker` reste rouge et doit être relancé. En
-revanche, un échec du job `test` empêche bien le déploiement.
+Le `build` peut donc préparer l'artefact Pages pendant que le Worker se
+déploie, sans jamais publier avant lui. C'est volontaire : une panne Cloudflare
+(jeton expiré, API indisponible) ne doit pas empêcher de publier un client
+statique, qui n'a besoin d'aucune nouvelle version du Worker. Le job `worker`
+reste rouge et doit être relancé. En revanche, un échec de `test` ou de `build`
+empêche bien le déploiement.
+
+### Cache et parallélisme
+
+Le pipeline est découpé pour que l'installation des dépendances ne soit faite
+qu'une fois par job et que les trois branches démarrent ensemble :
+
+| Job | Travail | Cache |
+| --- | --- | --- |
+| `worker` | `npm ci`, puis `wrangler` local | npm du lockfile Worker |
+| `test` | tests unitaires, lint, typecheck | npm racine |
+| `build` | export statique, artefact Pages | npm racine + `.next/cache` |
+| `deploy` | publication de l'artefact déjà construit | aucun |
+
+`deploy` n'exécute plus ni installation ni build : il attend `worker`, `test`
+et `build`, puis publie. Le Worker reste ainsi terminé avant le site lorsque son
+déploiement réussit ; s'il échoue, `deploy` attend sa fin puis publie quand
+même si `test` et `build` sont verts.
+
+Les workflows de release ajoutent les caches lourds :
+
+- `release.yml` : npm racine + `desktop/`, Electron/electron-builder par OS et
+  `.next/cache` pour chaque matrice ;
+- `android.yml` : npm, Gradle (`gradle/actions/setup-gradle`) et installation
+  du SDK 36 uniquement s'il manque dans l'image du runner.
+
+Les installations utilisent `npm ci --no-audit --no-fund` : les versions sont
+verrouillées par les lockfiles et l'audit réseau n'apporte rien à la CI.
 
 ### Secret requis
 

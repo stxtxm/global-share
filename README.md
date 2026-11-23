@@ -26,24 +26,30 @@ servi sous le préfixe `/global-share` (`basePath` dans `next.config.ts`).
 
 Le workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) :
 
-1. déploie le Worker Cloudflare (`worker`) et lance les tests unitaires
-   (`test`), en parallèle ;
-2. installe les dépendances (`npm ci`) ;
-3. lance `npm run lint` et `npx tsc --noEmit` ;
-4. construit l'export statique avec `NEXT_PUBLIC_SOCKET_URL` ;
-5. publie `out/` sur GitHub Pages.
+1. démarre ensemble le Worker (`worker`), les vérifications (`test`) et le
+   build du site (`build`) ;
+2. `test` installe une fois les dépendances puis lance `npm run test:unit`,
+   `npm run lint` et `npx tsc --noEmit` ;
+3. `build` installe les dépendances, construit l'export statique avec
+   `NEXT_PUBLIC_SOCKET_URL` et prépare l'artefact Pages ;
+4. `deploy` attend les trois jobs et publie `out/` sur GitHub Pages.
 
-Le Worker est donc toujours déployé avant le site. En revanche un échec du job
+Le Worker est donc terminé avant le site. En revanche un échec du job
 `worker` **ne bloque pas** la publication : une panne Cloudflare (jeton expiré,
 API indisponible) ne doit pas empêcher de publier un client statique, qui n'a
 besoin d'aucune nouvelle version du Worker. Le job reste rouge et doit être
-relancé. Seul le job `test` conditionne la publication : un test unitaire en
-échec empêche le déploiement.
+relancé. Les jobs `test` et `build` conditionnent la publication : un test, un
+lint, un typecheck ou un build en échec empêche le déploiement.
 
-Il se déclenche à **chaque push sur `main`** (donc au merge d'une pull request)
+Il se déclenche à **chaque push sur `main`** (donc au merge d'une pull request),
+sauf pour un changement purement documentaire (`**.md`, `docs/**`, `LICENSE`),
 et manuellement depuis l'onglet **Actions**. GitHub Pages doit être configuré
 avec la source **« GitHub Actions »** :
 https://github.com/stxtxm/global-share/settings/pages
+
+Les dépendances et les builds sont mis en cache (npm, Next.js, Gradle,
+Electron) ; le détail du pipeline et des gains est dans
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md#cache-et-parallélisme).
 
 ### Worker (automatique)
 
@@ -92,6 +98,7 @@ npm --prefix socket-server-cloudflare run dev -- --port 3001
 ## Tests et vérifications
 
 ```bash
+npm run test:unit
 npm run lint
 npx tsc --noEmit
 npm --prefix socket-server-cloudflare run typecheck
@@ -169,6 +176,9 @@ numéro et la date de la version.
 - Onglet **Téléchargements** : fichiers reçus conservés et rouverts depuis
   l'application (dossier `~/Téléchargements/GlobalShare` sur le bureau,
   IndexedDB sur le web et le mobile)
+- Icône tray sur KDE/XFCE/etc. ; sur GNOME, repli minimisé + notification et
+  guide d'activation de l'extension AppIndicator (voir
+  [docs/DESKTOP.md](./docs/DESKTOP.md#retrouver-la-fenêtre-gnome-kde-xfce))
 - Interface mobile, wake lock pendant le transfert, PWA installable
 
 ## Liens

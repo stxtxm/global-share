@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   build:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +44,33 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+
+      # Le binaire Electron (~100 Mo) et les outils electron-builder sont
+      # téléchargés par npm ci. Le cache évite de les reprendre à chaque tag.
+      - name: Cache Electron downloads (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json', 'desktop/package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: Cache Electron downloads (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json', 'desktop/package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
       - name: Install rpm tooling
         if: matrix.name == 'linux'
@@ -50,13 +78,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm ci
-          npm --prefix desktop ci
+          npm ci --no-audit --no-fund
+          npm --prefix desktop ci --no-audit --no-fund
 
       - name: Sync version with tag
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: node scripts/set-version.mjs
+
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: Build static export
         run: npm run build:desktop
@@ -81,7 +115,7 @@ jobs:
         run: node scripts/web-bundle.mjs
 
       - name: Package
-        run: npx electron-builder ${{ matrix.target }} --publish never
+        run: npx --no-install electron-builder ${{ matrix.target }} --publish never
 
       # Depuis Fedora 45, rpm applique la vérification des signatures par
       # défaut : un paquet non signé est refusé (« n'est pas vérifié : pas de
@@ -128,6 +162,7 @@ jobs:
             dist/RPM-GPG-KEY-globalshare
 
   publish:
+    timeout-minutes: 10
     needs: build
     runs-on: ubuntu-latest
     env:

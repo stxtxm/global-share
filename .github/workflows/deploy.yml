@@ -1,11 +1,15 @@
 name: Deploy to GitHub Pages
 
-# Every push to main deploys. Merging a pull request into main produces such a
-# push, so a PR merge is deployed automatically. Manual runs stay available from
-# the Actions tab.
+# Every push to main deploys. A docs-only push does not: it cannot change the
+# exported site, so it must not consume a runner or invalidate the live cache.
+# Manual runs stay available from the Actions tab.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
@@ -18,10 +22,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Déployé avant le site : un build Pages ne peut jamais pointer vers une
-  # version du Worker plus ancienne que le dépôt.
+  # Worker, tests and build start together. `deploy` waits for all three, so a
+  # successful Worker is still live before the site. If the Worker fails, the
+  # deploy job still runs: a static client does not need a new Worker.
   worker:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # Identifiant de compte Cloudflare (public, ce n'est pas un secret).
       CLOUDFLARE_ACCOUNT_ID: 0bf0ac08e2a32bb3b08436887d9df307
@@ -34,6 +40,8 @@ jobs:
         with:
           # wrangler 4.156 exige Node >= 22 (le build Next.js reste sur Node 20).
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: socket-server-cloudflare/package-lock.json
 
       - name: Require CLOUDFLARE_API_TOKEN
         env:
@@ -44,14 +52,21 @@ jobs:
             exit 1
           fi
 
+      # npm ci réutilise le cache du lockfile et évite le téléchargement npx
+      # aléatoire de wrangler à chaque déploiement.
+      - name: Install Worker dependencies
+        working-directory: socket-server-cloudflare
+        run: npm ci --no-audit --no-fund
+
       - name: Deploy Cloudflare Worker
         working-directory: socket-server-cloudflare
-        run: npx --yes wrangler@4.156.2 deploy --durable-objects-code-update-mode immediate
+        run: npx --no-install wrangler deploy --durable-objects-code-update-mode immediate
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -63,9 +78,10 @@ jobs:
           # stripping natif, disponible à partir de Node 22.
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
         env:
           # Les tests ne lancent pas Electron : inutile de télécharger le binaire.
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -73,13 +89,17 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
   build:
-    needs: [worker, test]
-    # Un build Pages n'a besoin d'aucun nouveau Worker pour être publié. Sans
-    # cette condition, une panne Cloudflare (jeton expiré, API indisponible)
-    # bloquait aussi la publication du client. Le job worker reste rouge.
-    if: always() && needs.worker.result != 'cancelled' && needs.test.result == 'success'
+    # Pas de `needs` : le build démarre avec le Worker et les tests. La
+    # publication reste conditionnée par leur succès dans le job `deploy`.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -89,18 +109,19 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
         env:
           # Le site statique n'a pas besoin du binaire Electron (voir release.yml).
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npx tsc --noEmit
+      - name: Cache Next.js build
+        uses: actions/cache@v6
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: Build Next.js app
         run: npm run build
@@ -128,7 +149,15 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, test, worker]
+    # Un échec Cloudflare ne doit pas empêcher la publication du client
+    # statique. En revanche, on attend la fin du Worker pour que le site ne
+    # pointe jamais vers une version plus ancienne du Worker.
+    if: >-
+      always()
+      && needs.build.result == 'success'
+      && needs.test.result == 'success'
+      && needs.worker.result != 'cancelled'
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

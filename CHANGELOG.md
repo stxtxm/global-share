@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.47] - 2026-11-23
+
+### Added
+- **Tray Linux/GNOME** : détection du watcher StatusNotifierItem, repli minimiser dans la barre des tâches + notification cliquable sur GNOME sans AppIndicator, menu d'aide, icône tray 32 px dédiée, et recommandations AppIndicator dans les paquets.
+- **CI** : workflow `ci-workflows` et couverture des chemins de test/tray.
+
+### Changed
+- **CI/CD** : `worker`, `test` et `build` démarrent en parallèle ; `deploy` attend les trois. Lint et typecheck rejoignent les tests, caches npm/Next/Gradle/Electron réutilisés, et `paths-ignore` pour les pushes documentaires. Workflows release/android/deploy refactorés.
+- Documentation README/DEPLOYMENT/DESKTOP/ANDROID mise à jour.
+
+### Fixed
+- **Mise à jour Linux/Fedora** : installation RPM via `pkexec` + `dnf --nogpgcheck` en priorité, repli `pkcon --allow-untrusted install-local -y` uniquement si `pkexec` est structurellement indisponible, message distinct pour `need-untrusted` PackageKit, timeout 5 min.
+
+## [1.0.46] - 2026-11-23
+
+### Fixed
+- **Mise à jour Linux/Fedora** : correction du chemin PackageKit/pkexec sur Fedora/GNOME (RPM local classé `need-untrusted`), avec repli actionnable et documentation.
+
 ## [1.0.45] - 2026-11-23
 
 ### Fixed

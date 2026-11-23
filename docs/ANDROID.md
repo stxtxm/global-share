@@ -228,13 +228,18 @@ le compteur diffère et propose le **paquet complet**. Le pont JS vérifie aussi
 l'existence de chaque méthode et affiche « mettez l'APK à jour » au lieu d'un
 TypeError si une coquille obsolète est détectée.
 
-Depuis la **v1.0.40**, `nativeVersion` passe à **6** : la coquille 5 appelait
+Depuis la **v1.0.40**, `nativeVersion` est passé à **6** : la coquille 5 appelait
 `deleteDownload` côté web sans exposer la méthode native, donc **Retirer**
 laissait le fichier sur le téléphone. Cette version fournit la suppression
 MediaStore (ou du fichier public sur Android ≤ 9) et force le téléchargement de
 l'APK complet.
 
-**Important pour tester** : installez l'**APK complet v1.0.40** (pas seulement la
+Depuis la **v1.0.41**, `nativeVersion` passe à **7** : la coquille Electron a
+changé (tray Linux/GNOME, repli minimisé) et le compteur est commun au bureau et
+à Android. Les applications installées téléchargent donc l'APK complet plutôt
+qu'un bundle web, même si le code Java Android est inchangé.
+
+**Important pour tester** : installez l'**APK complet v1.0.41** (pas seulement la
 mise à jour web) depuis la release GitHub. Les fichiers déjà reçus avec une
 ancienne coquille n'existent que dans IndexedDB : recevez-les à nouveau après la
 mise à jour pour qu'ils soient écrits dans `Téléchargements/GlobalShare`.

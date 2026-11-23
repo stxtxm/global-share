@@ -18,6 +18,7 @@ files:
   - preload.js
   - updater.js
   - web-updates.js
+  - linux-tray.js
   - package.json
 
 # Chemins relatifs à la racine du projet (projectDir), pas à desktop/.
@@ -28,9 +29,10 @@ extraResources:
   # les images depuis l'archive pour l'icône de fenêtre (_NET_WM_ICON).
   - from: desktop/resources/icons/512x512.png
     to: icon.png
-  # Icône 24x24 dédiée au tray (SNI) : une image redimensionnée depuis 512 px
-  # rend une icône floue et certains hôtes SNI la refusent.
-  - from: desktop/resources/icons/24x24.png
+  # Icône 32x32 dédiée au tray (SNI) : trait épais et fond transparent, lisible
+  # sur les panneaux clairs comme sombres. Une réduction depuis l'icône 512 px
+  # donnait un carré flou à 24 px.
+  - from: desktop/resources/icons/tray.png
     to: tray.png
 
 # Garde la taille de l'application raisonnable : seules les locales utiles au
@@ -73,6 +75,20 @@ linux:
       Comment: Partage de fichiers P2P entre appareils
       Categories: Network;FileTransfer;
       StartupWMClass: globalshare
+
+# GNOME n'affiche pas les icônes de notification sans l'extension AppIndicator.
+# Recommandée (et non imposée) : les utilisateurs KDE/XFCE n'en ont pas besoin.
+# apt et dnf installent les recommandations par défaut ; l'extension reste à
+# activer une fois avec `gnome-extensions enable` (voir docs/DESKTOP.md).
+deb:
+  recommends:
+    - libayatana-appindicator3-1
+    - gnome-shell-extension-appindicator
+
+rpm:
+  fpm:
+    - '--rpm-tag'
+    - 'Recommends: gnome-shell-extension-appindicator'
 
 win:
   target:

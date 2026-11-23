@@ -10,6 +10,7 @@ const path = require('node:path');
 
 const { checkForUpdates, initAutoUpdater, sendUpdateState } = require('./updater');
 const webUpdates = require('./web-updates');
+const { detectTrayHost } = require('./linux-tray');
 
 // Identifiant Windows (raccourcis, notifications) : doit rester identique à
 // `appId` dans electron-builder.yml.
@@ -33,6 +34,8 @@ let WEB_ROOT = PACKAGED_WEB_ROOT;
 // demandé une seule fois puis mémorisé — équivalent de la demande de
 // permission Android, tenant à la convention des apps de bureau.
 let tray = null;
+// Faux sur GNOME sans extension AppIndicator : le tray n'aurait aucun hôte.
+let trayHostAvailable = true;
 let quitRequested = false;
 // Compteur de transferts actifs, mis à jour par la page via le pont IPC.
 // Sert à empêcher une vraie fermeture pendant un transfert et à proposer une
@@ -68,6 +71,66 @@ function showMainWindow() {
   }
 }
 
+function showBackgroundNotification(body) {
+  try {
+    const notification = new Notification({
+      title: 'GlobalShare',
+      body,
+      icon: ICON_FILE,
+    });
+    notification.on('click', showMainWindow);
+    notification.show();
+  } catch {
+    // Notifications indisponibles : le raccourci et le dock restent là.
+  }
+}
+
+// Sur GNOME sans extension AppIndicator, hide() ferait disparaître la fenêtre
+// du dock et de la barre des tâches. On minimise à la place, et on propose une
+// notification cliquable : l'application reste récupérable sans le menu GNOME.
+function sendToBackground(window, message, forceNotify = false) {
+  const hasTray = tray && !tray.isDestroyed();
+  if (hasTray) window.hide();
+  else window.minimize();
+
+  if (forceNotify || !hasTray) {
+    showBackgroundNotification(message || (hasTray
+      ? 'GlobalShare continue en arrière-plan.'
+      : 'GlobalShare continue en arrière-plan. Cliquez ici ou utilisez Ctrl+Alt+G pour rouvrir.'));
+  }
+}
+
+function showGnomeTrayHelp() {
+  void dialog.showMessageBox({
+    type: 'info',
+    title: 'GlobalShare',
+    message: 'GNOME affiche les icônes de notification via l’extension AppIndicator.',
+    detail: [
+      'Fedora :',
+      '  sudo dnf install gnome-shell-extension-appindicator',
+      '  gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com',
+      '',
+      'Debian / Ubuntu :',
+      '  sudo apt install gnome-shell-extension-appindicator',
+      '',
+      'Puis déconnectez-vous et reconnectez-vous.',
+      '',
+      'Sans l’extension, GlobalShare reste accessible : Ctrl+Alt+G rouvre la fenêtre et la fermeture la réduit dans la barre des tâches.',
+    ].join('\n'),
+    buttons: ['OK'],
+    noLink: true,
+  }).catch(() => { /* boîte impossible : aucune action requise */ });
+}
+
+async function initTray() {
+  trayHostAvailable = await detectTrayHost();
+  if (!trayHostAvailable) {
+    console.warn('[GlobalShare] GNOME sans hôte StatusNotifierItem : fermeture réduite dans la barre des tâches.');
+    return;
+  }
+  createTray();
+}
+
 // Raccourci global : sur GNOME, l'icône tray (StatusNotifierItem) est souvent
 // masquée et la fenêtre peut disparaître de la barre des tâches. Ce raccourci
 // fonctionne sur tous les environnements, même quand l'app est masquée.
@@ -81,6 +144,7 @@ function createTray() {
     // plantent ou créent une entrée invisible (GNOME, XFCE).
     if (image.isEmpty()) {
       console.warn('[GlobalShare] icône tray introuvable :', TRAY_ICON_FILE);
+      trayHostAvailable = false;
       return;
     }
     tray = new Tray(image);
@@ -103,6 +167,7 @@ function createTray() {
   } catch (error) {
     // GNOME nu n'a pas d'hôte SNI : le raccourci global et le dock prennent
     // le relais. On log tout de même pour le diagnostic.
+    trayHostAvailable = false;
     console.warn('[GlobalShare] tray indisponible :', String(error));
   }
 }
@@ -132,10 +197,10 @@ if (app.isPackaged) {
 const ICON_FILE = app.isPackaged
   ? path.join(process.resourcesPath, 'icon.png')
   : path.join(__dirname, 'resources', 'icon.png');
-// Icône 24x24 dédiée au tray (livrée hors asar, voir electron-builder.yml).
+// Icône 32x32 dédiée au tray (livrée hors asar, voir electron-builder.yml).
 const TRAY_ICON_FILE = app.isPackaged
   ? path.join(process.resourcesPath, 'tray.png')
-  : path.join(__dirname, 'resources', 'icons', '24x24.png');
+  : path.join(__dirname, 'resources', 'icons', 'tray.png');
 
 // L'image est décodée ici : un chemin passé tel quel à BrowserWindow n'est pas
 // toujours appliqué comme icône de fenêtre sous Linux.
@@ -391,22 +456,13 @@ function createWindow(port) {
     // cliquable, même si le tray est invisible (GNOME sans AppIndicator).
     if (activeTransfers > 0) {
       event.preventDefault();
-      window.hide();
-      try {
-        const notification = new Notification({
-          title: 'GlobalShare',
-          body: 'Transfert en cours — cliquez pour rouvrir la fenêtre',
-          icon: ICON_FILE,
-        });
-        notification.on('click', showMainWindow);
-        notification.show();
-      } catch { /* notifications indisponibles : raccourci toujours là */ }
+      sendToBackground(window, 'Transfert en cours — cliquez pour rouvrir GlobalShare.', true);
       return;
     }
     const prefs = loadPrefs();
     if (prefs.closeAction === 'background') {
       event.preventDefault();
-      window.hide();
+      sendToBackground(window);
       return;
     }
     if (prefs.closeAction === 'quit') return;
@@ -420,13 +476,15 @@ function createWindow(port) {
       checkboxChecked: false,
       title: 'GlobalShare',
       message: 'Laisser GlobalShare continuer en arrière-plan ?',
-      detail: 'La fenêtre se replie dans la zone de notification et les transferts en cours continuent. Vous retrouverez l\'application dans le tray, avec « Quitter » dans son menu.',
+      detail: trayHostAvailable
+        ? 'La fenêtre se replie dans la zone de notification et les transferts en cours continuent. Vous retrouverez l\'application dans le tray, avec « Quitter » dans son menu.'
+        : 'La fenêtre sera réduite dans la barre des tâches et les transferts continueront. Utilisez Ctrl+Alt+G ou l’icône de l’application pour la rouvrir.',
     }).then(({ response, checkboxChecked }) => {
       if (response === 2) return; // Annulé : la fenêtre reste ouverte.
       if (checkboxChecked) {
         savePrefs({ ...loadPrefs(), closeAction: response === 0 ? 'background' : 'quit' });
       }
-      if (response === 0) window.hide();
+      if (response === 0) sendToBackground(window);
       else {
         quitRequested = true;
         app.quit();
@@ -511,6 +569,9 @@ function buildMenu() {
     {
       label: 'Aide',
       submenu: [
+        ...(process.platform === 'linux' && !trayHostAvailable
+          ? [{ label: 'Afficher l’icône dans la barre (GNOME)…', click: showGnomeTrayHelp }]
+          : []),
         { label: 'Rechercher des mises à jour…', click: () => checkForUpdates({ manual: true }) },
         { type: 'separator' },
         { label: `Version ${webUpdates.effectiveVersion() || app.getVersion()}`, enabled: false },
@@ -524,7 +585,7 @@ function buildMenu() {
 async function start() {
   app.setAppUserModelId(APP_ID);
   registerDownloadHandlers();
-  createTray();
+  await initTray();
   const registered = globalShortcut.register(RESTORE_SHORTCUT, showMainWindow);
   if (!registered) {
     // Wayland : le portail GlobalShortcuts exige un desktopName reverse-DNS
