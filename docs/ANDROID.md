@@ -161,15 +161,26 @@ Depuis la v1.0.32 :
   écrit les morceaux dans cette URI, puis rend le fichier visible (`IS_PENDING = 0`).
   Sur Android ≤ 9 (minSdk 24), il écrit dans le dossier public et lance un
   `MediaScannerConnection`.
-- `revealDownload()` ouvre directement l'**application Fichiers** dans
-  `Téléchargements/GlobalShare` : c'est l'action par défaut du bouton « Fichiers »,
-  l'utilisateur y choisit son lecteur audio. `openDownload()` (bouton « Écouter »)
-  lance un **choisir** `ACTION_VIEW` avec l'URI `content://` : un lecteur vidéo qui
-  déclare `*/*` n'est plus lancé automatiquement (il plantait sur un FLAC et
+- `revealDownload()` ouvre le gestionnaire de fichiers du système dans
+  `Téléchargements/GlobalShare` : actuellement un **choisir** `ACTION_VIEW`
+  avec `EXTRA_INITIAL_URI` sur l'URI DocumentsUI, qui affiche notamment
+  **Google Files** (le système de Pixel). C'est l'action par défaut du bouton
+  « Fichiers », l'utilisateur y choisit son lecteur audio. `openDownload()` (bouton
+  « Écouter ») lance le même choisir avec l'URI `content://` : un lecteur vidéo
+  qui déclare `*/*` n'est plus lancé automatiquement (il plantait sur un FLAC et
   l'application semblait figée au retour). Le manifeste déclare les `<queries>`
   audio/vidéo/image/scheme `content` nécessaires à la visibilité des paquets sur
   Android 11+, et `WRITE_EXTERNAL_STORAGE` plafonné à `maxSdkVersion="28"` pour
   les anciennes versions.
+
+Depuis la v1.0.38, depuis vos retours, « Fichiers » recours à un
+`Intent.createChooser` construit avec `EXTRA_INITIAL_URI` : la navigation
+dans le dossier est affichée par Google Files, sans activation liée à son
+résolution par package name (le redémarrage direct de `com.google.android.apps.nbu.files`
+échouait avec une SecurityException « uid »). La fenêtre s'ouvre donc même quand
+les autres tentatives (DocumentsUI, launchers) échoueraient. À partir de la
+v1.0.40, « Fichiers » réaffiche aussi les fichiers présents sur le téléphone
+via `listDownloads()` dans l'onglet Téléchargements.
 - Le MIME est inféré depuis l'extension quand `File.type` est vide (cas fréquent
   du FLAC sur Android) : `mimeFromName()` dans `app/lib/downloads.ts` renvoie
   `audio/flac`, `audio/mpeg`, etc. Les fichiers audio reçoivent une icône dédiée

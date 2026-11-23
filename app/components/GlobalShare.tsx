@@ -76,8 +76,8 @@ const MAX_IN_FLIGHT_CHUNKS = 24;
 // Même réseau local : le canal direct est alors court, à faible latence et sans
 // perte — on peut démultiplier la taille des blocs et la profondeur du pipeline
 // sans risque, pour un débit proche de celui du Wi-Fi lui-même.
-const MAX_IN_FLIGHT_CHUNKS_LAN = 32;
-const CHUNK_SIZE_LAN = 256 * 1024;
+const MAX_IN_FLIGHT_CHUNKS_LAN = 16;
+const CHUNK_SIZE_LAN = 512 * 1024;
 // Garde-fou : au-delà, le tampon SCTP du canal_data sature (le navigateur
 // peut clore le canal). On ralentit plutôt la boucle d'émission.
 const P2P_BUFFERED_LIMIT = 4 * 1024 * 1024;
@@ -988,9 +988,10 @@ export default function GlobalShare() {
         // reprise, comptage des chunks). Elle est donc choisie ici.
         // Lecture en rafale : au lieu d'un chunk par itération (coût
         // d'ordonnancement dominant, ~1 ms par bloc), on enfile plusieurs
-        // lectures + émissions par aller-retour. C'est ce qui fait la plus
-        // grande part du gain de débit, relais comme chemin direct.
-        const burst = lan ? 8 : 3;
+        // lectures + émissions par aller-retour. Sur LAN, le pipeline est plus
+        // profond et les blocs plus gros : 2 chiffres de plus suffisent à
+        // saturer la DataChannel.
+        const burst = lan ? 12 : 3;
         for (let i = 0; i < burst; i++) {
           if (sendT.offset >= file.size) break;
           if (sendT.pending.size >= maxInFlight) break;

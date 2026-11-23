@@ -641,6 +641,8 @@ export class TransferManager {
     t.receivedBytes += bytes.byteLength;
     t.confirmed += payload.size;
     t.lastActivity = Date.now();
+    // Vitesses côté réception aussi : le débit est actuellement affiché
+    // seulement pour l'expéditeur ; on compte les octets reçus.
     this._trackRate(t, bytes.byteLength);
     this._sendAck(t, payload.seq, payload.size);
     this._updateReceiverProgress(t);
@@ -1075,9 +1077,12 @@ export class TransferManager {
     const elapsed = now - t.window.start;
     if (elapsed < RATE_WINDOW_MS) return;
     const rate = t.window.bytes / (elapsed / 1000);
-    t.speed = t.speed === 0 ? rate : t.speed * 0.5 + rate * 0.5;
+    const hasSpeed = t.speed > 0;
+    t.speed = hasSpeed ? t.speed * 0.5 + rate * 0.5 : rate;
     t.window = { start: now, bytes: 0 };
-    this.onStatus(t);
+    if (t.direction === 'receive' || hasSpeed || rate > 0) {
+      this.onStatus(t);
+    }
   }
 
   /** Ajoute des octets à la fenêtre courante (expéditeur ET destinataire). */

@@ -72,17 +72,16 @@ Deux fichiers de métadonnées accompagnent les paquets et **doivent** être
 publiés dans la release : `latest.yml` (Windows) et `latest-linux.yml` (Linux).
 Une release en brouillon ou marquée *pre-release* est ignorée par l'auto-update.
 
-Particularités Linux : un `.rpm`/`.deb` s'installe via `pkexec`, l'utilisateur
-saisit donc son mot de passe au moment de l'installation. `pkexec` réinitialise
-l'environnement : depuis la v1.0.39, `DISPLAY`, `XAUTHORITY`,
-`DBUS_SESSION_BUS_ADDRESS` et `XDG_RUNTIME_DIR` sont transmis explicitement pour
-que l'agent polkit puisse afficher la boîte de mot de passe (Fedora/Nobara sous
-GNOME Wayland). Quand polkit refuse tout de même la demande (`requires root`,
-`Not authorized`, clé GPG), l'encart affiche un message explicite et un bouton
-**« Ouvrir le paquet »** : le paquet est alors ouvert par le gestionnaire de
-fichiers (GNOME Software, Discover…), qui gère lui-même l'élévation. Si même
-l'ouverture échoue, le dossier des téléchargements est ouvert pour une
-installation manuelle.
+Particularités Linux : un `.rpm`/`.deb` s'installe via **`pkcon install-local`** (PackageKit, D-Bus) ou, à défaut, via **`pkexec`** qui réinitialise l'environnement. Depuis la **v1.0.39**, `DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS` et `XDG_RUNTIME_DIR` sont transmis explicitement par le code afin que l'agent polkit puisse afficher la fenêtre de mot de passe (Fedora/Nobara sous GNOME Wayland).
+
+L'ordre d'installation est : PackageKit d'abord, puis pkexec, puis le paquet dans Fichiers. Les messages d'erreur traduits :
+- « Échec d'élévation : pkexec est présent mais non setuid (polkit ≥ 127 ou durcissement). »
+- « Aucun agent polkit graphique actif dans cette session (Fedora/Nobara/terminal). »
+- « Session polkit introuvable (polkit ≥ 127). »
+- « Authentication refused or canceled by user. Use « Ouvrir le paquet » and check your sudo password. »
+- « Le gestionnaire de paquets est occupé (dnf/apt verrouillé). »
+
+« **Ouvrir le paquet** » et « **Copier dans Fichiers** » (nouveau, v1.0.40) sont des replis accessibles directement depuis l'encart d'erreur.
 
 L'AppImage se remplace sans rien demander. Une installation par
 `dnf`/`zypper`/`apt` reste préférable quand elle est disponible.

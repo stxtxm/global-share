@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('globalshareDesktop', {
   // Repli quand pkexec/polkit ne peut pas afficher le mot de passe : ouvre le
   // paquet dans le gestionnaire de fichiers (GNOME Software, Discover…).
   openInstaller: () => ipcRenderer.invoke('globalshare:update-open-installer'),
+  revealInstaller: () => ipcRenderer.invoke('globalshare:update-reveal-installer'),
   onUpdateState: (listener) => {
     const channel = 'globalshare:update-state';
     const wrapped = (_event, value) => listener(value);

@@ -99,6 +99,7 @@ function publish(patch = {}) {
       patch.requiresAdmin === undefined
         ? linuxPackageType() !== null
         : Boolean(patch.requiresAdmin),
+    installerPath: patch.installerPath === undefined ? state.installerPath : patch.installerPath,
     message:
       patch.message === undefined
         ? state.message
@@ -169,6 +170,17 @@ function installCommand(type, installer) {
   return ['rpm', ['-Uvh', '--replacepkgs', '--replacefiles', '--nodeps', installer]];
 }
 
+/**
+ * PackageKit (`pkcon`) : utilise polkit via D-Bus, sans besoin que pkexec soit
+ * setuid. Sur Fedora/Nobara désormais, pkexec (polkit ≥ 127) devient
+ * inutilisable (« nécessite root ») tandis que `pkcon install-local` déclenche
+ * bien la boîte de mot de passe et signale aussi un agent manquant.
+ */
+function pkconCommand(installer) {
+  if (!hasCommand('pkcon')) return null;
+  return ['pkcon', ['install-local', '-y', installer]];
+}
+
 function elevatedCommand([command, args]) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) return [command, args];
   if (!hasCommand('pkexec')) return null;
@@ -187,24 +199,33 @@ function elevatedCommand([command, args]) {
   return ['pkexec', ['env', ...passthrough, command, ...args]];
 }
 
-/** Traduit les erreurs pkexec/polkit en message actionnable. */
+/** Traduit les erreurs pkexec/pkcon/polkit en message actionnable. */
 function friendlyInstallError(output, type) {
   const text = String(output || '');
   const lower = text.toLowerCase();
-  if (lower.includes('not authorized') || lower.includes('not authorised')
-      || lower.includes('requires root') || lower.includes('must be setuid root')
-      || lower.includes('polkit') || lower.includes('authentication')) {
-    return 'La demande de mot de passe administrateur a échoué (polkit/pkexec). '
-      + 'Utilisez « Ouvrir le paquet » : le gestionnaire de fichiers lancera l’installation '
-      + 'avec la fenêtre de mot de passe de votre session.';
+  if (lower.includes('must be setuid root') || lower.includes('requires root')
+      || lower.includes('polkit 127') || lower.includes('pkexec')) {
+    return 'Échec d’élévation : pkexec est présent mais non setuid (polkit ≥ 127 ou durcissement). '
+      + 'Utilisez « Ouvrir le paquet » pour installer avec votre mot de passe administrateur.';
   }
-  if (lower.includes('gpg') || lower.includes('signature') || lower.includes('key')) {
-    return 'Le paquet n’a pas pu être vérifié (clé GPG). Utilisez « Ouvrir le paquet » '
-      + 'pour l’installer depuis le gestionnaire de fichiers.';
+  if (lower.includes('no authentication agent') || lower.includes('authentication agent')) {
+    return 'Aucun agent polkit graphique actif dans cette session (Fedora/Nobara/terminal). '
+      + 'Activez ou redémarrez l’agent (gnome-shell, polkit-kde-agent-1), ou utilisez « Ouvrir le paquet ».';
+  }
+  if (lower.includes('no session for cookie') || lower.includes('reactivation')) {
+    return 'Session polkit introuvable (polkit ≥ 127). Redémarrez l’agent polkit ou votre session.';
+  }
+  if (lower.includes('not authorized') || lower.includes('not authorised') || lower.includes('authentication')) {
+    return 'Authentification refusée ou annulée par l’utilisateur. Utilisez « Ouvrir le paquet » '
+      + 'et vérifiez que votre mot de passe administrateur est valide (groupe wheel / mot de passe root).';
   }
   if (lower.includes('locked') || lower.includes('en cours')) {
     return 'Le gestionnaire de paquets est occupé (dnf/apt verrouillé). '
       + 'Réessayez dans quelques instants ou ouvrez le paquet manuellement.';
+  }
+  if (lower.includes('gpg') || lower.includes('signature') || lower.includes('key')) {
+    return 'Le paquet n’a pas pu être vérifié (clé GPG). Utilisez « Ouvrir le paquet » '
+      + 'pour l’installer depuis le gestionnaire de fichiers.';
   }
   return (text || `Le gestionnaire ${type === 'deb' ? 'dpkg' : 'rpm/dnf'} a refusé l’installation.`).slice(-1500);
 }
@@ -223,17 +244,75 @@ async function openInstaller() {
   return "Dossier des téléchargements ouvert : lancez l'installation depuis le gestionnaire de fichiers.";
 }
 
+/** Copie le paquet téléchargé vers Téléchargements/GlobalShare et ouvre le
+ *  dossier : alternative à « Ouvrir le paquet » quand le système refuse
+ *  l'ouverture dans le gestionnaire de fichiers. */
+function safeFileName(name) {
+  if (typeof name !== 'string' || name.trim() === '') return 'update.pkg';
+  return name.replace(/[\/\\:*?"<>|\r\n]+/g, '_').slice(0, 200) || 'update.pkg';
+}
+
+function freeFileName(dir, base) {
+  const seen = new Set(
+    (() => {
+      try { return fs.readdirSync(dir); } catch { return []; }
+    })()
+  );
+  if (!seen.has(base)) return base;
+  const ext = base.includes('.') ? base.slice(base.lastIndexOf('.')) : '';
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  for (let i = 1; ; i++) {
+    const candidate = `${stem} (${i})${ext}`;
+    if (!seen.has(candidate)) return candidate;
+  }
+}
+
+async function revealInstaller() {
+  const dir = path.join(app.getPath('downloads'), 'GlobalShare');
+  if (!installerPath || !fs.existsSync(installerPath)) {
+    return 'Le paquet téléchargé est introuvable. Relancez le téléchargement.';
+  }
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    const target = path.join(dir, freeFileName(dir, safeFileName(path.basename(installerPath))));
+    await fs.promises.copyFile(installerPath, target);
+    shell.showItemInFolder(target);
+    return '';
+  } catch (error) {
+    return `Impossible de copier le paquet vers les Téléchargements : ${error.message}`;
+  }
+}
+
 function runCommand([command, args]) {
   return new Promise((resolve) => {
     let output = '';
+    let timedOut = false;
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // 5 minutes : sur un réseau souvent lent, dnf télécharge dans le cache
+    // avant d'installer ; si polkit ne répond pas, on ne doit pas rester
+    // bloqué « installation en cours » pour l'utilisateur.
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+      resolve({
+        ok: false,
+        output: output + '\n[TIMEOUT] Le gestionnaire de paquets n’a pas répondu en 5 minutes (mot de passe bloquant ? utilisez « Ouvrir le paquet »).',
+      });
+    }, 5 * 60_000);
     const collect = (chunk) => {
       output = (output + String(chunk)).slice(-4000);
     };
     child.stdout.on('data', collect);
     child.stderr.on('data', collect);
-    child.on('error', (error) => resolve({ ok: false, output: error.message }));
-    child.on('close', (code) => resolve({ ok: code === 0, output: output.trim() }));
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      resolve({ ok: false, output: error.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      void timedOut;
+      resolve({ ok: code === 0, output: output.trim() });
+    });
   });
 }
 
@@ -455,22 +534,32 @@ async function installUpdate() {
   }
 
   if (!installerPath || !fs.existsSync(installerPath)) {
-    publish({ status: 'error', message: 'Le paquet téléchargé est introuvable. Relancez le téléchargement.' });
+    publish({ status: 'error', installerPath: null, message: 'Le paquet téléchargé est introuvable. Relancez le téléchargement.' });
     return state;
   }
-  const command = elevatedCommand(installCommand(type, installerPath));
-  if (!command) {
+  // pkcon (PackageKit) avant pkexec : ne dépend pas du binaire setuid pkexec
+  // (défaisal sur polkit ≥ 127) et demande le mot de passe via D-Bus, avec un
+  // agent graphique si celui-ci est présent.
+  const pkcon = pkconCommand(installerPath);
+  const elevated = elevatedCommand(installCommand(type, installerPath));
+  if (!pkcon && !elevated) {
     publish({
       status: 'error',
-      message: 'pkexec est introuvable : ouvrez le paquet depuis le gestionnaire de fichiers '
-        + 'pour saisir votre mot de passe administrateur.',
+      installerPath,
+      message: 'Aucun moyen d’installer le paquet depuis l’application : pkexec et pkcon sont '
+        + 'introuvables. Ouvrez le paquet depuis le gestionnaire de fichiers (voir « Ouvrir le paquet »).',
     });
     return state;
   }
 
   installing = true;
-  publish({ status: 'installing', message: 'Installation en cours…', percent: 0 });
-  // Valeur > 1 : barre indéterminée pendant la saisie du mot de passe.
+  const command = pkcon || elevated;
+  publish({
+    status: 'installing',
+    message: pkcon ? 'Installation via PackageKit…' : 'Installation en cours…',
+    percent: 0,
+  });
+  // Valeur > 1 : barre indéterminée (pkexec/pkcon nous ne disent rien).
   setProgress(2);
   const result = await runCommand(command);
   installing = false;
@@ -479,6 +568,7 @@ async function installUpdate() {
   if (!result.ok) {
     publish({
       status: 'error',
+      installerPath,
       message: friendlyInstallError(result.output, type),
     });
     return state;
@@ -504,6 +594,7 @@ function registerIpc() {
   ipcMain.handle('globalshare:update-install', () => installUpdate());
   ipcMain.handle('globalshare:update-dismiss', () => dismissUpdate());
   ipcMain.handle('globalshare:update-open-installer', () => openInstaller());
+  ipcMain.handle('globalshare:update-reveal-installer', () => revealInstaller());
 }
 registerIpc();
 

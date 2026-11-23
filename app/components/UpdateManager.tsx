@@ -105,6 +105,10 @@ const actions = {
   openInstaller: () => void getBridge()?.openInstaller?.().then((error) => {
     if (error) applyState({ ...currentState, status: 'error', message: String(error) });
   }),
+  revealInstaller: () => void getBridge()?.revealInstaller?.().then((error) => {
+    if (error) applyState({ ...currentState, status: 'error', message: String(error) });
+  }),
+  retryInstall: () => void getBridge()?.installUpdate?.(),
   dismiss: () => {
     // Retour immédiat : le main publiera l'état confirmé juste après.
     applyState({ ...currentState, status: 'idle', message: '', percent: 0 });
@@ -337,15 +341,17 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
     case 'error':
       title = 'Mise à jour impossible';
       if (typeof getBridge()?.openInstaller === 'function') {
-        buttons.push({
-          label: 'Ouvrir le paquet',
-          primary: true,
-          run: actions.openInstaller,
-        });
+        buttons.push({ label: 'Ouvrir le paquet', run: actions.openInstaller });
+      }
+      if (state.installerPath && typeof getBridge()?.revealInstaller === 'function') {
+        buttons.push({ label: 'Copier dans Fichiers', run: actions.revealInstaller });
+      }
+      if (state.installerPath && typeof getBridge()?.installUpdate === 'function') {
+        buttons.push({ label: 'Retenter l’installation', primary: true, run: actions.retryInstall });
       }
       buttons.push({
         label: 'Réessayer',
-        primary: true,
+        primary: !state.installerPath,
         run: () => {
           onOpenChange(true);
           actions.check();

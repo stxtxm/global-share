@@ -17,8 +17,27 @@ test('pkexec transmet DISPLAY, DBUS et XDG_RUNTIME_DIR', () => {
 
 test('les erreurs polkit sont traduites en message actionnable', () => {
   assert.match(updater, /function friendlyInstallError/);
-  assert.match(updater, /requires root/);
+  assert.match(updater, /must be setuid root/);
+  assert.match(updater, /no authentication agent/i);
+  assert.match(updater, /no session for cookie/i);
   assert.match(updater, /Ouvrir le paquet/);
+});
+
+test('PackageKit (pkcon) et l\'alternative de copie vers les Fichiers', () => {
+  assert.match(updater, /function pkconCommand/);
+  assert.match(updater, /hasCommand\('pkcon'\)/);
+  assert.match(updater, /const pkcon = pkconCommand\(installerPath\)/);
+  assert.match(updater, /async function revealInstaller/);
+  assert.match(updater, /freeFileName\(dir, safeFileName/);
+  assert.match(preload, /revealInstaller: \(\) => ipcRenderer\.invoke\('globalshare:update-reveal-installer'\)/);
+  assert.match(ui, /label: 'Ouvrir le paquet'/);
+  assert.match(ui, /label: 'Copier dans Fichiers'/);
+  assert.match(ui, /label: 'Retenter l’installation'/);
+});
+
+test('l\'état publie installerPath pour les boutons de repli', () => {
+  assert.match(updater, /installerPath: patch\.installerPath === undefined/);
+  assert.match(ui, /state\.installerPath/);
 });
 
 test('le repli ouvre le paquet puis son dossier', () => {

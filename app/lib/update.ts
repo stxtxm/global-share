@@ -34,6 +34,8 @@ export interface UpdateState {
   requiresAdmin: boolean;
   message: string;
   mode: UpdateMode;
+  /** Paquet téléchargé, utile pour le repli « Ouvrir le paquet dans Fichiers ». */
+  installerPath?: string;
 }
 
 const STATUSES: ReadonlySet<string> = new Set<UpdateStatus>([
@@ -94,11 +96,13 @@ export function normalizeUpdateState(input: unknown): UpdateState {
     requiresAdmin: raw.requiresAdmin === true,
     message: text(raw.message),
     mode,
+    installerPath: text(raw.installerPath) || undefined,
   };
 }
 
 /** Méthodes exposées par desktop/preload.js (absentes sur le web). */
 export interface DesktopUpdateBridge {
+  revealInstaller?: () => Promise<unknown>;
   isDesktop?: boolean;
   isMobile?: boolean;
   getUpdateState?: () => Promise<unknown>;

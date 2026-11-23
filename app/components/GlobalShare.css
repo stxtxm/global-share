@@ -1316,16 +1316,15 @@
   border-radius: 999px;
   background: var(--gs-surface-strong);
   overflow: hidden;
+  position: relative;
 }
-
 
 .gs-bar-fill {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--gs-accent), var(--gs-accent-2));
-  transition: width 0.25s ease;
+  transition: width 0.22s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.15s ease;
 }
-
 
 .gs-bar-fill.is-done {
   background: linear-gradient(90deg, var(--gs-success), var(--gs-accent-2));
@@ -1451,6 +1450,30 @@
   background: rgba(167, 139, 250, 0.26);
 }
 
+
+/* Animation de la barre de progression : une lueur qui double rien,
+   juste un feedback visuel subtil sur les transferts en cours. */
+.gs-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  transform: translateX(105%);
+  animation: gs-bar-bandeau 0.55s ease-in-out infinite;
+}
+
+@keyframes gs-bar-bandeau {
+  to { transform: translateX(-25%); }
+}
+
+.gs-bar-fill.is-done::after {
+  display: none;
+}
+
+.gs-bar-fill.is-done {
+  background: linear-gradient(90deg, var(--gs-success), var(--gs-accent-2));
+}
 
 /* --- Onglets Salon / Téléchargements ------------------------------------- */
 .gs-tabs {

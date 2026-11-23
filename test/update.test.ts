@@ -42,6 +42,7 @@ test('normalizeUpdateState borne la progression et ignore les états inconnus', 
     ...INITIAL_UPDATE_STATE,
     currentVersion: 'version inconnue',
     version: 'version inconnue',
+    installerPath: undefined,
   });
 });
 

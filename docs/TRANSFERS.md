@@ -11,8 +11,8 @@ déduplication, reprise octet par octet et contrôle SHA-256.
 | Paramètre | Valeur | Pourquoi |
 | --- | --- | --- |
 | Taille d'un chunk (relais) | **512 Ko** | 4× moins de messages dans le Durable Object et 4× moins d'ACK qu'à 128 Ko. Le destinataire s'aligne sur la taille réelle du premier chunk reçu, donc un ancien client peut recevoir les nouveaux chunks. |
-| Taille d'un chunk (LAN P2P) | 256 Ko | Le canal SCTP a une faible latence : pas besoin de blocs plus gros. |
-| Chunks en vol | 24 (relais), 32 (LAN) | 12 Mo de données en vol sur le relais : le tuyau reste plein même avec un RTT de plusieurs centaines de ms. |
+| Taille d'un chunk (LAN P2P) | **512 Ko** (v1.0.40) | Contournement du plafond de lien lent : sur le même réseau, le canal DataChannel retire à lui-même les allers-retours d'ACK — des blocs plus gros accélèrent la file. Le receiver s'aligne sur le premier bloc. |
+| Chunks en vol | 24 (relais), 16 (LAN v1.0.40) | Le tuyau reste plein même avec un RTT de plusieurs centaines de ms ; sur LAN, 16 × 512 Ko = 8 Mo en vol. |
 | Timeout d'ACK | `max(8 s, 6 × RTT mesuré)`, plafonné à 30 s | Un plancher à 3 s provoquait des retransmissions prématurées et un livelock avec 12 Mo en vol. |
 | Budget de retransmissions | 3 **par chunk** | Un budget global annulait tout le fichier après 4 incidents éparpillés. |
 
