@@ -1221,6 +1221,22 @@
   border-top: 1px solid var(--gs-border);
 }
 
+.gs-shared-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.gs-shared-files-head .gs-hint { margin: 0; }
+
+.gs-shared-files-head .gs-dl--ghost {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+}
+
 /* --- Transferts ---------------------------------------------------------- */
 .gs-transfer {
   position: relative;

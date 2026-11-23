@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.42] - 2026-11-23
+
+### Fixed
+- **Incohérence « Fichiers reçus » / « Sur cet appareil »** : après suppression
+  d'un fichier dans la liste reçue, la liste « Sur cet appareil » est relue
+  (`mobileListDownloads()`), ainsi que dans « Fichiers reçus » après suppression
+  ou « Tout effacer ». L'autre direction (suppression par Fichiers) est aussi
+  reflétée.
+
+### Added
+- **UX améliorée de la liste « Sur cet appareil »** : bouton « Effacer tout »
+  (confirmé), lignes plus lisibles avec icônes, herse informatique, libellés
+  traduits (`clearAllShared`), liste actualisée à l'ouverture de l'onglet et
+  à chaque activation de la fenêtre.
+
 ## [1.0.41] - 2026-11-23
 
 ### Added

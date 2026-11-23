@@ -910,16 +910,30 @@ export default function GlobalShare() {
 
   // Lecture du stockage partagé à l'ouverture de l'onglet : montre les fichiers
   // même quand l'historique IndexedDB est vide ou périmé.
+  const loadSharedFiles = useCallback(async () => {
+    const result = await mobileListDownloads();
+    setSharedFiles(result.files);
+    if (result.error) showToast('warning', result.error);
+  }, [showToast]);
+
+  // L'onglet Téléchargements peut être ouvert plusieurs fois ; on relit le
+  // stockage partagé à chaque ouverture (si une autre app avait effacé des
+  // fichiers depuis Fichiers, la liste évolue par elle-même).
   useEffect(() => {
     if (tab !== 'downloads' || !isMobileHost()) return;
     let cancelled = false;
-    void mobileListDownloads().then(result => {
-      if (cancelled) return;
-      setSharedFiles(result.files);
-      if (result.error) showToast('warning', result.error);
+    void loadSharedFiles().then(() => {
+      if (!cancelled) return;
     });
-    return () => { cancelled = true; };
-  }, [tab, showToast]);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadSharedFiles();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [tab, loadSharedFiles]);
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
@@ -1661,11 +1675,12 @@ export default function GlobalShare() {
         record.path ? file.uri !== record.path : file.name !== record.name
       ));
       showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
+      void loadSharedFiles();
     }
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-  }, [appSettings.confirmDelete, appSettings.language, showToast]);
+  }, [appSettings.confirmDelete, appSettings.language, showToast, loadSharedFiles]);
 
   const clearDownloadHistory = useCallback(async () => {
     if (appSettings.confirmDelete && !window.confirm(
@@ -1676,7 +1691,13 @@ export default function GlobalShare() {
     downloadBlobRef.current.clear();
     setDownloads([]);
     await clearStoredDownloads();
-  }, [appSettings.confirmDelete, appSettings.language]);
+    if (isMobileHost()) {
+      for (const file of downloads) {
+        await mobileDeleteDownload({ uri: file.path, name: file.name });
+      }
+      await loadSharedFiles();
+    }
+  }, [appSettings.confirmDelete, appSettings.language, loadSharedFiles, downloads]);
 
   // ---- Enregistrement des fichiers reçus ----
   // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
@@ -2318,7 +2339,24 @@ export default function GlobalShare() {
             {isMobileHost() && (
               <div className="gs-shared-files">
                 <h3 className="gs-list-title">Sur cet appareil</h3>
-                <p className="gs-hint">Téléchargements/GlobalShare · {sharedFiles.length} fichier{sharedFiles.length > 1 ? 's' : ''}</p>
+                <div className="gs-shared-files-head">
+                  <span className="gs-hint">Téléchargements/GlobalShare · {sharedFiles.length} fichier{sharedFiles.length > 1 ? 's' : ''}</span>
+                  {sharedFiles.length > 0 && (
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost"
+                      onClick={() => void (async () => {
+                        if (!window.confirm(translateSetting(appSettings.language, 'confirmClearHistory'))) return;
+                        for (const file of sharedFiles) {
+                          await mobileDeleteDownload({ uri: file.uri, name: file.name });
+                        }
+                        await loadSharedFiles();
+                      })()}
+                    >
+                      Effacer tout
+                    </button>
+                  )}
+                </div>
                 {sharedFiles.length === 0 ? (
                   <p className="gs-hint">Aucun fichier enregistré pour le moment.</p>
                 ) : (

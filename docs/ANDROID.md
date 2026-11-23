@@ -190,6 +190,11 @@ via `listDownloads()` dans l'onglet Téléchargements.
   fichiers (pas seulement le FLAC). « Fichiers » ouvre directement le dossier
   `Téléchargements/GlobalShare` dans l'app du système ; « Écouter » affiche un
   choisir d'application.
+- Les listes restent synchronisées : « Fichiers reçus » → « Retirer » ou « Tout
+  effacer » supprime aussi les fichiers sur le disque et rafraîchit « Sur
+  cet appareil » ; « Sur cet appareil » → « Supprimer » ou « Effacer tout »
+  supprime les fichiers reçus demandés ; l'autre liste est rafraîchie dès le
+  retour dans l'onglet Téléchargements.
 - **Retirer** supprime aussi le fichier du stockage partagé via
   `deleteDownload()` (URI MediaStore, ou recherche par nom pour les anciennes
   entrées) : l'historique et le fichier sur le téléphone restent cohérents.
