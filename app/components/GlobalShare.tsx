@@ -1638,25 +1638,32 @@ export default function GlobalShare() {
   }, [showToast]);
 
   const removeDownload = useCallback(async (record: DownloadRecord) => {
-    // Réglage « Confirmer la suppression » : l'entrée quitte la liste (et
-    // l'historique), le fichier déjà enregistré sur le disque n'est pas supprimé.
+    // Sur Android, la ligne ne doit disparaître qu'une fois le fichier
+    // réellement supprimé : sinon « Retirer » donne l'illusion d'un ménage
+    // alors que le fichier reste dans Téléchargements/GlobalShare.
     if (appSettings.confirmDelete && !window.confirm(
       translateSetting(appSettings.language, 'confirmRemoveFile', { name: record.name })
     )) {
       return;
     }
+    if (isMobileHost()) {
+      const result = await mobileDeleteDownload({ uri: record.path, name: record.name });
+      if (result.error) {
+        showToast('warning', `${result.error} Le fichier reste dans la liste.`);
+        return;
+      }
+      if (!result.deleted) {
+        showToast('warning', `Suppression impossible : ${record.name} reste dans la liste.`);
+        return;
+      }
+      setSharedFiles(prev => prev.filter(file =>
+        record.path ? file.uri !== record.path : file.name !== record.name
+      ));
+      showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
+    }
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-    // Sur Android, retirer la ligne doit AUSSI supprimer le fichier écrit dans
-    // Téléchargements/GlobalShare, sinon il reste introuvable dans l'app.
-    if (isMobileHost()) {
-      const result = await mobileDeleteDownload({ uri: record.path, name: record.name });
-      if (result.error) showToast('warning', result.error);
-      else if (result.deleted) {
-        showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
-      }
-    }
   }, [appSettings.confirmDelete, appSettings.language, showToast]);
 
   const clearDownloadHistory = useCallback(async () => {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.40] - 2026-11-23
+
+### Fixed
+- **Suppression réelle des fichiers reçus sur Android** : le bouton
+  **Retirer** appelait `deleteDownload` alors que le plugin natif ne
+  l'exposait pas. Le fichier restait donc dans `Téléchargements/GlobalShare`
+  et l'historique disparaissait quand même. La méthode supprime maintenant
+  l'entrée MediaStore (Android 10+) ou le fichier public (Android 9 et
+  antérieur), avec repli par nom pour les anciennes entrées ; une suppression
+  déjà effectuée est traitée comme un succès. `nativeVersion` passe à 6 pour
+  que les APK installées téléchargent l'APK complet au lieu du seul bundle web.
+
 ## [Unreleased]
 
 ### Added

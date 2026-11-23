@@ -27,7 +27,14 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  assert.equal(pkg.nativeVersion, 5);
+  assert.equal(pkg.nativeVersion, 6);
+});
+
+test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () => {
+  assert.match(plugin, /void deleteDownload\(PluginCall call\)/);
+  assert.match(plugin, /getContentResolver\(\)\.delete/);
+  assert.match(plugin, /MediaStore\.Downloads\.EXTERNAL_CONTENT_URI/);
+  assert.match(plugin, /DIRECTORY_DOWNLOADS/);
 });
 
 test('listDownloads lit MediaStore et le dossier legacy', () => {

@@ -194,7 +194,7 @@ Depuis la v1.0.32 :
 ## Décalage bundle web / coquille native
 
 Les versions 1.0.32 à 1.0.35 ont ajouté des **méthodes natives** (`saveDownload`,
-`finishDownload`, `openDownload`, `revealDownload`, `deleteDownload`) sans changer
+`finishDownload`, `openDownload`, `revealDownload`) sans changer
 `nativeVersion` (resté à 2). Une APK installée avec une version antérieure
 pouvait donc récupérer le nouveau bundle web (~1,4 Mo) par mise à jour delta :
 l'interface affichait les boutons, mais l'appel à la méthode native absente levait
@@ -207,7 +207,13 @@ le compteur diffère et propose le **paquet complet**. Le pont JS vérifie aussi
 l'existence de chaque méthode et affiche « mettez l'APK à jour » au lieu d'un
 TypeError si une coquille obsolète est détectée.
 
-**Important pour tester** : installez l'**APK complet v1.0.36** (pas seulement la
+Depuis la **v1.0.40**, `nativeVersion` passe à **6** : la coquille 5 appelait
+`deleteDownload` côté web sans exposer la méthode native, donc **Retirer**
+laissait le fichier sur le téléphone. Cette version fournit la suppression
+MediaStore (ou du fichier public sur Android ≤ 9) et force le téléchargement de
+l'APK complet.
+
+**Important pour tester** : installez l'**APK complet v1.0.40** (pas seulement la
 mise à jour web) depuis la release GitHub. Les fichiers déjà reçus avec une
 ancienne coquille n'existent que dans IndexedDB : recevez-les à nouveau après la
 mise à jour pour qu'ils soient écrits dans `Téléchargements/GlobalShare`.
