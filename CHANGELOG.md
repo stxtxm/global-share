@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.52] - 2026-11-24
+
+### Added
+- **Dossier de réception modifiable.** Réglages → **Fichiers → Dossier de réception** : le bouton **Modifier** ouvre le sélecteur du système (Android : arborescence SAF avec autorisation persistée ; desktop : dialogue Electron). Les fichiers reçus sont écrits dans le dossier choisi et restent ouvrables depuis l’historique, même après un changement de dossier. **Par défaut** rétablit `Téléchargements/GlobalShare`.
+- Sur le web, ce réglage est masqué : le navigateur impose son propre dossier de téléchargement.
+
+### Changed
+- Le paquet desktop est mis à jour en même temps : son preload expose le sélecteur de dossier natif.
+- `nativeVersion` passe à **11** : l’APK embarque le sélecteur SAF et l’écriture dans l’arborescence choisie, un bundle web ne suffit pas.
 ## [1.0.51] - 2026-11-24
 
 ### Added

@@ -1,8 +1,14 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { AppSettings } from '../lib/settings';
 import { ACCENT_SWATCHES, translate as translateSetting } from '../lib/settings-i18n';
+import {
+  chooseReceiveFolder,
+  getReceiveFolder,
+  resetReceiveFolder,
+  type ReceiveFolderInfo,
+} from '../lib/receive-folder';
 import pkgVersion from '../../package.json';
 
 // ----------------------------------------------------------------------------
@@ -36,6 +42,88 @@ function SettingToggle({ label, hint, checked, disabled = false, onChange }: Set
         <span className="gs-switch-knob" />
       </span>
     </button>
+  );
+}
+
+interface ReceiveFolderSectionProps {
+  t: (key: string) => string;
+}
+
+/**
+ * Réglage « Dossier de réception » : bouton qui ouvre le sélecteur de dossier
+ * du système (Android) ou d'Electron. La ligne est absente sur le web, où le
+ * navigateur impose son propre dossier de téléchargement.
+ */
+function ReceiveFolderSection({ t }: ReceiveFolderSectionProps) {
+  const [folder, setFolder] = useState<ReceiveFolderInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void getReceiveFolder().then(info => {
+      if (active) setFolder(info);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (!folder) return null;
+
+  const apply = async (reset: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    const result = reset ? await resetReceiveFolder() : await chooseReceiveFolder();
+    setBusy(false);
+    if ('folder' in result) {
+      setFolder(result.folder);
+      return;
+    }
+    if ('error' in result) {
+      // Le détail technique n'aide pas l'utilisateur ; il reste dans la console.
+      console.warn('[GlobalShare] Dossier de réception :', result.error);
+      setFailed(true);
+    }
+  };
+
+  return (
+    <>
+      <h2 className="gs-list-title">{t('files')}</h2>
+      <div className="gs-card gs-card--pad">
+        <div className="gs-setting gs-setting--folder">
+          <div>
+            <strong>{t('receiveFolder')}</strong>
+            <small>{t('receiveFolderHint')}</small>
+            <span className="gs-folder-path" title={folder.path}>{folder.path}</span>
+          </div>
+          <div className="gs-folder-actions">
+            <button
+              type="button"
+              className="gs-btn gs-btn--ghost gs-btn--sm"
+              disabled={busy}
+              onClick={() => void apply(false)}
+            >
+              {t('receiveFolderChange')}
+            </button>
+            {folder.custom && (
+              <button
+                type="button"
+                className="gs-btn gs-btn--ghost gs-btn--sm"
+                disabled={busy}
+                onClick={() => void apply(true)}
+              >
+                {t('receiveFolderReset')}
+              </button>
+            )}
+          </div>
+          {failed && (
+            <span className="gs-folder-error" role="alert">{t('receiveFolderError')}</span>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -135,6 +223,8 @@ function SettingsPanel({
           </div>
         </div>
       </div>
+
+      <ReceiveFolderSection t={t} />
 
       {/* ---- Affichage ---- */}
       <h2 className="gs-list-title">{t('display')}</h2>

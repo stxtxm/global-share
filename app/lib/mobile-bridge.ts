@@ -28,6 +28,11 @@ interface GlobalShareNativePlugin {
   revealDownload(): Promise<{ error?: string }>;
   deleteDownload(options: { uri?: string; name: string }): Promise<{ deleted?: boolean; error?: string }>;
   listDownloads(): Promise<{ files?: { uri: string; name: string; size: number }[]; error?: string }>;
+  getReceiveFolder?(): Promise<{ path?: string; custom?: boolean; error?: string }>;
+  chooseReceiveFolder?(): Promise<{
+    path?: string; custom?: boolean; canceled?: boolean; error?: string;
+  }>;
+  resetReceiveFolder?(): Promise<{ path?: string; custom?: boolean; error?: string }>;
   getServiceState?(): Promise<unknown>;
   addListener(eventName: string, listener: (value: unknown) => void): Promise<ListenerHandle>;
 }
@@ -248,6 +253,62 @@ export async function mobileFinishDownload(options: {
   if (typeof plugin?.finishDownload !== 'function') return {};
   try {
     return (await plugin.finishDownload(options)) ?? {};
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+// ---- Dossier de réception des fichiers reçus (réglages) ------------------
+
+export interface ReceiveFolderInfo {
+  /** Libellé lisible : nom du dossier choisi, ou dossier par défaut. */
+  path: string;
+  /** true quand l'utilisateur a choisi un dossier autre que celui par défaut. */
+  custom: boolean;
+}
+
+export async function mobileGetReceiveFolder(): Promise<ReceiveFolderInfo | null> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.getReceiveFolder !== 'function') return null;
+  try {
+    const result = await plugin.getReceiveFolder();
+    if (!result?.path) return null;
+    return { path: result.path, custom: Boolean(result.custom) };
+  } catch {
+    return null;
+  }
+}
+
+export async function mobileChooseReceiveFolder(): Promise<{
+  folder?: ReceiveFolderInfo; canceled?: boolean; error?: string;
+}> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.chooseReceiveFolder !== 'function') {
+    return { error: missingNative('Dossier de réception') };
+  }
+  try {
+    const result = await plugin.chooseReceiveFolder();
+    if (result?.canceled) return { canceled: true };
+    if (result?.error) return { error: result.error };
+    if (!result?.path) return { error: "Le téléphone n'a pas renvoyé de dossier." };
+    return { folder: { path: result.path, custom: Boolean(result.custom) } };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+export async function mobileResetReceiveFolder(): Promise<{
+  folder?: ReceiveFolderInfo; error?: string;
+}> {
+  const plugin = nativePlugin();
+  if (typeof plugin?.resetReceiveFolder !== 'function') {
+    return { error: missingNative('Dossier de réception') };
+  }
+  try {
+    const result = await plugin.resetReceiveFolder();
+    if (result?.error) return { error: result.error };
+    if (!result?.path) return { error: "Le téléphone n'a pas renvoyé de dossier." };
+    return { folder: { path: result.path, custom: Boolean(result.custom) } };
   } catch (error) {
     return { error: String(error) };
   }

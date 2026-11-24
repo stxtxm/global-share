@@ -237,7 +237,7 @@ let staticServer = null;
 // Téléchargements peut ainsi les rouvrir sans redemander ni chemin ni blob.
 const DOWNLOAD_FOLDER = 'GlobalShare';
 
-function downloadsDir() {
+function defaultDownloadsDir() {
   let base;
   try {
     base = app.getPath('downloads');
@@ -245,6 +245,65 @@ function downloadsDir() {
     base = app.getPath('home');
   }
   return path.join(base, DOWNLOAD_FOLDER);
+}
+
+// Dossier de réception choisi dans les réglages. On conserve la liste des
+// dossiers déjà utilisés : les fichiers reçus avant un changement de dossier
+// doivent rester ouvrables depuis l'historique.
+const RECEIVE_FOLDER_FILE = 'receive-folder.json';
+
+function receiveFolderFile() {
+  return path.join(app.getPath('userData'), RECEIVE_FOLDER_FILE);
+}
+
+function receiveFolderState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(receiveFolderFile(), 'utf8'));
+    const folder = typeof raw?.folder === 'string' && path.isAbsolute(raw.folder)
+      ? raw.folder
+      : null;
+    const known = Array.isArray(raw?.known)
+      ? raw.known.filter(value => typeof value === 'string' && path.isAbsolute(value))
+      : [];
+    return { folder, known };
+  } catch {
+    return { folder: null, known: [] };
+  }
+}
+
+function writeReceiveFolderState(state) {
+  const file = receiveFolderFile();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state, null, 2));
+  } catch {
+    // Écriture impossible : le choix reste actif pour la session en cours.
+  }
+}
+
+function savedReceiveFolder() {
+  return receiveFolderState().folder;
+}
+
+function storeReceiveFolder(folder) {
+  const state = receiveFolderState();
+  if (folder) {
+    state.folder = folder;
+    if (!state.known.includes(folder)) state.known.push(folder);
+  } else {
+    state.folder = null;
+  }
+  writeReceiveFolderState(state);
+}
+
+function downloadsDir() {
+  return savedReceiveFolder() ?? defaultDownloadsDir();
+}
+
+/** Tous les dossiers connus : ouverture/affichage limités à ceux-là. */
+function receiveFolderRoots() {
+  const state = receiveFolderState();
+  return [...new Set([defaultDownloadsDir(), state.folder, ...state.known].filter(Boolean))];
 }
 
 // Même règle que app/lib/downloads.ts : pas de chemin, pas de caractère de
@@ -267,6 +326,39 @@ function freeFileName(dir, name) {
 }
 
 function registerDownloadHandlers() {
+  ipcMain.handle('globalshare:get-download-folder', () => {
+    const custom = savedReceiveFolder();
+    return { path: custom ?? defaultDownloadsDir(), custom: Boolean(custom) };
+  });
+
+  // Sélecteur natif : la page ne peut pas choisir un dossier elle-même (le
+  // téléchargement serait imposé par le navigateur).
+  ipcMain.handle('globalshare:choose-download-folder', async () => {
+    try {
+      const options = {
+        title: 'Dossier de réception des fichiers reçus',
+        defaultPath: downloadsDir(),
+        buttonLabel: 'Choisir ce dossier',
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      const result = parent
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options);
+      if (result.canceled || !result.filePaths?.length) return { canceled: true };
+      const folder = result.filePaths[0];
+      storeReceiveFolder(folder);
+      return { path: folder, custom: true };
+    } catch (error) {
+      return { error: `Dossier non modifié : ${String(error?.message || error)}` };
+    }
+  });
+
+  ipcMain.handle('globalshare:reset-download-folder', () => {
+    storeReceiveFolder(null);
+    return { path: defaultDownloadsDir(), custom: false };
+  });
+
   ipcMain.handle('globalshare:save-download', async (_event, payload) => {
     try {
       const bytes = payload?.bytes;
@@ -316,9 +408,13 @@ function registerDownloadHandlers() {
 
   const insideDownloads = (filePath) => {
     const resolved = path.resolve(String(filePath || ''));
-    const root = path.resolve(downloadsDir());
-    if (resolved === root || resolved.startsWith(root + path.sep)) return resolved;
-    return null;
+    // Tous les dossiers de réception déjà utilisés, pas seulement le courant :
+    // changer de dossier ne doit pas rendre les anciens fichiers inouvrables.
+    const allowed = receiveFolderRoots().some(root => {
+      const base = path.resolve(root);
+      return resolved === base || resolved.startsWith(base + path.sep);
+    });
+    return allowed ? resolved : null;
   };
 
   ipcMain.handle('globalshare:open-download', async (_event, filePath) => {

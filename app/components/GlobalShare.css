@@ -2280,6 +2280,45 @@
   line-height: 1.35;
   color: var(--gs-dim);
 }
+/* Réglage « Dossier de réception » : chemin lisible + boutons 48 px. */
+.gs-setting--folder {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.gs-folder-path {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--gs-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--gs-accent);
+}
+
+.gs-folder-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.gs-folder-actions .gs-btn {
+  padding: 0 14px;
+  font-size: 0.85rem;
+}
+
+.gs-folder-error {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--gs-danger);
+}
 
 /* Variante interrupteur : le rangée entière est un <button role="switch">. */
 .gs-setting--toggle {

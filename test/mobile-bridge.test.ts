@@ -26,6 +26,17 @@ const plugin = {
   revealDownload: async () => void calls.push({ name: 'revealDownload' }),
   deleteDownload: async (args: unknown) => { calls.push({ name: 'deleteDownload', args }); return { deleted: true }; },
   listDownloads: async () => ({ files: [] }),
+  getReceiveFolder: async (): Promise<{ path?: string; custom?: boolean }> => ({
+    path: 'Documents/Reçus',
+    custom: true,
+  }),
+  chooseReceiveFolder: async (): Promise<{
+    path?: string; custom?: boolean; canceled?: boolean;
+  }> => ({ path: 'Documents/Reçus', custom: true }),
+  resetReceiveFolder: async (): Promise<{ path?: string; custom?: boolean }> => ({
+    path: 'Téléchargements/GlobalShare',
+    custom: false,
+  }),
   getServiceState: async () => ({ running: true }),
   addListener: async (name: string, listener: (value: unknown) => void) => {
     listeners.set(name, listener);
@@ -110,6 +121,30 @@ test('une coquille native plus ancienne renvoie un message au lieu d un TypeErro
     assert.match(message, /mettez l'APK à jour/i);
   } finally {
     plugin.revealDownload = original;
+  }
+});
+
+
+test('le dossier de réception se lit et se choisit depuis le pont', async () => {
+  assert.deepEqual(await bridge.mobileGetReceiveFolder(), {
+    path: 'Documents/Reçus',
+    custom: true,
+  });
+  assert.deepEqual(await bridge.mobileChooseReceiveFolder(), {
+    folder: { path: 'Documents/Reçus', custom: true },
+  });
+  assert.deepEqual(await bridge.mobileResetReceiveFolder(), {
+    folder: { path: 'Téléchargements/GlobalShare', custom: false },
+  });
+});
+
+test('annuler le sélecteur de dossier ne change rien', async () => {
+  const original = plugin.chooseReceiveFolder;
+  plugin.chooseReceiveFolder = async () => ({ canceled: true });
+  try {
+    assert.deepEqual(await bridge.mobileChooseReceiveFolder(), { canceled: true });
+  } finally {
+    plugin.chooseReceiveFolder = original;
   }
 });
 

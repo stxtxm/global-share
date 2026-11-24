@@ -30,8 +30,8 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  // v1.0.51 : UpdateManager lit les notes de version (patch notes) pour l'APK.
-  assert.equal(pkg.nativeVersion, 10);
+  // v1.0.52 : choix du dossier de réception (sélecteur SAF + écriture).
+  assert.equal(pkg.nativeVersion, 11);
 });
 
 test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () => {
@@ -39,6 +39,28 @@ test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () =>
   assert.match(plugin, /getContentResolver\(\)\.delete/);
   assert.match(plugin, /MediaStore\.Downloads\.EXTERNAL_CONTENT_URI/);
   assert.match(plugin, /DIRECTORY_DOWNLOADS/);
+});
+
+test('le dossier de réception se choisit via SAF et se persiste', () => {
+  assert.match(plugin, /void chooseReceiveFolder\(PluginCall call\)/);
+  assert.match(plugin, /void getReceiveFolder\(PluginCall call\)/);
+  assert.match(plugin, /void resetReceiveFolder\(PluginCall call\)/);
+  assert.match(plugin, /takePersistableUriPermission/);
+  assert.match(plugin, /receiveFolderPicked/);
+  assert.match(plugin, /DocumentsContract\.createDocument/);
+  assert.match(plugin, /DocumentsContract\.deleteDocument/);
+  assert.match(plugin, /buildChildDocumentsUriUsingTree/);
+  // Les dossiers déjà utilisés restent listés après un changement.
+  assert.match(plugin, /knownFolderTrees/);
+  // Choisir le dossier par défaut ne doit pas créer un doublon SAF.
+  assert.match(plugin, /primary:Download\/GlobalShare/);
+  const save = plugin.slice(
+    plugin.indexOf('public void saveDownload'),
+    plugin.indexOf('public void finishDownload')
+  );
+  assert.match(save, /createInChosenFolder/);
+  // Le repli MediaStore reste obligatoire si le dossier choisi a disparu.
+  assert.match(save, /MediaStore\.Downloads\.EXTERNAL_CONTENT_URI/);
 });
 
 test('listDownloads lit MediaStore et le dossier legacy', () => {

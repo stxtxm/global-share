@@ -456,6 +456,11 @@ declare global {
       }) => Promise<{ path?: string; error?: string }>;
       openDownload: (filePath: string) => Promise<string>;
       revealDownload: (filePath: string) => Promise<string>;
+      getDownloadFolder?: () => Promise<{ path?: string; custom?: boolean; error?: string }>;
+      chooseDownloadFolder?: () => Promise<{
+        path?: string; custom?: boolean; canceled?: boolean; error?: string;
+      }>;
+      resetDownloadFolder?: () => Promise<{ path?: string; custom?: boolean; error?: string }>;
       /** Prévient l'arrière-plan (anti-veille, tray) du nombre de transferts actifs. */
       setTransfersActive?: (count: number) => Promise<unknown>;
     } & DesktopUpdateBridge;
@@ -1690,7 +1695,7 @@ export default function GlobalShare() {
         showToast('warning', `Suppression impossible : ${record.name} reste dans la liste.`);
         return;
       }
-      showToast('success', `Fichier supprimé de Téléchargements/GlobalShare : ${record.name}`);
+      showToast('success', `Fichier supprimé du dossier de réception : ${record.name}`);
       void refreshMobileFiles();
     }
     downloadBlobRef.current.delete(record.id);
@@ -1774,7 +1779,7 @@ export default function GlobalShare() {
           showToast('warning', saved.error);
         } else if (saved?.path) {
           record.path = saved.path;
-          showToast('success', `Enregistré dans Téléchargements/GlobalShare : ${record.name}`);
+          showToast('success', `Enregistré dans le dossier de réception : ${record.name}`);
         }
       } catch {
         showToast('warning', "Enregistrement impossible : le fichier reste dans l'onglet Téléchargements.");
@@ -1790,7 +1795,7 @@ export default function GlobalShare() {
         showToast('warning', `${saved.error} Le fichier reste dans l'onglet Téléchargements.`);
       } else if (saved.path) {
         record.path = saved.path;
-        showToast('success', `Enregistré dans Téléchargements/GlobalShare : ${record.name}`);
+        showToast('success', `Enregistré dans le dossier de réception : ${record.name}`);
       }
     } else {
       record.blob = blob;
