@@ -89,6 +89,9 @@ final class UpdateManager {
     private static volatile String blockmapUrl;
     private static volatile String expectedHash;
     private static volatile File downloadedApk;
+    // Notes de version (« patch notes ») de la mise à jour proposée : extrait
+    // du CHANGELOG pour un bundle web, corps de la release GitHub pour l'APK.
+    private static volatile String releaseNotes = "";
 
     // Chemin « bundle web » : manifeste validé, en attente de téléchargement.
     private static volatile String pendingWebVersion;
@@ -154,6 +157,7 @@ final class UpdateManager {
     static void checkForUpdates(boolean manual) {
         if (checking || context == null) return;
         checking = true;
+        releaseNotes = "";
         if (manual) {
             dismissedVersion = null;
             UpdaterState.open();
@@ -197,6 +201,7 @@ final class UpdateManager {
                 if (apkUrl == null) throw new IOException("Aucun APK publié dans cette release.");
 
                 availableVersion = version;
+                releaseNotes = release.optString("body", "");
                 expectedHash = checksumUrl == null ? null : readHash(checksumUrl);
                 if (compareVersions(version, effectiveVersion()) <= 0) {
                     patch("up-to-date", null, 0, 0, 0, 0,
@@ -246,6 +251,7 @@ final class UpdateManager {
         pendingWebSha256 = sha256;
         pendingWebSize = size;
         availableVersion = version;
+        releaseNotes = manifest.optString("notes", "");
         if (version.equals(dismissedVersion)) return true; // non proposée, silencieux
         patch("available", version, 0, 0, size, 0,
                 "Version " + version + " disponible — mise à jour rapide ("
@@ -703,7 +709,8 @@ final class UpdateManager {
                 .put("bytesPerSecond", Math.max(0, bytesPerSecond))
                 .put("requiresAdmin", false)
                 .put("mode", mode == null ? "" : mode)
-                .put("message", message == null ? "" : message));
+                .put("message", message == null ? "" : message)
+                .put("releaseNotes", releaseNotes == null ? "" : releaseNotes));
     }
 
     private static HttpURLConnection open(String url) throws IOException {

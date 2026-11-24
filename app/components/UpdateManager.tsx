@@ -10,6 +10,7 @@ import {
   type UpdateStatus,
 } from '../lib/update';
 import { ensureMobileBridge, subscribeMobileBridge } from '../lib/mobile-bridge';
+import { parseReleaseNotes } from '../lib/release-notes';
 
 // Un seul abonnement au pont Electron, partagé par le bouton et l'encart.
 const stateListeners = new Set<() => void>();
@@ -38,7 +39,8 @@ function applyState(value: unknown) {
     next.bytesPerSecond === previous.bytesPerSecond &&
     next.requiresAdmin === previous.requiresAdmin &&
     next.mode === previous.mode &&
-    next.message === previous.message
+    next.message === previous.message &&
+    next.releaseNotes === previous.releaseNotes
   ) {
     return;
   }
@@ -279,6 +281,13 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
   const showBar =
     state.status === 'checking' || state.status === 'downloading' || state.status === 'installing';
 
+  // « Patch notes » : affichées avant toute action, pour savoir ce qu'on installe.
+  // Seules les étapes qui proposent de mettre à jour les montrent.
+  const notes =
+    state.status === 'available' || state.status === 'downloaded'
+      ? parseReleaseNotes(state.releaseNotes)
+      : [];
+
   const close = () => {
     // Fermer une annonce vaut « plus tard » : la version ne sera plus proposée
     // jusqu'à la prochaine vérification.
@@ -382,6 +391,27 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
           ×
         </button>
       </div>
+
+      {notes.length > 0 && (
+        <div className="gs-update-notes">
+          <span className="gs-update-notes-head">
+            <span className="gs-update-notes-label">Nouveautés</span>
+            <span className="gs-update-notes-version">{state.version}</span>
+          </span>
+          <div className="gs-update-notes-body">
+            {notes.map((section) => (
+              <div key={section.title} className="gs-update-notes-section">
+                <span className="gs-update-notes-title">{section.title}</span>
+                <ul>
+                  {section.items.map((item, index) => (
+                    <li key={`${section.title}-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showBar && (
         <div

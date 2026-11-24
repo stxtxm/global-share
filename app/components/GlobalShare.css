@@ -287,6 +287,92 @@
 }
 
 
+/* « Patch notes » : ce que la mise à jour apporte, lisible avant d’agir. */
+.gs-update-notes {
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(167, 139, 250, 0.24);
+  background: rgba(8, 9, 14, 0.45);
+  overflow: hidden;
+}
+
+
+.gs-update-notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 11px;
+  background: rgba(167, 139, 250, 0.1);
+  border-bottom: 1px solid rgba(167, 139, 250, 0.18);
+}
+
+
+.gs-update-notes-label {
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gs-accent);
+}
+
+
+.gs-update-notes-version {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--gs-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+
+.gs-update-notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 168px;
+  padding: 9px 11px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gs-border-strong) transparent;
+}
+
+
+.gs-update-notes-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+
+.gs-update-notes-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--gs-text);
+}
+
+
+.gs-update-notes ul {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 16px;
+}
+
+
+.gs-update-notes li {
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--gs-dim);
+  overflow-wrap: anywhere;
+}
+
+
+.gs-update-notes li::marker {
+  color: var(--gs-accent);
+}
+
 .gs-update-bar {
   position: relative;
   height: 7px;
@@ -375,10 +461,16 @@
 .gs-room-chip {
   display: inline-flex;
   align-items: center;
+  /* Le contenu (code + icône de partage) est réellement centré dans le
+     bouton : sur Pixel 9a le libellé « Salon » est masqué et un contenu
+     aligné à gauche paraissait décalé dans une pastille plus large. */
+  justify-content: center;
   gap: 8px;
   min-width: 0;
+  max-width: 100%;
   min-height: 42px;
   padding: 0 12px;
+  white-space: nowrap;
   border-radius: var(--gs-radius-sm);
   background: var(--gs-surface);
   border: 1px solid var(--gs-border);
@@ -405,12 +497,23 @@
 
 
 .gs-room-chip-code {
+  display: block;
+  min-width: 0;
+  /* Un code de salon personnalisé peut être long : une seule ligne avec
+     ellipse, jamais deux lignes qui rempliraient la pastille de 42 px. */
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.95rem;
+  line-height: 1.1;
   font-weight: 700;
   letter-spacing: 0.16em;
+}
+
+
+.gs-room-chip > .gs-room-chip-code {
+  max-width: 11ch;
 }
 
 

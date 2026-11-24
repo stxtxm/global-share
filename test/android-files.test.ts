@@ -30,7 +30,8 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  assert.equal(pkg.nativeVersion, 9);
+  // v1.0.51 : UpdateManager lit les notes de version (patch notes) pour l'APK.
+  assert.equal(pkg.nativeVersion, 10);
 });
 
 test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () => {

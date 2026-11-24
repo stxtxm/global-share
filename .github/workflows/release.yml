@@ -178,10 +178,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # Le corps de la release est aussi le « patch notes » lu par l’APK
+      # Android : on y met la section du CHANGELOG, sinon GitHub génère la
+      # liste des changements (mise à jour rapide : notes déjà dans le bundle).
+      - name: Extraire les notes de version
+        run: node scripts/release-notes.mjs "${TAG#v}" > notes.md || rm -f notes.md
+
       - name: Publish GitHub release
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" artifacts/* --clobber
+          elif [ -s notes.md ]; then
+            gh release create "$TAG" artifacts/* \
+              --title "GlobalShare ${TAG#v}" \
+              --notes-file notes.md
           else
             gh release create "$TAG" artifacts/* \
               --title "GlobalShare ${TAG#v}" \

@@ -46,6 +46,7 @@ function initialState() {
     bytesPerSecond: 0,
     requiresAdmin: linuxPackageType() !== null,
     message: '',
+    releaseNotes: '',
   };
 }
 
@@ -71,6 +72,23 @@ function percent(value) {
 function versionOf(info) {
   const value = info && (info.version || (info.updateInfo && info.updateInfo.version));
   return typeof value === 'string' && value ? value : app.getVersion();
+}
+
+// electron-updater relaie les notes du flux GitHub, en HTML, sous forme de
+// chaîne ou de tableau { version, note }. On garde les notes de la version
+// proposée, en texte brut : le rendu côté interface reste du React.
+function releaseNotesText(info) {
+  const notes = info && info.releaseNotes;
+  let value = '';
+  if (Array.isArray(notes)) {
+    const target = versionOf(info);
+    const entry =
+      notes.find((item) => item && String(item.version) === target) || notes.find(Boolean);
+    value = typeof entry === 'string' ? entry : entry && typeof entry.note === 'string' ? entry.note : '';
+  } else if (typeof notes === 'string') {
+    value = notes;
+  }
+  return value.replace(/\r\n?/g, '\n').slice(0, 8000);
 }
 
 function errorText(error, fallback) {
@@ -100,6 +118,12 @@ function publish(patch = {}) {
         ? linuxPackageType() !== null
         : Boolean(patch.requiresAdmin),
     installerPath: patch.installerPath === undefined ? state.installerPath : patch.installerPath,
+    releaseNotes:
+      patch.releaseNotes === undefined
+        ? state.releaseNotes
+        : typeof patch.releaseNotes === 'string'
+          ? patch.releaseNotes.slice(0, 8000)
+          : '',
     message:
       patch.message === undefined
         ? state.message
@@ -362,7 +386,17 @@ function checkForUpdates(options = {}) {
 
   checking = true;
   manualCheck = manual;
-  publish({ status: 'checking', message: '', percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 });
+  publish({
+    status: 'checking',
+    message: '',
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0,
+    // Notes de la version précédemment proposée : elles ne valent plus rien
+    // pour la nouvelle vérification.
+    releaseNotes: '',
+  });
 
   // 1) Mise à jour rapide : manifeste du bundle web (~1 Ko). S'il annonce une
   // version compatible avec la coquille installée (nativeVersion identique),
@@ -382,6 +416,7 @@ function checkForUpdates(options = {}) {
           mode: 'web',
           total: info.size || 0,
           message: `Version ${info.version} disponible — mise à jour rapide (${app.getVersion()} installée).`,
+          releaseNotes: typeof info.notes === 'string' ? info.notes : '',
           percent: 0,
           transferred: 0,
           bytesPerSecond: 0,
@@ -664,6 +699,7 @@ function initAutoUpdater(resolveWindow, options = {}) {
       status: 'available',
       version: availableVersion,
       message: `Version ${availableVersion} disponible (${app.getVersion()} installée).`,
+      releaseNotes: releaseNotesText(info),
       percent: 0,
       transferred: 0,
       total: 0,

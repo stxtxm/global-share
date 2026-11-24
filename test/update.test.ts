@@ -65,6 +65,17 @@ test('normalizeUpdateState conserve les champs valides y compris requiresAdmin',
   assert.equal(state.message, 'Prête à installer.');
 });
 
+test('normalizeUpdateState nettoie les notes de version HTML', () => {
+  const state = normalizeUpdateState({
+    status: 'available',
+    version: '1.0.52',
+    releaseNotes: '<h3>Added</h3><ul><li>Patch notes</li></ul><script>alert(1)</script>',
+  });
+
+  assert.equal(state.releaseNotes, '### Added\n\n- Patch notes');
+  assert.equal(normalizeUpdateState({ releaseNotes: null }).releaseNotes, '');
+});
+
 test('formatUpdateBytes affiche des tailles lisibles', () => {
   assert.equal(formatUpdateBytes(0), '0 B');
   assert.equal(formatUpdateBytes(512), '512 B');

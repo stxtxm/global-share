@@ -53,3 +53,13 @@ test('Retirer supprime aussi le fichier du stockage Android', () => {
 test('le libellé « Salon » s’efface sur les écrans étroits', () => {
   assert.match(css, /@media \(max-width: 480px\)[\s\S]*?\.gs-room-chip-label\s*\{\s*display:\s*none/);
 });
+
+test('le contenu du bouton de partage du salon reste centré sur une ligne', () => {
+  // Pixel 9a (412 px) : le code et l’icône doivent être centrés dans la
+  // pastille, sans retour à la ligne même avec un code personnalisé long.
+  assert.match(css, /\.gs-room-chip\s*\{[^}]*justify-content:\s*center/);
+  assert.match(css, /\.gs-room-chip\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(css, /\.gs-room-chip-code\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(css, /\.gs-room-chip-code\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(css, /\.gs-room-chip\s*>\s*\.gs-room-chip-code\s*\{[^}]*max-width:\s*11ch/);
+});

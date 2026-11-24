@@ -11,7 +11,10 @@
 //
 // Sortie (dans dist/ par défaut) :
 //   web-bundle.zip       contenu racine de out/, déflaté niveau 9
-//   web-bundle.json      { version, nativeVersion, sha256, size }
+//   web-bundle.json      { version, nativeVersion, sha256, size, notes }
+//
+// `notes` reprend la section du CHANGELOG de la version publiée : l'app
+// installée les affiche dans l'encart de mise à jour avant de télécharger.
 //
 // Usage : node scripts/web-bundle.mjs [dossier-de-sortie]
 
@@ -22,6 +25,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import JSZip from 'jszip';
+
+import { changelogNotes } from './release-notes.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'out');
@@ -69,13 +74,14 @@ const bundle = await zip.generateAsync({
   compression: 'DEFLATE',
   compressionOptions: { level: 9 },
 });
+const notes = await changelogNotes(version);
 const sha256 = createHash('sha256').update(bundle).digest('hex');
 
 await mkdir(distDir, { recursive: true });
 await writeFile(path.join(distDir, 'web-bundle.zip'), bundle);
 await writeFile(
   path.join(distDir, 'web-bundle.json'),
-  `${JSON.stringify({ version, nativeVersion, sha256, size: bundle.length }, null, 2)}\n`,
+  `${JSON.stringify({ version, nativeVersion, sha256, size: bundle.length, notes }, null, 2)}\n`,
 );
 
 const mega = (bundle.length / (1024 * 1024)).toFixed(2);

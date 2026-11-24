@@ -92,7 +92,10 @@ function validManifest(value) {
   if (size <= 0 || size > 256 * 1024 * 1024) return null;
   const nativeVersion = finite(value.nativeVersion, -1);
   if (nativeVersion < 0) return null;
-  return { version, nativeVersion, sha256, size };
+  // Notes de version facultatives : texte Markdown du CHANGELOG, nettoyé et
+  // borné ici pour qu'un manifeste ne puisse pas gonfler l'état IPC.
+  const notes = typeof value.notes === 'string' ? value.notes.replace(/\r\n?/g, '\n').slice(0, 8000) : '';
+  return { version, nativeVersion, sha256, size, notes };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +137,7 @@ async function check() {
     nativeVersion: manifest.nativeVersion,
     sha256: manifest.sha256,
     size: manifest.size,
+    notes: manifest.notes,
   };
 }
 

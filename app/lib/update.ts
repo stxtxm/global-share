@@ -2,6 +2,8 @@
 // Toutes les valeurs numériques sont normalisées : aucun `null`/`NaN` ne doit
 // jamais atteindre le rendu (une progression "null" cassait l'ancienne barre).
 
+import { plainReleaseNotes } from './release-notes.ts';
+
 export type UpdateStatus =
   | 'idle'
   | 'checking'
@@ -34,6 +36,12 @@ export interface UpdateState {
   requiresAdmin: boolean;
   message: string;
   mode: UpdateMode;
+  /**
+   * Notes de version de la mise à jour proposée (« patch notes »), en texte
+   * simple : le CHANGELOG pour un bundle web, le corps de release GitHub pour
+   * un paquet complet. Vide si le serveur n'en fournit pas.
+   */
+  releaseNotes: string;
   /** Paquet téléchargé, utile pour le repli « Ouvrir le paquet dans Fichiers ». */
   installerPath?: string;
 }
@@ -61,6 +69,7 @@ export const INITIAL_UPDATE_STATE: UpdateState = {
   requiresAdmin: false,
   message: '',
   mode: '',
+  releaseNotes: '',
 };
 
 function finite(value: unknown, fallback = 0): number {
@@ -96,6 +105,8 @@ export function normalizeUpdateState(input: unknown): UpdateState {
     requiresAdmin: raw.requiresAdmin === true,
     message: text(raw.message),
     mode,
+    // HTML (flux GitHub) ou Markdown (CHANGELOG) : toujours rendu en texte.
+    releaseNotes: plainReleaseNotes(raw.releaseNotes),
     installerPath: text(raw.installerPath) || undefined,
   };
 }

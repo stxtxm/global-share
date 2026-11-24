@@ -2209,7 +2209,8 @@ export default function GlobalShare() {
             type="button"
             className="gs-room-chip"
             onClick={() => void copyRoomLink()}
-            title="Partager le lien du salon"
+            title={`Partager le lien du salon ${roomId}`}
+            aria-label={`Partager le lien du salon ${roomId}`}
           >
             <span className="gs-room-chip-label">Salon</span>
             <span className="gs-room-chip-code">{roomId}</span>

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.51] - 2026-11-24
+
+### Added
+- **Notes de version avant de mettre à jour.** L’encart de mise à jour affiche un panneau « Nouveautés » défilant, séparé des boutons : sections du CHANGELOG (Nouveautés, Corrections, Améliorations) de la version proposée, pour savoir ce qu’on installe avant de télécharger. Les notes suivent tous les canaux : bundle web (`web-bundle.json`), paquet complet Electron (flux GitHub) et APK Android (corps de la release).
+- Le corps de la release GitHub reprend désormais la section du CHANGELOG (via `scripts/release-notes.mjs`) au lieu des notes générées automatiquement.
+
+### Fixed
+- **Le bouton de partage du salon est correctement centré sur Pixel 9a.** Son contenu (code + icône) est centré dans la pastille et reste sur une seule ligne : un code de salon personnalisé long est tronqué avec une ellipse au lieu de passer sur deux lignes qui remplissaient la pastille de 42 px.
+- `nativeVersion` passe à **10** : l’APK embarque la lecture des notes de version (`UpdateManager`), un bundle web ne suffit pas.
 ## [1.0.50] - 2026-11-24
 
 ### Added
