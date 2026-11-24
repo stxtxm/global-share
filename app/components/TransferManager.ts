@@ -7,6 +7,7 @@ export type IntegrityStatus = 'unknown' | 'verified' | 'mismatch';
 
 export type TransferStatus =
   | 'pending'
+  | 'queued'
   | 'transferring'
   | 'paused'
   | 'interrupted'
@@ -69,6 +70,12 @@ export interface TransferState {
   lastResyncBytes?: number;
   /** Nombre de resync successives au même octet (sortie de boucle infinie). */
   resyncCount: number;
+  /** Ordre d'arrivée dans la file d'envoi (plus petit = plus prioritaire). */
+  queueSeq?: number;
+  /** Position courante dans la file (1 = prochain), undefined si non en file. */
+  queuePosition?: number;
+  /** Historique récent du débit (B/s) pour la courbe d'animation. */
+  speedHistory: number[];
 }
 
 export interface TransferInitPayload {
@@ -169,8 +176,17 @@ export class TransferManager {
   public myId: string;
   private transfers = new Map<string, TransferState>();
   private nextTransferId = 0;
+  private nextQueueSeq = 0;
   private finishing = new Set<string>();
   private speedTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Nombre maximal d'envois simultanés. À 1, les petits fichiers restent
+   * bloqués derrière un gros fichier ; à 2+, le débit se partage mais la file
+   * avance en continu et les petits fichiers terminent vite. La réception
+   * n'est pas limitée : elle ne consomme pas le tuyau d'envoi.
+   */
+  public maxConcurrentSends = 2;
 
   /** Écriture des chunks reçus sur l'appareil (facultatif). */
   public chunkStore: ChunkStore | null = null;
@@ -256,7 +272,10 @@ export class TransferManager {
       // Surcharge (réseau local) : le destinataire s'aligne sur la valeur
       // annoncée dans transfer-init, les reprises aussi.
       chunkSize: chunkSize && chunkSize > 0 ? chunkSize : CHUNK_SIZE_DEFAULT,
-      status: 'transferring',
+      // Provisoire : le vrai statut est décidé après l'insertion, sinon le
+      // transfert se compte lui-même dans activeSendCount et se met en file
+      // alors qu'un créneau est libre.
+      status: 'pending',
       progress: 0,
       confirmed: 0,
       speed: 0,
@@ -279,11 +298,88 @@ export class TransferManager {
       eofTimer: null,
       awaitingResync: false,
       resyncCount: 0,
+      speedHistory: [],
     };
     this.transfers.set(id, t);
-    this._announce(t, false);
+    const free = this.activeSendCount() < this.maxConcurrentSends;
+    if (free) {
+      t.status = 'transferring';
+      this._announce(t, false);
+    } else {
+      t.status = 'queued';
+      t.queueSeq = this.nextQueueSeq++;
+      t.queuePosition = this.getQueue().length;
+    }
     this.onUpdate(t);
     return t;
+  }
+
+  /** File d'envoi, triée par priorité (queueSeq croissant). */
+  getQueue(): TransferState[] {
+    return Array.from(this.transfers.values())
+      .filter((t) => t.direction === 'send' && t.status === 'queued')
+      .sort((a, b) => (a.queueSeq ?? 0) - (b.queueSeq ?? 0));
+  }
+
+  /** Nombre d'envois qui occupent un créneau (transferring uniquement). */
+  activeSendCount(): number {
+    let n = 0;
+    for (const t of this.transfers.values()) {
+      if (t.direction === 'send' && t.status === 'transferring') n += 1;
+    }
+    return n;
+  }
+
+  /** Remet à jour queuePosition sur toutes les entrées en file. */
+  private _refreshQueuePositions(): void {
+    const q = this.getQueue();
+    q.forEach((t, i) => { t.queuePosition = i + 1; });
+  }
+
+  /**
+   * Remplit les créneaux libres avec les plus anciennes entrées de la file.
+   * Appelé dès qu'un créneau se libère (fin, annulation, pause, interruption).
+   */
+  private _promoteQueued(): void {
+    while (this.activeSendCount() < this.maxConcurrentSends) {
+      const q = this.getQueue();
+      if (q.length === 0) return;
+      const next = q[0];
+      next.queueSeq = undefined;
+      next.queuePosition = undefined;
+      next.status = 'transferring';
+      this._announce(next, false);
+      this.onUpdate(next);
+      this.onStatus(next);
+    }
+  }
+
+  /** Remonte un transfert en tête de file (bouton « Passer en premier »). */
+  prioritize(id: string): boolean {
+    const t = this.transfers.get(id);
+    if (!t || t.status !== 'queued') return false;
+    const q = this.getQueue();
+    if (q.length === 0) return false;
+    t.queueSeq = (q[0].queueSeq ?? 0) - 1;
+    this._refreshQueuePositions();
+    this.onUpdate(t);
+    for (const x of q) this.onUpdate(x);
+    return true;
+  }
+
+  /** Trie la file par taille croissante : les petits fichiers terminent vite. */
+  sortQueueBySize(): void {
+    const q = this.getQueue();
+    const sorted = [...q].sort((a, b) => a.file.size - b.file.size);
+    sorted.forEach((t, i) => { t.queueSeq = i; });
+    this.nextQueueSeq = Math.max(this.nextQueueSeq, q.length);
+    this._refreshQueuePositions();
+    for (const t of q) this.onUpdate(t);
+  }
+
+  /** Annule tout le file d'attente (les transferts actifs restent en cours). */
+  cancelQueue(): void {
+    for (const t of this.getQueue()) this.cancel(t.id, 'Annulé');
   }
 
   /**
@@ -333,6 +429,7 @@ export class TransferManager {
       eofTimer: null,
       awaitingResync: true,
       resyncCount: 0,
+      speedHistory: [],
       error: 'Fichier à resélectionner',
     };
     this.transfers.set(t.id, t);
@@ -392,6 +489,7 @@ export class TransferManager {
       eofTimer: null,
       awaitingResync: false,
       resyncCount: 0,
+      speedHistory: [],
     };
     this.transfers.set(id, t);
     this.onUpdate(t);
@@ -422,6 +520,8 @@ export class TransferManager {
     this.chunkStore?.clear(t.id);
     // Indispensable : sinon getAll() remet la ligne annulée dans l'interface.
     this.transfers.delete(t.id);
+    // Un créneau se libère : la file d'attente avance immédiatement.
+    if (t.direction === 'send') this._promoteQueued();
   }
 
   /** Transfert encore actif et du bon côté, ou undefined. */
@@ -477,6 +577,8 @@ export class TransferManager {
       this._clearEofTimer(t);
     }
     this._setStatus(t, 'paused', 'Transfert en attente');
+    // Le créneau libéré fait avancer la file.
+    if (t.direction === 'send') this._promoteQueued();
   }
 
   resume(id: string): void {
@@ -811,13 +913,21 @@ export class TransferManager {
   }
 
   private _interrupt(t: TransferState, reason: string): void {
-    if (t.status !== 'transferring' && t.status !== 'pending') return;
+    if (t.status !== 'transferring' && t.status !== 'pending' && t.status !== 'queued') return;
+    const wasSending = t.status === 'transferring';
     if (t.direction === 'send') {
       for (const timer of t.ackTimers.values()) clearTimeout(timer);
       t.ackTimers.clear();
       this._clearEofTimer(t);
     }
+    // La file est purgée des entrées qui ne sont plus comptées comme en attente.
+    if (t.status === 'queued') {
+      t.queueSeq = undefined;
+      t.queuePosition = undefined;
+      this._refreshQueuePositions();
+    }
     this._setStatus(t, 'interrupted', reason);
+    if (wasSending && t.direction === 'send') this._promoteQueued();
   }
 
   private _resume(t: TransferState): void {
@@ -826,6 +936,17 @@ export class TransferManager {
       // n'émet pas un octet avant sa réponse, sinon on repartirait de zéro.
       this._announce(t, true);
       return;
+    }
+    if (t.direction === 'send') {
+      // La reprise respecte les créneaux : si la file est déjà pleine, le
+      // transfert y prend sa place au lieu de dépasser la concurrence.
+      if (t.status !== 'transferring' && this.activeSendCount() >= this.maxConcurrentSends) {
+        t.queueSeq = this.nextQueueSeq++;
+        t.queuePosition = this.getQueue().length + 1;
+        this._setStatus(t, 'queued', 'En file d’attente');
+        this._refreshQueuePositions();
+        return;
+      }
     }
     this._setStatus(t, 'transferring', 'Reprise du transfert');
     if (t.direction !== 'send') return;
@@ -1080,9 +1201,16 @@ export class TransferManager {
     const hasSpeed = t.speed > 0;
     t.speed = hasSpeed ? t.speed * 0.5 + rate * 0.5 : rate;
     t.window = { start: now, bytes: 0 };
+    this._pushSpeedHistory(t);
     if (t.direction === 'receive' || hasSpeed || rate > 0) {
       this.onStatus(t);
     }
+  }
+
+  /** Historique borné du débit, pour la courbe animée de l'interface. */
+  private _pushSpeedHistory(t: TransferState): void {
+    t.speedHistory.push(t.speed);
+    if (t.speedHistory.length > 40) t.speedHistory.splice(0, t.speedHistory.length - 40);
   }
 
   /** Ajoute des octets à la fenêtre courante (expéditeur ET destinataire). */
@@ -1105,6 +1233,7 @@ export class TransferManager {
       if (t.speed > 0 && now - t.lastActivity > SPEED_DECAY_MS) {
         t.speed = 0;
         t.window = null;
+        this._pushSpeedHistory(t);
         this.onStatus(t);
         this.onUpdate(t);
       }

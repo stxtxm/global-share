@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.50] - 2026-11-24
+
+### Added
+- **File d'attente multi-fichiers.** La sélection de plusieurs fichiers (et le glisser-déposer sur desktop) alimente une file : **2 envois simultanés**, les suivants attendent en file et démarrent tout seuls dès qu'un créneau se libère (fin, annulation, pause, interruption). Actions sur la file : passer un fichier en premier, trier « petits d'abord », vider la file, tout mettre en pause / tout reprendre. Encart de progression globale pondéré par octets, avec débit cumulé, ETA et volume restant + file.
+- **Suivi enrichi.** Cartes de transfert dépliables : courbe de débit, débit/reçu/restant/ETA, actions individuelles. Mini-barre du bas mise à niveau avec les mêmes informations.
+
+### Changed
+- Animations de transfert refondues : barres à dégradé fluide animé et balayage lumineux, halo de flux sur la carte en cours, bordure « fourmis en marche » pour la file, tremblement à l'interruption, pastille de succès. Tout est désactivé sous `prefers-reduced-motion`.
+- La reprise d'un transfert interrompu respecte les créneaux d'envoi au lieu de doubler la concurrence.
+
 ## [1.0.49] - 2026-11-23
 
 ### Added

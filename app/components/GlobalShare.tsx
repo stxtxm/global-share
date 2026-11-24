@@ -163,6 +163,57 @@ const formatSpeed = (bytesPerSec: number): string => {
   if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
   return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 };
+
+/** Temps restant estimé en texte court (« 2 min 15 », « 45 s »). */
+const formatEta = (remainingBytes: number, bytesPerSec: number): string | null => {
+  if (remainingBytes <= 0 || bytesPerSec <= 0) return null;
+  const secs = Math.round(remainingBytes / bytesPerSec);
+  if (secs < 60) return `${secs} s`;
+  const mins = Math.floor(secs / 60);
+  const rest = secs % 60;
+  if (mins < 60) return rest ? `${mins} min ${rest} s` : `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  return `${hours} h ${mins % 60} min`;
+};
+
+/** Bytes confirmés pondérés : la progression globale d'une file. */
+const weightedProgress = (items: Pick<TransferState, 'progress' | 'confirmed' | 'file'>[]): number => {
+  const totalBytes = items.reduce((sum, t) => sum + t.file.size, 0);
+  if (totalBytes <= 0) return items.length ? Math.round(items.reduce((s, t) => s + t.progress, 0) / items.length) : 0;
+  const done = items.reduce((sum, t) => sum + t.confirmed, 0);
+  return Math.min(100, Math.round((done / totalBytes) * 100));
+};
+
+/** Courbe SVG du débit récent, normalisée par sa valeur maximale. */
+function SpeedSparkline({ history, active }: { history: number[]; active: boolean }) {
+  if (!history || history.length < 2) return null;
+  const max = Math.max(1, ...history);
+  const w = 120;
+  const h = 28;
+  const pts = history.map((v, i) => {
+    const x = (i / (history.length - 1)) * w;
+    const y = h - (v / max) * (h - 3) - 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return (
+    <svg className={`gs-sparkline${active ? ' is-active' : ''}`} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={`${pts.join(' ')}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Barre de progression avec dégradé animé et balayage lumineux. */
+function TransferBar({ progress, status }: { progress: number; status: string }) {
+  return (
+    <div className="gs-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+      <div
+        className={`gs-bar-fill gs-bar-fill--${status}${progress >= 100 ? ' is-done' : ''}`}
+        style={{ width: `${progress}%` }}
+      />
+      <div className="gs-bar-ghost" style={{ width: `${progress}%` }} aria-hidden="true" />
+    </div>
+  );
+}
 // Date de réception, dans le format court français (12 nov. 15:04).
 const formatDate = (ms: number): string =>
   new Date(ms).toLocaleString('fr-FR', {
@@ -208,6 +259,7 @@ const getSessionId = (): string => {
 // Libellés des états de transfert, pour ne pas afficher l'identifiant brut.
 const TRANSFER_LABELS: Record<string, string> = {
   pending: 'En attente',
+  queued: 'En file',
   transferring: 'En cours',
   paused: 'En pause',
   interrupted: 'Interrompu',
@@ -434,6 +486,11 @@ export default function GlobalShare() {
   const [socketEpoch, setSocketEpoch] = useState(0);
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
   const [trackingOpen, setTrackingOpen] = useState(false);
+  // Cartes de transfert développées (détails : débit, ETA, courbe).
+  const [expandedTransfers, setExpandedTransfers] = useState<Set<string>>(new Set());
+  // Glisser-déposer de fichiers sur la fenêtre (desktop).
+  const [isDragging, setIsDragging] = useState(false);
+  const dragDepthRef = useRef(0);
   // Encart de mise à jour : ouvert depuis le bouton de la barre supérieure,
   // depuis le menu Aide d'Electron, ou automatiquement quand une maj arrive.
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -627,7 +684,7 @@ export default function GlobalShare() {
   // circule. La Wake Lock empêche au moins l'extinction automatique ; la reprise
   // automatique couvre le verrouillage manuel et les coupures réseau.
   const hasActiveTransfers = transfers.some(
-    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused'
+    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused' || t.status === 'queued'
   );
   useEffect(() => {
     if (!hasActiveTransfers) {
@@ -652,14 +709,12 @@ export default function GlobalShare() {
   // WebView et le réseau en vie quand l'écran est verrouillé. Sur desktop/web,
   // les helpers ne font rien (pas de pont natif).
   const nativeTransferCount = transfers.filter(
-    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused'
+    t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused' || t.status === 'queued'
   ).length;
   const nativeTransferProgress = nativeTransferCount
-    ? Math.round(
-        transfers
-          .filter(t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused')
-          .reduce((sum, t) => sum + t.progress, 0) / nativeTransferCount
-      )
+    ? weightedProgress(transfers.filter(
+        t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused' || t.status === 'queued'
+      ))
     : 0;
   const nativeTransferStartedRef = useRef(false);
 
@@ -961,76 +1016,43 @@ export default function GlobalShare() {
         }
         const manager = managerRef.current;
         if (!manager) return;
-        const transfers = manager.getAll();
-        const sendT = transfers.find(t => t.direction === 'send' && t.status === 'transferring');
-        if (!sendT) {
-          // Rien à envoyer : la boucle reste autonome et repoll, elle ne dépend
-          // plus des re-renders React (qui tuaient le timer programmé).
+        // Tous les envois actifs avancent sur le même tick : jusqu'à deux flux
+        // en parallèle, répartis en rounds pour qu'aucun ne monopolise la boucle.
+        const activeSends = manager.getAll().filter(t => t.direction === 'send' && t.status === 'transferring');
+        if (activeSends.length === 0) {
           transferTimeoutRef.current = setTimeout(() => sendLoop(), 250);
           return;
         }
-        const file = fileRefs.current.get(sendT.id);
-        if (!file) {
-          transferTimeoutRef.current = setTimeout(() => sendLoop(), 250);
-          return;
+        let anyLan = false;
+        for (const sendT of activeSends) {
+          const file = fileRefs.current.get(sendT.id);
+          if (!file) continue;
+          if (sendT.offset >= file.size) {
+            if (sendT.pending.size === 0) manager.sendEof(sendT.id);
+            continue;
+          }
+          const lan = lanPeersRef.current.has(sendT.targetId) && sendT.method === 'p2p';
+          if (lan) anyLan = true;
+          const byteTarget = 6 * 1024 * 1024;
+          const byBytes = Math.max(4, Math.floor(byteTarget / sendT.chunkSize));
+          const rttFactor = sendT.rttMs > 0 ? Math.min(1, 600 / Math.max(600, sendT.rttMs)) : 1;
+          const maxInFlight = lan
+            ? MAX_IN_FLIGHT_CHUNKS_LAN
+            : Math.max(4, Math.min(MAX_IN_FLIGHT_CHUNKS, Math.round(byBytes * rttFactor)));
+          if (sendT.pending.size >= maxInFlight) continue;
+          if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) continue;
+          const burst = lan ? 12 : 3;
+          for (let i = 0; i < burst; i++) {
+            if (sendT.offset >= file.size) break;
+            if (sendT.pending.size >= maxInFlight) break;
+            if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) break;
+            const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
+            const chunk = new Uint8Array(await blob.arrayBuffer());
+            if (!manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) break;
+            sendT.nextSeq++;
+          }
         }
-        if (sendT.offset >= file.size) {
-          // N'annonce la fin qu'une fois tous les chunks acquittés. On
-          // reprogramme un tick même après l'EOF : si le destinataire répond
-          // « transfer-resync », la boucle doit repartir d'elle-même.
-          if (sendT.pending.size === 0) manager.sendEof(sendT.id);
-          transferTimeoutRef.current = setTimeout(() => sendLoop(), 200);
-          return;
-        }
-        // Même réseau local et chemin direct ouvert : blocs plus gros, pipeline
-        // plus profond et pauses supprimées. Sinon, réglages conservateurs.
-        const lan = lanPeersRef.current.has(sendT.targetId) && sendT.method === 'p2p';
-        // Une fenêtre fixe de 24 × 512 Ko = 12 Mo sature le relais sur un lien
-        // lent : les ACK mettent alors plus de temps que le timeout et le
-        // transfert livelocke. On vise ~6 Mo en vol, réduits encore quand le
-        // RTT mesuré augmente (file d'attente qui se remplit).
-        const byteTarget = 6 * 1024 * 1024;
-        const byBytes = Math.max(4, Math.floor(byteTarget / sendT.chunkSize));
-        const rttFactor = sendT.rttMs > 0 ? Math.min(1, 600 / Math.max(600, sendT.rttMs)) : 1;
-        const maxInFlight = lan
-          ? MAX_IN_FLIGHT_CHUNKS_LAN
-          : Math.max(4, Math.min(MAX_IN_FLIGHT_CHUNKS, Math.round(byBytes * rttFactor)));
-        if (sendT.pending.size >= maxInFlight) {
-          transferTimeoutRef.current = setTimeout(() => sendLoop(), lan ? 0 : 20);
-          return;
-        }
-        // Tampon SCTP : attendre qu'il se vide plutôt que le saturer.
-        if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) {
-          transferTimeoutRef.current = setTimeout(() => sendLoop(), 5);
-          return;
-        }
-        // Le bloc annoncé par transfer-init reste la référence du destinataire :
-        // la taille ne peut pas changer en cours de transfert (alignement de
-        // reprise, comptage des chunks). Elle est donc choisie ici.
-        // Lecture en rafale : au lieu d'un chunk par itération (coût
-        // d'ordonnancement dominant, ~1 ms par bloc), on enfile plusieurs
-        // lectures + émissions par aller-retour. Sur LAN, le pipeline est plus
-        // profond et les blocs plus gros : 2 chiffres de plus suffisent à
-        // saturer la DataChannel.
-        const burst = lan ? 12 : 3;
-        for (let i = 0; i < burst; i++) {
-          if (sendT.offset >= file.size) break;
-          if (sendT.pending.size >= maxInFlight) break;
-          // Tampon SCTP : attendre qu'il se vide plutôt que le saturer.
-          if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT)
-            break;
-          const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
-          const chunk = new Uint8Array(await blob.arrayBuffer());
-          // sendChunk avance l'offset et arme le suivi des ACK ; la séquence
-          // n'est consommée que si le chunk est réellement accepté.
-          if (!manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) break;
-          sendT.nextSeq++;
-        }
-        // Le flow control, c'est la fenêtre de chunks en vol (et le plafond de
-        // tampon SCTP en direct) : plus de délai artificiel par chunk, qui
-        // plafonnait le débit à ~40 blocs/s en relais comme en direct. Une
-        // micro-pause garde la page réactive ; en LAN, zéro.
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), lan ? 0 : 2);
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), anyLan ? 0 : 2);
       } finally {
         sendLoopRunningRef.current = false;
       }
@@ -1440,36 +1462,40 @@ export default function GlobalShare() {
         createdAt: t.createdAt,
         updatedAt: Date.now(),
       });
-      showToast('info', `Préparation de l envoi : ${file.name}`);
+      showToast('info', t.status === 'queued'
+        ? `En file (#${t.queuePosition ?? '…'}) : ${file.name}`
+        : `Envoi : ${file.name}`);
     }
   }, [showToast, peers]);
 
-  // ---- Sélection de fichiers ----
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    const targetId = activePeerId;
-    if (!file || !targetId) return;
+  // ---- Sélection de fichiers (multi-fichiers : chaque fichier rejoint la file) ----
+  const enqueueFiles = useCallback((files: File[], targetId: string | null) => {
+    if (!targetId || files.length === 0) return;
     const peer = peers[targetId];
     if (!peer && !socketRef.current?.connected) {
       showToast('error', 'Connexion au serveur perdue.');
-      e.target.value = '';
       return;
-    }
-    if (!peer) {
-      setPeers(prev => ({ ...prev, [targetId]: { id: targetId, name: prev[targetId]?.name || 'Appareil', status: 'connected', method: 'relay' } }));
     }
     if (!peer || peer.status !== 'connected') {
       if (socketRef.current?.connected) {
         setPeers(prev => ({ ...prev, [targetId]: { id: targetId, name: prev[targetId]?.name || 'Appareil', status: 'connected', method: 'relay' } }));
       } else {
         showToast('error', 'Connexion au serveur perdue.');
-        e.target.value = '';
         return;
       }
     }
-    void startSending(targetId, file, peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay');
+    const method = peer ? (peer.method === 'p2p' ? 'p2p' : 'relay') : 'relay';
+    // Les fichiers sont mis en file dans l'ordre sélectionné ; le moteur
+    // limite à 2 envois simultanés et promeut les suivants automatiquement.
+    for (const file of files) void startSending(targetId, file, method as 'p2p' | 'relay');
+    if (files.length > 1) showToast('info', `${files.length} fichiers ajoutés à la file d’envoi`);
+  }, [startSending, peers, showToast]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    enqueueFiles(files, activePeerId);
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [startSending, peers, activePeerId, showToast]);
+  }, [enqueueFiles, activePeerId]);
 
   const handleFolderSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -1513,13 +1539,10 @@ export default function GlobalShare() {
   }, [startSending, peers, showToast, activePeerId, appSettings.enableCompression]);
 
   const handleCameraSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const targetId = activePeerId;
-      if (targetId) void startSending(targetId, file, 'relay');
-      if (cameraInputRef.current) cameraInputRef.current.value = '';
-    }
-  }, [startSending, activePeerId]);
+    const files = Array.from(e.target.files ?? []);
+    enqueueFiles(files, activePeerId);
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
+  }, [enqueueFiles, activePeerId]);
 
   // Reprise d'un envoi dont le fichier a été perdu avec l'onglet : on vérifie
   // qu'il s'agit bien des mêmes octets avant de repartir où l'on s'était
@@ -2095,15 +2118,80 @@ export default function GlobalShare() {
 
   // ---- Salon actif ----
   const activePeer = activePeerId ? peers[activePeerId] : undefined;
-  const activeTransfers = transfers.filter(t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused');
-  const trackingProgress = activeTransfers.length
-    ? Math.round(activeTransfers.reduce((sum, t) => sum + t.progress, 0) / activeTransfers.length)
-    : 0;
+  const queuedTransfers = transfers.filter(t => t.status === 'queued');
+  const activeTransfers = transfers.filter(t => t.status === 'transferring' || t.status === 'pending' || t.status === 'paused' || t.status === 'queued');
+  const trackingProgress = activeTransfers.length ? weightedProgress(activeTransfers) : 0;
+  const totalQueuedBytes = queuedTransfers.reduce((s, t) => s + t.file.size, 0);
+  const totalActiveSpeed = activeTransfers.reduce((s, t) => s + t.speed, 0);
+  const totalRemaining = activeTransfers.reduce((s, t) => s + Math.max(0, t.file.size - t.confirmed), 0);
+  const queueEta = formatEta(totalRemaining, totalActiveSpeed);
+  // Tri d'affichage : en cours d'abord, puis en pause/interrompu, puis la file.
+  const statusRank = (t: TransferState): number =>
+    t.status === 'transferring' ? 0 : t.status === 'paused' ? 1 : t.status === 'interrupted' ? 2 : t.status === 'queued' ? 3 : 4;
+  const sortedTransfers = [...transfers].sort((a, b) => {
+    const rank = statusRank(a) - statusRank(b);
+    if (rank !== 0) return rank;
+    if (a.status === 'queued' && b.status === 'queued') return (a.queuePosition ?? 0) - (b.queuePosition ?? 0);
+    return a.createdAt - b.createdAt;
+  });
   const isTrackingOpen = trackingOpen && activeTransfers.length > 0;
 
+  const toggleExpanded = (id: string) => {
+    setExpandedTransfers(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const pauseAll = () => {
+    for (const t of transfers) {
+      if (t.status === 'transferring') managerRef.current?.pause(t.id);
+    }
+  };
+  const resumeAll = () => {
+    for (const t of transfers) {
+      if (t.status === 'paused' || t.status === 'interrupted') managerRef.current?.resume(t.id);
+    }
+    kickSendLoop();
+  };
+
+  // Glisser-déposer : compter les entrées/sorties pour ne pas clignoter.
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    dragDepthRef.current += 1;
+    setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragging(false);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    if (step !== 'room') return;
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length) enqueueFiles(files, activePeerId);
+  };
+
   return (
-    <div className="gs-app">
+    <div className="gs-app" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={onDragOver} onDrop={onDrop}>
       <div className="gs-glow" aria-hidden="true" />
+      {isDragging && step === 'room' && (
+        <div className="gs-drop-overlay" aria-hidden="true">
+          <div className="gs-drop-card">
+            <IconShare />
+            <strong>Déposez vos fichiers</strong>
+            <span>Ils rejoignent la file d’envoi vers {activePeer?.name ?? 'l’appareil choisi'}</span>
+          </div>
+        </div>
+      )}
       <header className="gs-topbar">
         <div className="gs-topbar-left">
           {/* Seul point d'accès aux réglages depuis le salon : toujours visible,
@@ -2401,6 +2489,38 @@ export default function GlobalShare() {
           </section>
         )}
 
+        {/* File d'envoi : résumé, progression globale et actions groupées */}
+        {tab === 'room' && activeTransfers.length > 0 && (
+          <section className="gs-section" aria-label="File d'envoi">
+            <div className="gs-queue">
+              <div className="gs-queue-head">
+                <div className="gs-queue-title">
+                  <span className="gs-queue-badge" aria-hidden="true">{trackingProgress}%</span>
+                  <div className="gs-queue-text">
+                    <strong>{activeTransfers.length} transfert{activeTransfers.length > 1 ? 's' : ''}{queuedTransfers.length > 0 ? ` · ${queuedTransfers.length} en file` : ''}</strong>
+                    <span>{formatSpeed(totalActiveSpeed)}{queueEta ? ` · ETA ${queueEta}` : ''} · {formatBytes(totalRemaining)} restant{totalQueuedBytes > 0 ? ` (+${formatBytes(totalQueuedBytes)} en file)` : ''}</span>
+                  </div>
+                </div>
+              </div>
+              {appSettings.showProgressBar && <TransferBar progress={trackingProgress} status="transferring" />}
+              <div className="gs-queue-actions">
+                {activeTransfers.some(t => t.status === 'transferring') && (
+                  <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" onClick={pauseAll}>⏸ Tout mettre en pause</button>
+                )}
+                {activeTransfers.some(t => t.status === 'paused' || t.status === 'interrupted') && (
+                  <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" onClick={resumeAll}>▶ Tout reprendre</button>
+                )}
+                {queuedTransfers.length > 1 && (
+                  <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" onClick={() => managerRef.current?.sortQueueBySize()}>⇅ Petits d’abord</button>
+                )}
+                {queuedTransfers.length > 0 && (
+                  <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm gs-btn--danger" onClick={() => managerRef.current?.cancelQueue()}>Vider la file</button>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Transferts en cours et terminés */}
         {tab === 'room' && transfers.length > 0 && (
           <section className="gs-section" aria-label="Transferts">
@@ -2409,91 +2529,69 @@ export default function GlobalShare() {
               <span className="gs-count">{transfers.length}</span>
             </div>
             <div className="gs-list">
-              {transfers.map((t, i) => (
+              {sortedTransfers.map((t, i) => {
+                const expanded = expandedTransfers.has(t.id);
+                const eta = formatEta(Math.max(0, t.file.size - t.confirmed), t.speed);
+                const statusIcon = t.status === 'transferring' ? '⇅' : t.status === 'queued' ? '◷' : t.status === 'paused' ? '⏸' : t.status === 'interrupted' ? '⚠' : t.status === 'completed' ? '✓' : '✕';
+                return (
                 <div
                   key={t.id}
-                  className={`gs-transfer${t.status === 'completed' ? ' is-complete' : ''}`}
-                  style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                  className={`gs-transfer gs-transfer--${t.status}${t.status === 'completed' ? ' is-complete' : ''}${expanded ? ' is-expanded' : ''}`}
+                  style={{ animationDelay: `${Math.min(i, 6) * 50}ms` }}
                 >
-                  <div className="gs-transfer-head">
+                  <button type="button" className="gs-transfer-head gs-transfer-toggle" onClick={() => toggleExpanded(t.id)} aria-expanded={expanded}>
+                    <span className={`gs-transfer-badge gs-transfer-badge--${t.status}`} aria-hidden="true">{statusIcon}</span>
                     <div className="gs-transfer-text">
                       <div className="gs-transfer-name">{t.file.name}</div>
                       <div className="gs-transfer-sub">
+                        {t.status === 'queued' ? <>En file <strong>#{t.queuePosition ?? '…'}</strong> · </> : null}
                         {t.direction === 'send' ? 'Vers ' : 'De '}
                         <strong>{t.targetName}</strong>
                         {appSettings.showFileSize && <> · {formatBytes(t.file.size)}</>}
-                        <span
-                          className={`gs-tag gs-tag--${t.transport}`}
-                          title={t.transport === 'p2p'
-                            ? 'Données échangées en direct entre les navigateurs'
-                            : 'Données relayées par le serveur'}
-                        >
-                          {t.transport === 'p2p' ? 'P2P' : 'Relais'}
-                        </span>
+                        <span className={`gs-tag gs-tag--${t.transport}`} title={t.transport === 'p2p' ? 'Données échangées en direct' : 'Données relayées par le serveur'}>{t.transport === 'p2p' ? 'P2P' : 'Relais'}</span>
                       </div>
                     </div>
-                    <div className="gs-transfer-pct">{t.progress}%</div>
+                    <span className={`gs-transfer-pct gs-transfer-pct--${t.status}`}>{t.progress}%</span>
+                    <span className="gs-transfer-chevron" aria-hidden="true">{expanded ? '▴' : '▾'}</span>
+                  </button>
+                  {appSettings.showProgressBar && <TransferBar progress={t.progress} status={t.status} />}
+                  <div className="gs-transfer-foot">
+                    <span className="gs-transfer-status">{TRANSFER_LABELS[t.status] ?? t.status}{eta ? ` · ${eta}` : ''} · {formatTime(renderTime - t.createdAt)}</span>
+                    <span className="gs-transfer-speed">{t.status === 'transferring' ? `${formatSpeed(t.speed)} · ${formatBytes(t.confirmed)}` : t.status === 'queued' ? 'En attente d’un créneau' : `${formatBytes(t.confirmed)} / ${formatBytes(t.file.size)}`}</span>
                   </div>
-                  {appSettings.showProgressBar && (
-                    <div className="gs-bar">
-                      <div
-                        className={`gs-bar-fill${t.status === 'completed' ? ' is-done' : ''}`}
-                        style={{ width: `${t.progress}%` }}
-                      />
+                  {expanded && (
+                    <div className="gs-transfer-details">
+                      <SpeedSparkline history={t.speedHistory} active={t.status === 'transferring'} />
+                      <div className="gs-transfer-details-grid">
+                        <span><em>Débit</em><strong>{formatSpeed(t.speed)}</strong></span>
+                        <span><em>Reçu</em><strong>{formatBytes(t.confirmed)}</strong></span>
+                        <span><em>Restant</em><strong>{formatBytes(Math.max(0, t.file.size - t.confirmed))}</strong></span>
+                        <span><em>ETA</em><strong>{eta ?? '—'}</strong></span>
+                      </div>
+                      <div className="gs-transfer-actions">
+                        {t.status === 'queued' && (
+                          <button type="button" className="gs-btn gs-btn--primary gs-btn--sm" onClick={() => managerRef.current?.prioritize(t.id)}>Passer en premier</button>
+                        )}
+                        {t.direction === 'send' && (t.status === 'transferring' || t.status === 'paused') && (
+                          <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" onClick={() => (t.status === 'paused' ? managerRef.current?.resume(t.id) : managerRef.current?.pause(t.id))}>
+                            {t.status === 'paused' ? '▶ Reprendre' : '⏸ Pause'}
+                          </button>
+                        )}
+                        {(t.status === 'transferring' || t.status === 'paused' || t.status === 'queued') && (
+                          <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm gs-btn--danger" onClick={() => cancelTransfer(t.id)}>Annuler</button>
+                        )}
+                        {t.direction === 'send' && t.status === 'interrupted' && !fileRefs.current.has(t.id) && (
+                          <button type="button" className="gs-btn gs-btn--primary gs-btn--sm" onClick={() => { resumeTargetRef.current = t.id; resumeInputRef.current?.click(); }}>Choisir le fichier</button>
+                        )}
+                        {t.status === 'interrupted' && (
+                          <button type="button" className="gs-btn gs-btn--ghost gs-btn--sm" title={t.error ?? 'Transfert interrompu'} onClick={() => cancelTransfer(t.id)}>Annuler</button>
+                        )}
+                      </div>
                     </div>
                   )}
-                  <div className="gs-transfer-foot">
-                    <span>{TRANSFER_LABELS[t.status] ?? t.status} · {formatTime(renderTime - t.createdAt)}</span>
-                    {t.direction === 'send' && (t.status === 'transferring' || t.status === 'paused') && (
-                      <button
-                        type="button"
-                        className="gs-btn gs-btn--ghost gs-btn--sm"
-                        style={{ flexShrink: 0 }}
-                        onClick={() => (t.status === 'paused' ? managerRef.current?.resume(t.id) : managerRef.current?.pause(t.id))}
-                      >
-                        {t.status === 'paused' ? '▶ Reprendre' : '⏸ Pause'}
-                      </button>
-                    )}
-                    {/* Annulation d'un transfert actif, envoi comme réception :
-                        plus besoin de quitter le salon. */}
-                    {(t.status === 'transferring' || t.status === 'paused') && (
-                      <button
-                        type="button"
-                        className="gs-btn gs-btn--ghost gs-btn--sm gs-btn--danger"
-                        style={{ flexShrink: 0 }}
-                        onClick={() => cancelTransfer(t.id)}
-                      >
-                        Annuler
-                      </button>
-                    )}
-                    {t.direction === 'send' && t.status === 'interrupted' && !fileRefs.current.has(t.id) && (
-                      <button
-                        type="button"
-                        className="gs-btn gs-btn--primary gs-btn--sm"
-                        style={{ flexShrink: 0 }}
-                        onClick={() => {
-                          resumeTargetRef.current = t.id;
-                          resumeInputRef.current?.click();
-                        }}
-                      >
-                        Choisir le fichier
-                      </button>
-                    )}
-                    {t.status === 'interrupted' && (
-                      <button
-                        type="button"
-                        className="gs-btn gs-btn--ghost gs-btn--sm"
-                        style={{ flexShrink: 0 }}
-                        title={t.error ?? 'Transfert interrompu'}
-                        onClick={() => cancelTransfer(t.id)}
-                      >
-                        Annuler
-                      </button>
-                    )}
-                    <span>{formatSpeed(t.speed)} · {formatBytes(t.confirmed)}</span>
-                  </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}
@@ -2557,33 +2655,22 @@ export default function GlobalShare() {
                 {activeTransfers.map(t => (
                   <div key={t.id} className="gs-minirow">
                     <div className="gs-minirow-head">
-                      <span className="gs-minirow-name" title={t.file.name}>{t.file.name}</span>
+                      <span className="gs-minirow-name" title={t.file.name}>{t.status === 'queued' ? `◷ #${t.queuePosition ?? '…'} ` : ''}{t.file.name}</span>
                       <span className="gs-minirow-pct">{t.progress}%</span>
-                      <button
-                        type="button"
-                        className="gs-minirow-cancel"
-                        onClick={() => cancelTransfer(t.id)}
-                        aria-label="Annuler le transfert"
-                        title="Annuler le transfert"
-                      >
-                        ✕
-                      </button>
+                      <button type="button" className="gs-minirow-cancel" onClick={() => cancelTransfer(t.id)} aria-label="Annuler le transfert" title="Annuler le transfert">✕</button>
                     </div>
-                    {appSettings.showProgressBar && (
-                      <div className="gs-bar">
-                        <div className="gs-bar-fill" style={{ width: `${t.progress}%` }} />
-                      </div>
-                    )}
+                    {appSettings.showProgressBar && <TransferBar progress={t.progress} status={t.status} />}
                     <div className="gs-minirow-sub">
-                      {t.direction === 'send' ? 'Vers ' : 'De '}{t.targetName} · {formatSpeed(t.speed)} · {formatBytes(t.confirmed)}
+                      {t.status === 'queued' ? 'En file' : `${t.direction === 'send' ? 'Vers ' : 'De '}${t.targetName} · ${formatSpeed(t.speed)}` } · {formatBytes(t.confirmed)}
                     </div>
+                    <SpeedSparkline history={t.speedHistory} active={t.status === 'transferring'} />
                   </div>
                 ))}
               </div>
             )}
             {appSettings.showProgressBar && (
-              <div className="gs-minibar-track" aria-hidden="true">
-                <div className="gs-bar-fill" style={{ width: `${trackingProgress}%` }} />
+              <div className="gs-minibar-track gs-minibar-track--animated" aria-hidden="true">
+                <TransferBar progress={trackingProgress} status="transferring" />
               </div>
             )}
             <button
@@ -2596,13 +2683,15 @@ export default function GlobalShare() {
               <span className="gs-minibar-text">
                 <strong>
                   {activeTransfers.length > 1
-                    ? `${activeTransfers.length} transferts en cours`
+                    ? `${activeTransfers.length} transferts${queuedTransfers.length > 0 ? ` (${queuedTransfers.length} en file)` : ''}`
                     : activeTransfers[0].file.name}
                 </strong>
                 <span>
                   {activeTransfers.length > 1
-                    ? 'Progression globale'
-                    : `${formatSpeed(activeTransfers[0].speed)} · ${formatBytes(activeTransfers[0].confirmed)}`}
+                    ? `${formatSpeed(totalActiveSpeed)} · ${queueEta ? `ETA ${queueEta} · ` : ''}Progression globale`
+                    : activeTransfers[0].status === 'queued'
+                      ? `En file #${activeTransfers[0].queuePosition ?? '…'} · ${formatBytes(activeTransfers[0].file.size)}`
+                      : `${formatSpeed(activeTransfers[0].speed)} · ${formatBytes(activeTransfers[0].confirmed)}`}
                 </span>
               </span>
               <span className="gs-minibar-chevron" aria-hidden="true">▾</span>
@@ -2648,7 +2737,7 @@ export default function GlobalShare() {
       </div>
       )}
 
-      <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept="*/*" className="hidden" />
+      <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept="*/*" className="hidden" multiple />
       <input
         type="file"
         ref={folderInputRef}
@@ -2657,7 +2746,7 @@ export default function GlobalShare() {
         // @ts-expect-error - webkitdirectory is non-standard but supported by Chromium/WebKit
         webkitdirectory=""
       />
-      <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" />
+      <input type="file" ref={cameraInputRef} onChange={handleCameraSelect} accept="image/*,video/*" capture="environment" className="hidden" multiple />
       <input type="file" ref={resumeInputRef} onChange={handleResumeSelect} accept="*/*" className="hidden" />
 
       {/* ---- Réglages par-dessus le salon : page plein écran, retour direct ---- */}
