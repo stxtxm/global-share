@@ -69,21 +69,36 @@ test('la détection GNOME ne désactive le tray que sans watcher', async () => {
   );
 });
 
-test('le tray utilise une icône 32 px dédiée et les deux clics', () => {
-  assert.match(main, /TRAY_ICON_FILE/);
-  assert.match(main, /image\.isEmpty\(\)/);
+test('le tray utilise une icône 32 px dédiée, un état actif et les deux clics', () => {
+  assert.match(main, /TRAY_IDLE_IMAGE/);
+  assert.match(main, /TRAY_ACTIVE_IMAGE/);
+  assert.match(main, /tray\.setImage\(image\)/);
   assert.match(main, /tray\.on\('double-click', showMainWindow\)/);
   assert.match(builder, /linux-tray\.js/);
   assert.match(builder, /from: desktop\/resources\/icons\/tray\.png/);
   assert.match(builder, /to: tray\.png/);
+  assert.match(builder, /from: desktop\/resources\/icons\/tray-active\.png/);
+  assert.match(builder, /to: tray-active\.png/);
 });
 
-test('l icône tray est un PNG 32x32 avec transparence', () => {
-  const png = readFileSync(`${root}desktop/resources/icons/tray.png`);
-  assert.equal(png.subarray(1, 4).toString(), 'PNG');
-  assert.equal(png.readUInt32BE(16), 32, 'largeur');
-  assert.equal(png.readUInt32BE(20), 32, 'hauteur');
-  assert.equal(png[25], 6, 'RGBA (fond transparent)');
+test('le menu du tray expose l état, le dossier de réception et Quitter', () => {
+  assert.match(main, /GlobalShare · \$\{trayStatusLabel\(\)\}/);
+  assert.match(main, /Dossier de réception/);
+  assert.match(main, /Ouvrir GlobalShare \(\$\{RESTORE_SHORTCUT_LABEL\}\)/);
+  assert.match(main, /setContextMenu\(buildTrayMenu\(\)\)/);
+  assert.match(main, /activeTransfers = Math\.max\(0, Number\(count\) \|\| 0\);\n    refreshTray\(\);/);
+});
+
+test('les deux icônes tray sont des PNG 32x32 RGBA distincts', () => {
+  const idle = readFileSync(`${root}desktop/resources/icons/tray.png`);
+  const active = readFileSync(`${root}desktop/resources/icons/tray-active.png`);
+  for (const png of [idle, active]) {
+    assert.equal(png.subarray(1, 4).toString(), 'PNG');
+    assert.equal(png.readUInt32BE(16), 32, 'largeur');
+    assert.equal(png.readUInt32BE(20), 32, 'hauteur');
+    assert.equal(png[25], 6, 'RGBA (fond transparent)');
+  }
+  assert.notDeepEqual(idle, active);
 });
 
 test('les paquets Linux recommandent AppIndicator sans l imposer', () => {

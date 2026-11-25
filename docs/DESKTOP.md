@@ -212,14 +212,38 @@ logiciel utilise le raccourci, Electron journalise un avertissement et le tray
 reste disponible.
 
 Pendant un transfert, la croix ne quitte plus l'application : elle masque la
-fenêtre et affiche une notification cliquable qui rouvre l'app. Le compteur de
-transferts est aussi affiché dans le tooltip du tray. Sur KDE et XFCE, le tray
-SNI natif fonctionne. Sur GNOME, l'extension AppIndicator (installée avec le
+fenêtre et affiche une notification cliquable qui rouvre l'app. Sur KDE et
+XFCE, le tray SNI natif fonctionne. Sur GNOME, l'extension AppIndicator (installée avec le
 paquet) est activée **et chargée à chaud** au démarrage via
 `gnome-extensions enable` : l'icône apparaît sans reconnexion. Si le shell
 expose l'hôte StatusNotifierItem avec un peu de retard, GlobalShare retente la
 création du tray pendant une trentaine de secondes. Sans l'extension, utilisez
 le dock ou le raccourci.
+
+### Icône et menu du tray
+
+L'icône livrée n'est plus un glyphe noir sur fond transparent — invisible sur un
+panneau GNOME sombre — mais une tuile dégradée violet→cyan avec un glyphe de
+partage blanc, rendue en **32×32 px** (deux fois la taille logique du panneau,
+donc nette en HiDPI). Pendant un transfert, la tuile affiche une flèche
+d'envoi : l'état se lit d'un coup d'œil, sans ouvrir la fenêtre.
+
+Le menu du tray reprend l'état en en-tête (« Prêt à recevoir » ou « 2 transferts
+en cours »), puis **Ouvrir GlobalShare (Ctrl+Alt+G)**, **Dossier de réception**
+(ouvre le gestionnaire de fichiers) et **Quitter**. Le tooltip suit le même
+état. Sur GNOME, cet en-tête désactivé est le seul retour d'activité :
+l'extension AppIndicator n'affiche pas de badge sur l'icône.
+
+Les sources vectorielles sont
+[`desktop/resources/icons/tray.svg`](../desktop/resources/icons/tray.svg) et
+[`tray-active.svg`](../desktop/resources/icons/tray-active.svg) ; les PNG
+livrés se régénèrent avec ImageMagick :
+
+```bash
+cd desktop/resources/icons
+magick -background none tray.svg -filter Lanczos -resize 32x32 PNG32:tray.png
+magick -background none tray-active.svg -filter Lanczos -resize 32x32 PNG32:tray-active.png
+```
 
 ## Limites connues
 

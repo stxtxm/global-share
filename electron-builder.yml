@@ -29,11 +29,14 @@ extraResources:
   # les images depuis l'archive pour l'icône de fenêtre (_NET_WM_ICON).
   - from: desktop/resources/icons/512x512.png
     to: icon.png
-  # Icône 32x32 dédiée au tray (SNI) : trait épais et fond transparent, lisible
-  # sur les panneaux clairs comme sombres. Une réduction depuis l'icône 512 px
-  # donnait un carré flou à 24 px.
+  # Icônes 32x32 du tray (SNI) : tuile dégradée et glyphe blanc, lisibles à
+  # 16 px sur un panneau sombre comme clair (un trait noir disparaissait).
+  # 32 px = 2x la taille logique, donc net sur un panneau HiDPI.
   - from: desktop/resources/icons/tray.png
     to: tray.png
+  # Variante « transfert en cours », même tuile avec une flèche d'envoi.
+  - from: desktop/resources/icons/tray-active.png
+    to: tray-active.png
 
 # Garde la taille de l'application raisonnable : seules les locales utiles au
 # français et à l'anglais sont livrées.

@@ -184,31 +184,75 @@ async function initTray() {
 // masquée et la fenêtre peut disparaître de la barre des tâches. Ce raccourci
 // fonctionne sur tous les environnements, même quand l'app est masquée.
 const RESTORE_SHORTCUT = 'CommandOrControl+Alt+G';
+// Même raccourci, écrit comme l'utilisateur le lit dans le menu du tray.
+const RESTORE_SHORTCUT_LABEL = process.platform === 'darwin' ? 'Alt+Cmd+G' : 'Ctrl+Alt+G';
+
+// État affiché dans le menu et le tooltip : l'extension AppIndicator ne pose
+// pas de badge sur l'icône, ce texte est donc le seul retour d'activité tant
+// que la fenêtre est masquée.
+function trayStatusLabel() {
+  if (activeTransfers === 0) return 'Prêt à recevoir';
+  return activeTransfers === 1 ? '1 transfert en cours' : `${activeTransfers} transferts en cours`;
+}
+
+function buildTrayMenu() {
+  return Menu.buildFromTemplate([
+    { label: `GlobalShare · ${trayStatusLabel()}`, enabled: false },
+    { type: 'separator' },
+    { label: `Ouvrir GlobalShare (${RESTORE_SHORTCUT_LABEL})`, click: showMainWindow },
+    { label: 'Dossier de réception', click: () => void openReceiveFolder() },
+    { type: 'separator' },
+    {
+      label: 'Quitter',
+      click: () => {
+        quitRequested = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+// Ouvre le dossier de réception dans le gestionnaire de fichiers. Partagé par
+// le menu du tray et le pont IPC de la page Téléchargements.
+async function openReceiveFolder() {
+  const folder = downloadsDir();
+  try {
+    await fs.promises.mkdir(folder, { recursive: true });
+    const error = await shell.openPath(folder);
+    if (error) console.warn('[GlobalShare] ouverture du dossier de réception impossible :', error);
+    return error;
+  } catch (error) {
+    console.warn('[GlobalShare] ouverture du dossier de réception impossible :', String(error));
+    return `Ouverture du dossier impossible : ${String(error?.message || error)}`;
+  }
+}
+
+// L'hôte SNI met en cache l'image et le menu : il faut les repousser tous les
+// deux quand le nombre de transferts change (pas à chaque pourcentage, qui
+// ferait clignoter l'icône du panneau).
+function refreshTray() {
+  if (!tray || tray.isDestroyed()) return;
+  const busy = activeTransfers > 0;
+  const image = busy ? TRAY_ACTIVE_IMAGE : TRAY_IDLE_IMAGE;
+  if (image) tray.setImage(image);
+  tray.setToolTip(busy
+    ? `GlobalShare · ${trayStatusLabel()}`
+    : `GlobalShare · Prêt à recevoir (${RESTORE_SHORTCUT_LABEL} pour ouvrir)`);
+  tray.setContextMenu(buildTrayMenu());
+}
 
 function createTray() {
   if (tray) return;
+  // Ne jamais construire un Tray avec une image vide : certains hôtes SNI
+  // plantent ou créent une entrée invisible (GNOME, XFCE).
+  if (!TRAY_IDLE_IMAGE) {
+    console.warn('[GlobalShare] icône tray introuvable :', TRAY_IDLE_FILE);
+    trayHostAvailable = false;
+    return;
+  }
   try {
-    const image = nativeImage.createFromPath(TRAY_ICON_FILE);
-    // Ne jamais construire un Tray avec une image vide : certains hôtes SNI
-    // plantent ou créent une entrée invisible (GNOME, XFCE).
-    if (image.isEmpty()) {
-      console.warn('[GlobalShare] icône tray introuvable :', TRAY_ICON_FILE);
-      trayHostAvailable = false;
-      return;
-    }
-    tray = new Tray(image);
-    tray.setToolTip('GlobalShare tourne en arrière-plan');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: `Ouvrir GlobalShare (${RESTORE_SHORTCUT})`, click: showMainWindow },
-      { type: 'separator' },
-      {
-        label: 'Quitter',
-        click: () => {
-          quitRequested = true;
-          app.quit();
-        },
-      },
-    ]));
+    tray = new Tray(TRAY_IDLE_IMAGE);
+    refreshTray();
     tray.on('click', showMainWindow);
     // La spec SNI ne définit pas si le simple ou double clic déclenche
     // « click » : on couvre les deux.
@@ -247,9 +291,23 @@ const ICON_FILE = app.isPackaged
   ? path.join(process.resourcesPath, 'icon.png')
   : path.join(__dirname, 'resources', 'icon.png');
 // Icône 32x32 dédiée au tray (livrée hors asar, voir electron-builder.yml).
-const TRAY_ICON_FILE = app.isPackaged
+const TRAY_IDLE_FILE = app.isPackaged
   ? path.join(process.resourcesPath, 'tray.png')
   : path.join(__dirname, 'resources', 'icons', 'tray.png');
+// Variante affichée pendant un transfert (flèche d'envoi, même tuile).
+const TRAY_ACTIVE_FILE = app.isPackaged
+  ? path.join(process.resourcesPath, 'tray-active.png')
+  : path.join(__dirname, 'resources', 'icons', 'tray-active.png');
+
+// Décodées une fois : un chemin seul n'est pas toujours appliqué par l'hôte
+// SNI, et la variante active retombe sur l'icône au repos si elle manque.
+function loadTrayImage(file) {
+  const image = nativeImage.createFromPath(file);
+  return image.isEmpty() ? null : image;
+}
+
+const TRAY_IDLE_IMAGE = loadTrayImage(TRAY_IDLE_FILE);
+const TRAY_ACTIVE_IMAGE = loadTrayImage(TRAY_ACTIVE_FILE) ?? TRAY_IDLE_IMAGE;
 
 // L'image est décodée ici : un chemin passé tel quel à BrowserWindow n'est pas
 // toujours appliqué comme icône de fenêtre sous Linux.
@@ -471,26 +529,14 @@ function registerDownloadHandlers() {
   });
 
   // Ouvre le dossier de réception dans le gestionnaire de fichiers du système.
-  ipcMain.handle('globalshare:open-download-folder', async () => {
-    const folder = downloadsDir();
-    try {
-      await fs.promises.mkdir(folder, { recursive: true });
-      return await shell.openPath(folder);
-    } catch (error) {
-      return `Ouverture du dossier impossible : ${String(error?.message || error)}`;
-    }
-  });
+  ipcMain.handle('globalshare:open-download-folder', () => openReceiveFolder());
 
   // Transferts actifs : suspendre la mise en veille de la machine (équivalent
   // du wake lock Android) tant qu'un fichier circule.
   let powerBlockerId = null;
   ipcMain.handle('globalshare:set-transfers-active', (_event, count) => {
     activeTransfers = Math.max(0, Number(count) || 0);
-    if (tray && !tray.isDestroyed()) {
-      tray.setToolTip(activeTransfers > 0
-        ? `GlobalShare · ${activeTransfers} transfert(s) en cours`
-        : 'GlobalShare tourne en arrière-plan');
-    }
+    refreshTray();
     const active = Number(count) > 0;
     if (active && powerBlockerId === null) {
       powerBlockerId = powerSaveBlocker.start('prevent-app-suspension');

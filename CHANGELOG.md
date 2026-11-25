@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.55] - 2026-11-25
+
+### Changed
+- **Icône du tray redessinée, avec un état visible.** L'ancien glyphe noir disparaissait sur un panneau GNOME sombre ; il cède la place à une tuile dégradée violet→cyan au glyphe de partage blanc, nette à 16 px et lisible sur les panneaux clairs comme sombres. Pendant un transfert, l'icône devient une flèche d'envoi, le tooltip et le menu du tray affichent « Prêt à recevoir » ou le nombre de transferts, et le menu donne un accès direct au **Dossier de réception**.
+- `nativeVersion` desktop passe à **10** : l'icône et le menu vivent dans le processus principal, un bundle web seul ne suffit pas.
+
 ## [1.0.54] - 2026-11-25
 
 ### Fixed
