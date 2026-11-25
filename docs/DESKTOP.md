@@ -215,8 +215,11 @@ Pendant un transfert, la croix ne quitte plus l'application : elle masque la
 fenêtre et affiche une notification cliquable qui rouvre l'app. Le compteur de
 transferts est aussi affiché dans le tooltip du tray. Sur KDE et XFCE, le tray
 SNI natif fonctionne. Sur GNOME, l'extension AppIndicator (installée avec le
-paquet) est activée automatiquement au premier lancement ; après une reconnexion,
-l'icône apparaît dans le tray. Sans elle, utilisez le dock ou le raccourci.
+paquet) est activée **et chargée à chaud** au démarrage via
+`gnome-extensions enable` : l'icône apparaît sans reconnexion. Si le shell
+expose l'hôte StatusNotifierItem avec un peu de retard, GlobalShare retente la
+création du tray pendant une trentaine de secondes. Sans l'extension, utilisez
+le dock ou le raccourci.
 
 ## Limites connues
 

@@ -75,10 +75,24 @@ function runGsettings(args, { execFileImpl = execFile, timeout = 2000 } = {}) {
   });
 }
 
+function runGnomeExtensions(args, { execFileImpl = execFile, timeout = 4000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFileImpl('gnome-extensions', args, { timeout }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(String(stdout));
+    });
+  });
+}
+
 /**
- * Ajoute AppIndicator à la liste des extensions activées de GNOME. GNOME ne
- * charge une extension qu'à l'ouverture de session : l'icône apparaît donc
- * après une reconnexion. Renvoie 'skipped', 'missing', 'already' ou 'enabled'.
+ * Active AppIndicator et la charge immédiatement.
+ *
+ * `gsettings set org.gnome.shell enabled-extensions` n'est lu par le shell
+ * qu'à l'ouverture de session : l'icône restait absente jusqu'à une
+ * reconnexion. `gnome-extensions enable` passe par le D-Bus du shell, qui
+ * charge l'extension tout de suite (et persiste le réglage). Le repli
+ * gsettings ne sert qu'aux GNOME sans cette commande.
+ * Renvoie 'skipped', 'missing', 'already' ou 'enabled'.
  */
 async function ensureGnomeTrayExtension({
   env = process.env,
@@ -92,12 +106,20 @@ async function ensureGnomeTrayExtension({
   const current = parseStringArray(
     await runGsettings(['get', 'org.gnome.shell', 'enabled-extensions'], options)
   );
-  if (current.includes(APPINDICATOR_UUID)) return 'already';
-  await runGsettings(
-    ['set', 'org.gnome.shell', 'enabled-extensions', formatStringArray([...current, APPINDICATOR_UUID])],
-    options
-  );
-  return 'enabled';
+  const listed = current.includes(APPINDICATOR_UUID);
+  try {
+    // Même déjà listée : la session a pu démarrer avant l'installation de
+    // l'extension, et le shell ne l'a alors jamais chargée.
+    await runGnomeExtensions(['enable', APPINDICATOR_UUID], options);
+    return listed ? 'already' : 'enabled';
+  } catch {
+    if (listed) return 'already';
+    await runGsettings(
+      ['set', 'org.gnome.shell', 'enabled-extensions', formatStringArray([...current, APPINDICATOR_UUID])],
+      options
+    );
+    return 'enabled';
+  }
 }
 
 module.exports = {
@@ -105,6 +127,7 @@ module.exports = {
   isGnomeSession,
   probeStatusNotifier,
   ensureGnomeTrayExtension,
+  runGnomeExtensions,
   parseStringArray,
   formatStringArray,
 };

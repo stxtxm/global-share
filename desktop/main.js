@@ -106,14 +106,16 @@ function showGnomeTrayHelp() {
     title: 'GlobalShare',
     message: 'GNOME affiche les icônes de notification via l’extension AppIndicator.',
     detail: [
+      'GlobalShare active l’extension automatiquement au démarrage quand elle est installée.',
+      '',
+      'Si elle n’est pas installée :',
       'Fedora :',
       '  sudo dnf install gnome-shell-extension-appindicator',
-      '  gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com',
       '',
       'Debian / Ubuntu :',
       '  sudo apt install gnome-shell-extension-appindicator',
       '',
-      'Puis déconnectez-vous et reconnectez-vous.',
+      'Puis relancez GlobalShare.',
       '',
       'Sans l’extension, GlobalShare reste accessible : Ctrl+Alt+G rouvre la fenêtre et la fermeture la réduit dans la barre des tâches.',
     ].join('\n'),
@@ -123,27 +125,56 @@ function showGnomeTrayHelp() {
 }
 
 // Une seule fois : si l'extension AppIndicator est installée mais pas activée,
-// on l'active dans les réglages GNOME. Le choix de l'utilisateur est respecté
-// ensuite (on ne la réactive pas s'il la désactive).
+// on l'active et on la charge à chaud. Le choix de l'utilisateur est respecté
+// ensuite (on ne la réactive pas s'il la désactive). Le suffixe -2 force une
+// nouvelle tentative chez les utilisateurs de la 1.0.53, dont l'activation par
+// gsettings n'avait pas chargé l'extension avant la reconnexion.
 async function ensureGnomeTray() {
-  if (loadPrefs().gnomeTrayExtension === 'done') return;
+  if (loadPrefs().gnomeTrayExtension === 'done-2') return;
   try {
     const result = await ensureGnomeTrayExtension();
     if (result === 'enabled' || result === 'already') {
-      savePrefs({ ...loadPrefs(), gnomeTrayExtension: 'done' });
+      savePrefs({ ...loadPrefs(), gnomeTrayExtension: 'done-2' });
     }
     if (result === 'enabled') {
-      console.info('[GlobalShare] extension AppIndicator activée : reconnectez-vous pour afficher l’icône.');
+      console.info('[GlobalShare] extension AppIndicator activée et chargée.');
     }
   } catch (error) {
     console.warn('[GlobalShare] activation de l’extension AppIndicator impossible :', String(error));
   }
 }
 
+// Le shell expose le watcher StatusNotifierItem avec un léger retard après le
+// chargement de l'extension : sans nouvelle tentative, l'icône manquait pour
+// toute la session alors que l'hôte était disponible une seconde plus tard.
+const TRAY_RETRY_DELAYS = [1200, 2500, 4000, 6000, 8000, 10000];
+
+function retryTrayHost(attempt = 0) {
+  if (tray || quitRequested) return;
+  if (attempt >= TRAY_RETRY_DELAYS.length) {
+    console.warn('[GlobalShare] aucun hôte StatusNotifierItem : icône tray indisponible pour cette session.');
+    return;
+  }
+  setTimeout(() => {
+    if (tray || quitRequested) return;
+    void detectTrayHost().then((available) => {
+      if (tray || quitRequested) return;
+      if (available) {
+        trayHostAvailable = true;
+        createTray();
+        if (tray) console.info('[GlobalShare] icône tray créée après apparition de l’hôte StatusNotifierItem.');
+      } else {
+        retryTrayHost(attempt + 1);
+      }
+    });
+  }, TRAY_RETRY_DELAYS[attempt]);
+}
+
 async function initTray() {
   trayHostAvailable = await detectTrayHost();
   if (!trayHostAvailable) {
     console.warn('[GlobalShare] GNOME sans hôte StatusNotifierItem : fermeture réduite dans la barre des tâches.');
+    retryTrayHost();
     return;
   }
   createTray();

@@ -41,7 +41,7 @@ test('GNOME sans hôte SNI minimise au lieu de cacher la fenêtre', () => {
   assert.match(main, /if \(hasTray\) window\.hide\(\);\n  else window\.minimize\(\);/);
   assert.match(main, /showBackgroundNotification/);
   assert.match(main, /Afficher l’icône dans la barre \(GNOME\)/);
-  assert.match(main, /gnome-extensions enable appindicatorsupport@rgcjonas\.gmail\.com/);
+  assert.match(main, /ensureGnomeTrayExtension/);
 });
 
 test('la détection GNOME ne désactive le tray que sans watcher', async () => {
@@ -103,7 +103,7 @@ test('identité de portail Wayland et WM_CLASS alignées', () => {
   assert.match(builder, /StartupWMClass: globalshare/);
 });
 
-test('AppIndicator est activée une fois dans gsettings GNOME', async () => {
+test('AppIndicator est chargée à chaud via gnome-extensions', async () => {
   const { ensureGnomeTrayExtension, parseStringArray, formatStringArray } = require('../desktop/linux-tray.js');
   const uuid = 'appindicatorsupport@rgcjonas.gmail.com';
   assert.deepEqual(parseStringArray("['background-logo@fedorahosted.org']"), ['background-logo@fedorahosted.org']);
@@ -113,7 +113,7 @@ test('AppIndicator est activée une fois dans gsettings GNOME', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'gs-ext-'));
   try {
     const calls: [string, string[]][] = [];
-    const make = (current: string, installed = true) => {
+    const make = (current: string, installed = true, cliFails = false) => {
       if (installed) mkdirSync(path.join(dir, uuid), { recursive: true });
       return {
         dirs: [installed ? dir : path.join(dir, 'absent')],
@@ -125,7 +125,10 @@ test('AppIndicator est activée une fois dans gsettings GNOME', async () => {
           cb: (error: Error | null, stdout: string) => void,
         ) => {
           calls.push([cmd, args]);
-          if (args[0] === 'get') cb(null, current);
+          if (cmd === 'gnome-extensions') {
+            if (cliFails) cb(new Error('commande absente'), '');
+            else cb(null, '');
+          } else if (args[0] === 'get') cb(null, current);
           else cb(null, '');
         },
       };
@@ -135,20 +138,34 @@ test('AppIndicator est activée une fois dans gsettings GNOME', async () => {
     assert.equal(await ensureGnomeTrayExtension({ ...make("@as []", false) }), 'missing');
     assert.equal(calls.length, 0);
 
-    assert.equal(await ensureGnomeTrayExtension(make("['background-logo@fedorahosted.org']")), 'enabled');
-    assert.deepEqual(calls[1], ['gsettings', ['set', 'org.gnome.shell', 'enabled-extensions',
-      `['background-logo@fedorahosted.org', '${uuid}']`]]);
+    // Commande disponible : chargement immédiat, gsettings n'est que lu.
+    assert.equal(await ensureGnomeTrayExtension(make("@as []")), 'enabled');
+    assert.deepEqual(calls.at(-1), ['gnome-extensions', ['enable', uuid]]);
+    assert.equal(calls.filter(([cmd, args]) => cmd === 'gsettings' && args[0] === 'set').length, 0);
 
+    // Déjà listée : on demande quand même le chargement (session démarrée
+    // avant l'installation de l'extension).
     calls.length = 0;
     assert.equal(await ensureGnomeTrayExtension(make(`['${uuid}']`)), 'already');
-    assert.equal(calls.length, 1);
+    assert.deepEqual(calls.map(([cmd, args]) => [cmd, args[0]]), [
+      ['gsettings', 'get'],
+      ['gnome-extensions', 'enable'],
+    ]);
+
+    // Sans la commande : repli gsettings, effectif à la reconnexion.
+    calls.length = 0;
+    assert.equal(await ensureGnomeTrayExtension(make('@as []', true, true)), 'enabled');
+    assert.deepEqual(calls.at(-1), ['gsettings', ['set', 'org.gnome.shell', 'enabled-extensions',
+      `['${uuid}']`]]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('main.js n active AppIndicator qu une seule fois avant le tray', () => {
+test('main.js charge AppIndicator avant le tray et retente si l hôte arrive en retard', () => {
   assert.match(main, /ensureGnomeTray\(\)/);
-  assert.match(main, /gnomeTrayExtension === 'done'/);
+  assert.match(main, /gnomeTrayExtension === 'done-2'/);
+  assert.match(main, /retryTrayHost/);
+  assert.match(main, /TRAY_RETRY_DELAYS/);
   assert.match(main, /await ensureGnomeTray\(\);\n  await initTray\(\);/);
 });

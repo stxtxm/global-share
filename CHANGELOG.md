@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.54] - 2026-11-25
+
+### Fixed
+- **L’icône du tray apparaît sur GNOME sans reconnexion.** L’activation de l’extension AppIndicator passait uniquement par `gsettings`, que le shell ne lit qu’à l’ouverture de session : l’icône restait absente malgré l’extension installée. GlobalShare appelle maintenant `gnome-extensions enable`, qui charge l’extension à chaud via D-Bus (repli `gsettings` si la commande manque).
+- La création du tray est retentée pendant une trentaine de secondes si l’hôte StatusNotifierItem n’est pas encore exposé au démarrage, au lieu d’abandonner pour toute la session.
+- `nativeVersion` desktop passe à **9** : la correction vit dans le processus principal, un bundle web seul ne suffit pas.
+
 ## [1.0.53] - 2026-11-25
 
 ### Added
