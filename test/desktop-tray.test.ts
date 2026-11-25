@@ -1,7 +1,9 @@
 // Récupération de la fenêtre de bureau sur GNOME/KDE : le tray peut être
 // absent, il faut un repli visible et un raccourci global.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 
@@ -34,7 +36,7 @@ test('un transfert en cours empêche la fermeture et affiche une notification', 
 });
 
 test('GNOME sans hôte SNI minimise au lieu de cacher la fenêtre', () => {
-  assert.match(main, /const \{ detectTrayHost \} = require\('\.\/linux-tray'\)/);
+  assert.match(main, /const \{ detectTrayHost, ensureGnomeTrayExtension \} = require\('\.\/linux-tray'\)/);
   assert.match(main, /trayHostAvailable/);
   assert.match(main, /if \(hasTray\) window\.hide\(\);\n  else window\.minimize\(\);/);
   assert.match(main, /showBackgroundNotification/);
@@ -99,4 +101,54 @@ test('identité de portail Wayland et WM_CLASS alignées', () => {
   const desktopPkg = JSON.parse(readFileSync(`${root}desktop/package.json`, 'utf8')) as { desktopName: string };
   assert.equal(desktopPkg.desktopName, 'io.github.stxtxm.globalshare.desktop');
   assert.match(builder, /StartupWMClass: globalshare/);
+});
+
+test('AppIndicator est activée une fois dans gsettings GNOME', async () => {
+  const { ensureGnomeTrayExtension, parseStringArray, formatStringArray } = require('../desktop/linux-tray.js');
+  const uuid = 'appindicatorsupport@rgcjonas.gmail.com';
+  assert.deepEqual(parseStringArray("['background-logo@fedorahosted.org']"), ['background-logo@fedorahosted.org']);
+  assert.deepEqual(parseStringArray('@as []'), []);
+  assert.equal(formatStringArray(['a@x', uuid]), `['a@x', '${uuid}']`);
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'gs-ext-'));
+  try {
+    const calls: [string, string[]][] = [];
+    const make = (current: string, installed = true) => {
+      if (installed) mkdirSync(path.join(dir, uuid), { recursive: true });
+      return {
+        dirs: [installed ? dir : path.join(dir, 'absent')],
+        env: { XDG_CURRENT_DESKTOP: 'GNOME' },
+        execFileImpl: (
+          cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb: (error: Error | null, stdout: string) => void,
+        ) => {
+          calls.push([cmd, args]);
+          if (args[0] === 'get') cb(null, current);
+          else cb(null, '');
+        },
+      };
+    };
+
+    assert.equal(await ensureGnomeTrayExtension({ ...make("@as []"), env: { XDG_CURRENT_DESKTOP: 'KDE' } }), 'skipped');
+    assert.equal(await ensureGnomeTrayExtension({ ...make("@as []", false) }), 'missing');
+    assert.equal(calls.length, 0);
+
+    assert.equal(await ensureGnomeTrayExtension(make("['background-logo@fedorahosted.org']")), 'enabled');
+    assert.deepEqual(calls[1], ['gsettings', ['set', 'org.gnome.shell', 'enabled-extensions',
+      `['background-logo@fedorahosted.org', '${uuid}']`]]);
+
+    calls.length = 0;
+    assert.equal(await ensureGnomeTrayExtension(make(`['${uuid}']`)), 'already');
+    assert.equal(calls.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main.js n active AppIndicator qu une seule fois avant le tray', () => {
+  assert.match(main, /ensureGnomeTray\(\)/);
+  assert.match(main, /gnomeTrayExtension === 'done'/);
+  assert.match(main, /await ensureGnomeTray\(\);\n  await initTray\(\);/);
 });

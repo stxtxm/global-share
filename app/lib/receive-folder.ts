@@ -15,12 +15,24 @@ import {
 
 export type { ReceiveFolderInfo };
 
+export interface ReceiveFolderFile {
+  path: string;
+  name: string;
+  size: number;
+  /** Date de dernière modification (ms depuis l'époque Unix). */
+  modified: number;
+}
+
 interface DesktopReceiveFolderBridge {
   getDownloadFolder?: () => Promise<Partial<ReceiveFolderInfo> & { error?: string }>;
   chooseDownloadFolder?: () => Promise<
     Partial<ReceiveFolderInfo> & { canceled?: boolean; error?: string }
   >;
   resetDownloadFolder?: () => Promise<Partial<ReceiveFolderInfo> & { error?: string }>;
+  listDownloads?: () => Promise<{
+    folder?: string; files?: ReceiveFolderFile[]; error?: string;
+  }>;
+  openDownloadFolder?: () => Promise<string>;
 }
 
 function desktopBridge(): DesktopReceiveFolderBridge | undefined {
@@ -28,6 +40,48 @@ function desktopBridge(): DesktopReceiveFolderBridge | undefined {
   return window.globalshareDesktop as unknown as
     | DesktopReceiveFolderBridge
     | undefined;
+}
+
+/** true quand la page tourne dans la coquille Electron (dossier de réception local). */
+export function isDesktopHost(): boolean {
+  return Boolean(desktopBridge());
+}
+
+/**
+ * Fichiers présents dans le dossier de réception du bureau. Contrairement au
+ * mobile, le pont Electron n'est pas asynchrone à installer : la liste peut
+ * être demandée dès l'ouverture de l'onglet.
+ */
+export async function listReceiveFolderFiles(): Promise<{
+  folder?: string; files: ReceiveFolderFile[]; error?: string;
+}> {
+  const desktop = desktopBridge();
+  if (typeof desktop?.listDownloads !== 'function') {
+    return { files: [], error: 'Liste des fichiers indisponible : mettez l’application à jour.' };
+  }
+  try {
+    const result = await desktop.listDownloads();
+    return {
+      folder: result?.folder,
+      files: result?.files ?? [],
+      error: result?.error,
+    };
+  } catch (error) {
+    return { files: [], error: String(error) };
+  }
+}
+
+/** Ouvre le dossier de réception dans le gestionnaire de fichiers du système. */
+export async function openReceiveFolder(): Promise<string> {
+  const desktop = desktopBridge();
+  if (typeof desktop?.openDownloadFolder !== 'function') {
+    return 'Ouverture du dossier indisponible : mettez l’application à jour.';
+  }
+  try {
+    return (await desktop.openDownloadFolder()) || '';
+  } catch (error) {
+    return String(error);
+  }
 }
 
 export type ReceiveFolderResult =

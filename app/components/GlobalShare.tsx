@@ -46,6 +46,12 @@ import {
 import type { SharedFile } from '../lib/mobile-bridge';
 import { saveBlobToSharedStorage } from '../lib/mobile-files';
 import { mobileOpenDownload } from '../lib/mobile-bridge';
+import {
+  isDesktopHost,
+  listReceiveFolderFiles,
+  openReceiveFolder,
+  type ReceiveFolderFile,
+} from '../lib/receive-folder';
 import { UpdateBanner, UpdateTrigger } from './UpdateManager';
 import {
   fetchLiveRooms,
@@ -461,6 +467,12 @@ declare global {
         path?: string; custom?: boolean; canceled?: boolean; error?: string;
       }>;
       resetDownloadFolder?: () => Promise<{ path?: string; custom?: boolean; error?: string }>;
+      listDownloads?: () => Promise<{
+        folder?: string;
+        files?: ReceiveFolderFile[];
+        error?: string;
+      }>;
+      openDownloadFolder?: () => Promise<string>;
       /** Prévient l'arrière-plan (anti-veille, tray) du nombre de transferts actifs. */
       setTransfersActive?: (count: number) => Promise<unknown>;
     } & DesktopUpdateBridge;
@@ -483,6 +495,12 @@ export default function GlobalShare() {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   // Fichiers réellement présents dans Téléchargements/GlobalShare (Android).
   const [sharedFiles, setSharedFiles] = useState<SharedFile[]>([]);
+  // Fichiers réellement présents dans le dossier de réception du bureau.
+  const [desktopFiles, setDesktopFiles] = useState<ReceiveFolderFile[]>([]);
+  const [desktopFolder, setDesktopFolder] = useState('');
+  // Sous-onglet de la page Téléchargements : l'historique des fichiers reçus
+  // ou les fichiers réellement présents dans le dossier de réception.
+  const [downloadsTab, setDownloadsTab] = useState<'received' | 'device'>('received');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -989,18 +1007,37 @@ export default function GlobalShare() {
     );
   }, [showToast]);
 
+  /**
+   * Fichiers du dossier de réception du bureau. Le pont Electron lit le disque
+   * à la demande : la liste inclut aussi les fichiers déposés hors de l'app.
+   */
+  const refreshDesktopFiles = useCallback(async () => {
+    if (!isDesktopHost()) return;
+    const { folder, files, error } = await listReceiveFolderFiles();
+    if (folder) setDesktopFolder(folder);
+    if (error) showToast('warning', error);
+    setDesktopFiles(files);
+  }, [showToast]);
+
   // L'onglet Téléchargements peut être ouvert plusieurs fois ; on relit le
-  // stockage partagé à chaque ouverture (si une autre app avait effacé des
-  // fichiers depuis Fichiers, la liste évolue par elle-même).
+  // dossier de réception à chaque ouverture (si une autre application avait
+  // effacé ou ajouté des fichiers, la liste évolue par elle-même).
   useEffect(() => {
-    if (tab !== 'downloads' || !isMobileHost()) return;
-    void refreshMobileFiles();
+    if (tab !== 'downloads') return;
+    const mobile = isMobileHost();
+    const desktop = isDesktopHost();
+    if (!mobile && !desktop) return;
+    const refresh = () => {
+      if (mobile) void refreshMobileFiles();
+      else void refreshDesktopFiles();
+    };
+    refresh();
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshMobileFiles();
+      if (document.visibilityState === 'visible') refresh();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [tab, refreshMobileFiles]);
+  }, [tab, refreshMobileFiles, refreshDesktopFiles]);
 
   // ---- Boucle d envoi (relay + p2p) ----
   useEffect(() => {
@@ -2310,184 +2347,362 @@ export default function GlobalShare() {
       <main className={`gs-main${activeTransfers.length > 0 ? ' gs-main--tracking' : ''}`}>
         {/* Onglet Téléchargements : les fichiers reçus, rouverts depuis l'app */}
         {tab === 'downloads' && (
-          <section className="gs-section" aria-label="Fichiers téléchargés">
-            <div className="gs-section-head">
-              <h2 className="gs-section-title">Fichiers reçus</h2>
-              <div className="gs-section-tools">
-                <span className="gs-count">{downloads.length}</span>
-                {downloads.length > 0 && (
-                  <button
-                    type="button"
-                    className="gs-btn gs-btn--ghost gs-btn--sm"
-                    onClick={() => void clearDownloadHistory()}
-                  >
-                    Tout supprimer
-                  </button>
-                )}
-              </div>
+          <section className="gs-section gs-downloads" aria-label="Téléchargements">
+            <div className="gs-segment" role="tablist" aria-label="Listes de fichiers">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={downloadsTab === 'received'}
+                className={`gs-segment-btn${downloadsTab === 'received' ? ' is-active' : ''}`}
+                onClick={() => setDownloadsTab('received')}
+              >
+                <IconDownload className="gs-icon gs-icon--sm" />
+                Reçus
+                <span className="gs-segment-count">{downloads.length}</span>
+              </button>
+              {(isMobileHost() || isDesktopHost()) && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={downloadsTab === 'device'}
+                  className={`gs-segment-btn${downloadsTab === 'device' ? ' is-active' : ''}`}
+                  onClick={() => setDownloadsTab('device')}
+                >
+                  <IconFolder className="gs-icon gs-icon--sm" />
+                  {isMobileHost() ? 'Sur le téléphone' : "Sur l'ordinateur"}
+                  <span className="gs-segment-count">
+                    {isMobileHost() ? sharedFiles.length : desktopFiles.length}
+                  </span>
+                </button>
+              )}
             </div>
-            {downloads.length === 0 ? (
-              <div className="gs-empty">
-                <span className="gs-empty-icon" aria-hidden="true"><IconDownload /></span>
-                <strong>Aucun fichier reçu</strong>
-                <span>
-                  Les fichiers reçus restent ici et s&apos;ouvrent d&apos;un appui, même après
-                  avoir quitté le salon.
-                </span>
-              </div>
-            ) : (
-              <div className="gs-list">
-                {downloads.map((f, i) => (
-                  <div key={f.id} className="gs-file" style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}>
-                    {appSettings.showFileIcons && (
-                      <span className="gs-file-icon" aria-hidden="true">
-                        {viewerKind(f.mime, f.name) === 'audio' ? <IconMusic /> : <IconFile />}
-                      </span>
-                    )}
-                    <div className="gs-file-meta">
-                      <div className="gs-file-name" title={f.name}>{f.name}</div>
-                      <div className="gs-file-sub">
-                        {appSettings.showFileSize && <span>{formatBytes(f.size)}</span>}
-                        <span>De {f.from}</span>
-                        {appSettings.showFileDate && <span>{formatDate(f.receivedAt)}</span>}
-                        <span
-                          className={`gs-pill ${f.integrity === 'verified'
-                            ? 'gs-pill--ok'
-                            : f.integrity === 'mismatch'
-                              ? 'gs-pill--bad'
-                              : 'gs-pill--warn'}`}
-                        >
-                          {f.integrity === 'verified'
-                            ? 'intégrité vérifiée'
-                            : f.integrity === 'mismatch'
-                              ? 'fichier corrompu'
-                              : 'intégrité non vérifiée'}
-                        </span>
-                      </div>
-                      <div className="gs-file-actions">
-                        {isMobileHost() ? (
-                          <>
-                            <button
-                              type="button"
-                              className="gs-dl"
-                              onClick={() => void revealDownload(f)}
-                            >
-                              <IconFolder className="gs-icon gs-icon--sm" />
-                              Fichiers
-                            </button>
-                            {f.path && (
-                              <button
-                                type="button"
-                                className="gs-dl gs-dl--ghost"
-                                onClick={() => void openDownload(f)}
-                              >
-                                <IconMusic className="gs-icon gs-icon--sm" />
-                                Écouter
-                              </button>
-                            )}
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="gs-dl"
-                              onClick={() => void openDownload(f)}
-                            >
-                              <IconOpen className="gs-icon gs-icon--sm" />
-                              Ouvrir
-                            </button>
-                            {f.path && (
-                              <button
-                                type="button"
-                                className="gs-dl gs-dl--ghost"
-                                onClick={() => void revealDownload(f)}
-                              >
-                                Dossier
-                              </button>
-                            )}
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          className="gs-dl gs-dl--ghost"
-                          onClick={() => void removeDownload(f)}
-                          aria-label={`Retirer ${f.name} de la liste`}
-                        >
-                          <IconTrash className="gs-icon gs-icon--sm" />
-                          Retirer
-                        </button>
-                      </div>
-                    </div>
+
+            {downloadsTab === 'received' && (
+              <>
+                <div className="gs-section-head gs-dl-head">
+                  <div className="gs-dl-summary">
+                    <strong>{downloads.length} fichier{downloads.length > 1 ? 's' : ''} reçu{downloads.length > 1 ? 's' : ''}</strong>
+                    <span>
+                      {downloads.length > 0
+                        ? `${formatBytes(downloads.reduce((total, f) => total + f.size, 0))} · ouvrables d'un appui`
+                        : 'Les fichiers reçus apparaissent ici.'}
+                    </span>
                   </div>
-                ))}
-              </div>
+                  {downloads.length > 0 && (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn--ghost gs-btn--sm"
+                      onClick={() => void clearDownloadHistory()}
+                    >
+                      Tout supprimer
+                    </button>
+                  )}
+                </div>
+                {downloads.length === 0 ? (
+                  <div className="gs-empty">
+                    <span className="gs-empty-icon" aria-hidden="true"><IconDownload /></span>
+                    <strong>Aucun fichier reçu</strong>
+                    <span>
+                      Les fichiers reçus restent ici et s&apos;ouvrent d&apos;un appui, même après
+                      avoir quitté le salon.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="gs-list">
+                    {downloads.map((f, i) => {
+                      const kind = viewerKind(f.mime, f.name);
+                      return (
+                        <article
+                          key={f.id}
+                          className="gs-file gs-file--card"
+                          style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                        >
+                          {appSettings.showFileIcons && (
+                            <span
+                              className={`gs-file-icon${kind === 'audio' || kind === 'image' || kind === 'video' ? ` gs-file-icon--${kind}` : ''}`}
+                              aria-hidden="true"
+                            >
+                              {kind === 'audio' ? <IconMusic /> : kind === 'image' ? <IconCamera /> : <IconFile />}
+                            </span>
+                          )}
+                          <div className="gs-file-meta">
+                            <div className="gs-file-top">
+                              <div className="gs-file-name" title={f.name}>{f.name}</div>
+                              <span
+                                className={`gs-pill ${f.integrity === 'verified'
+                                  ? 'gs-pill--ok'
+                                  : f.integrity === 'mismatch'
+                                    ? 'gs-pill--bad'
+                                    : 'gs-pill--warn'}`}
+                              >
+                                {f.integrity === 'verified'
+                                  ? 'vérifié'
+                                  : f.integrity === 'mismatch'
+                                    ? 'corrompu'
+                                    : 'non vérifié'}
+                              </span>
+                            </div>
+                            <div className="gs-file-sub">
+                              {appSettings.showFileSize && <span>{formatBytes(f.size)}</span>}
+                              <span>De {f.from}</span>
+                              {appSettings.showFileDate && <span>{formatDate(f.receivedAt)}</span>}
+                            </div>
+                            <div className="gs-file-actions">
+                              {isMobileHost() ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="gs-dl"
+                                    onClick={() => void revealDownload(f)}
+                                  >
+                                    <IconFolder className="gs-icon gs-icon--sm" />
+                                    Fichiers
+                                  </button>
+                                  {f.path && (
+                                    <button
+                                      type="button"
+                                      className="gs-dl gs-dl--ghost"
+                                      onClick={() => void openDownload(f)}
+                                    >
+                                      <IconMusic className="gs-icon gs-icon--sm" />
+                                      Écouter
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="gs-dl"
+                                    onClick={() => void openDownload(f)}
+                                  >
+                                    <IconOpen className="gs-icon gs-icon--sm" />
+                                    Ouvrir
+                                  </button>
+                                  {f.path && (
+                                    <button
+                                      type="button"
+                                      className="gs-dl gs-dl--ghost"
+                                      onClick={() => void revealDownload(f)}
+                                    >
+                                      Dossier
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost gs-dl--danger"
+                                onClick={() => void removeDownload(f)}
+                                aria-label={`Retirer ${f.name} de la liste`}
+                              >
+                                <IconTrash className="gs-icon gs-icon--sm" />
+                                Retirer
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
 
-            {isMobileHost() && (
-              <div className="gs-shared-files">
-                <h3 className="gs-list-title">Sur cet appareil</h3>
-                <div className="gs-shared-files-head">
-                  <span className="gs-hint">Téléchargements/GlobalShare · {sharedFiles.length} fichier{sharedFiles.length > 1 ? 's' : ''}</span>
-                  {sharedFiles.length > 0 && (
+            {isDesktopHost() && downloadsTab === 'device' && (
+              <div className="gs-device">
+                <div className="gs-section-head gs-dl-head">
+                  <div className="gs-dl-summary">
+                    <strong>{desktopFiles.length} fichier{desktopFiles.length > 1 ? 's' : ''} sur l&apos;ordinateur</strong>
+                    <span title={desktopFolder}>{desktopFolder || 'Dossier de réception'}</span>
+                  </div>
+                  <div className="gs-dl-head-actions">
                     <button
                       type="button"
                       className="gs-dl gs-dl--ghost"
                       onClick={() => void (async () => {
-                        if (!window.confirm(translateSetting(appSettings.language, 'confirmClearHistory'))) return;
-                        for (const file of sharedFiles) {
-                          await mobileDeleteDownload({ uri: file.uri, name: file.name });
-                        }
-                        await refreshMobileFiles();
+                        const error = await openReceiveFolder();
+                        if (error) showToast('error', error);
                       })()}
                     >
-                      Effacer tout
+                      <IconFolder className="gs-icon gs-icon--sm" />
+                      Ouvrir le dossier
                     </button>
-                  )}
+                  </div>
                 </div>
-                {sharedFiles.length === 0 ? (
-                  <p className="gs-hint">Aucun fichier enregistré pour le moment.</p>
+                {desktopFiles.length === 0 ? (
+                  <div className="gs-empty">
+                    <span className="gs-empty-icon" aria-hidden="true"><IconFolder /></span>
+                    <strong>Aucun fichier dans le dossier de réception</strong>
+                    <span>
+                      Les fichiers enregistrés sur cet ordinateur apparaissent ici, même
+                      s&apos;ils ont été déposés par une autre application.
+                    </span>
+                  </div>
                 ) : (
                   <div className="gs-list">
-                    {sharedFiles.map(file => (
-                      <div key={file.uri} className="gs-file">
-                        <div className="gs-file-meta">
-                          <div className="gs-file-name" title={file.name}>{file.name}</div>
-                          <div className="gs-file-sub"><span>{formatBytes(file.size)}</span></div>
-                          <div className="gs-file-actions">
-                            <button
-                              type="button"
-                              className="gs-dl"
-                              onClick={() => void (async () => {
-                                const error = await mobileOpenDownload({
-                                  uri: file.uri, mime: mimeFromName(file.name), name: file.name,
-                                });
-                                if (error) showToast('error', error);
-                              })()}
-                            >
-                              <IconMusic className="gs-icon gs-icon--sm" />
-                              Écouter
-                            </button>
-                            <button
-                              type="button"
-                              className="gs-dl gs-dl--ghost"
-                              onClick={() => void (async () => {
-                                const result = await mobileDeleteDownload({
-                                  uri: file.uri, name: file.name,
-                                });
-                                if (result.error) showToast('error', result.error);
-                                else {
-                                  setSharedFiles(prev => prev.filter(f => f.uri !== file.uri));
-                                  showToast('success', `Supprimé : ${file.name}`);
-                                }
-                              })()}
-                            >
-                              <IconTrash className="gs-icon gs-icon--sm" />
-                              Supprimer
-                            </button>
+                    {desktopFiles.map((file, i) => {
+                      const kind = viewerKind(mimeFromName(file.name), file.name);
+                      return (
+                        <article
+                          key={file.path}
+                          className="gs-file gs-file--card"
+                          style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                        >
+                          <span
+                            className={`gs-file-icon${kind === 'audio' || kind === 'image' || kind === 'video' ? ` gs-file-icon--${kind}` : ''}`}
+                            aria-hidden="true"
+                          >
+                            {kind === 'audio' ? <IconMusic /> : kind === 'image' ? <IconCamera /> : <IconFile />}
+                          </span>
+                          <div className="gs-file-meta">
+                            <div className="gs-file-top">
+                              <div className="gs-file-name" title={file.path}>{file.name}</div>
+                            </div>
+                            <div className="gs-file-sub">
+                              <span>{formatBytes(file.size)}</span>
+                              <span>{formatDate(file.modified)}</span>
+                              <span>Dans le dossier de réception</span>
+                            </div>
+                            <div className="gs-file-actions">
+                              <button
+                                type="button"
+                                className="gs-dl"
+                                onClick={() => void (async () => {
+                                  const error = await window.globalshareDesktop?.openDownload(file.path);
+                                  if (error) showToast('error', error);
+                                })()}
+                              >
+                                <IconOpen className="gs-icon gs-icon--sm" />
+                                Ouvrir
+                              </button>
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost"
+                                onClick={() => void (async () => {
+                                  const error = await window.globalshareDesktop?.revealDownload(file.path);
+                                  if (error) showToast('error', error);
+                                })()}
+                              >
+                                <IconFolder className="gs-icon gs-icon--sm" />
+                                Afficher dans le dossier
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    ))}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isMobileHost() && downloadsTab === 'device' && (
+              <div className="gs-device">
+                <div className="gs-section-head gs-dl-head">
+                  <div className="gs-dl-summary">
+                    <strong>{sharedFiles.length} fichier{sharedFiles.length > 1 ? 's' : ''} sur le téléphone</strong>
+                    <span>Téléchargements/GlobalShare</span>
+                  </div>
+                  <div className="gs-dl-head-actions">
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost"
+                      onClick={() => void (async () => {
+                        const error = await mobileRevealDownload();
+                        if (error) showToast('error', error);
+                      })()}
+                    >
+                      <IconFolder className="gs-icon gs-icon--sm" />
+                      Ouvrir Fichiers
+                    </button>
+                    {sharedFiles.length > 0 && (
+                      <button
+                        type="button"
+                        className="gs-dl gs-dl--ghost gs-dl--danger"
+                        onClick={() => void (async () => {
+                          if (!window.confirm(translateSetting(appSettings.language, 'confirmClearHistory'))) return;
+                          for (const file of sharedFiles) {
+                            await mobileDeleteDownload({ uri: file.uri, name: file.name });
+                          }
+                          await refreshMobileFiles();
+                        })()}
+                      >
+                        <IconTrash className="gs-icon gs-icon--sm" />
+                        Effacer tout
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {sharedFiles.length === 0 ? (
+                  <div className="gs-empty">
+                    <span className="gs-empty-icon" aria-hidden="true"><IconFolder /></span>
+                    <strong>Aucun fichier sur le téléphone</strong>
+                    <span>
+                      Les fichiers enregistrés dans Téléchargements/GlobalShare apparaissent ici,
+                      même s&apos;ils ont été ajoutés par une autre application.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="gs-list">
+                    {sharedFiles.map((file, i) => {
+                      const kind = viewerKind(mimeFromName(file.name), file.name);
+                      return (
+                        <article
+                          key={file.uri}
+                          className="gs-file gs-file--card"
+                          style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                        >
+                          <span
+                            className={`gs-file-icon${kind === 'audio' || kind === 'image' || kind === 'video' ? ` gs-file-icon--${kind}` : ''}`}
+                            aria-hidden="true"
+                          >
+                            {kind === 'audio' ? <IconMusic /> : kind === 'image' ? <IconCamera /> : <IconFile />}
+                          </span>
+                          <div className="gs-file-meta">
+                            <div className="gs-file-top">
+                              <div className="gs-file-name" title={file.name}>{file.name}</div>
+                            </div>
+                            <div className="gs-file-sub">
+                              <span>{formatBytes(file.size)}</span>
+                              <span>Dans Fichiers</span>
+                            </div>
+                            <div className="gs-file-actions">
+                              <button
+                                type="button"
+                                className="gs-dl"
+                                onClick={() => void (async () => {
+                                  const error = await mobileOpenDownload({
+                                    uri: file.uri, mime: mimeFromName(file.name), name: file.name,
+                                  });
+                                  if (error) showToast('error', error);
+                                })()}
+                              >
+                                <IconOpen className="gs-icon gs-icon--sm" />
+                                Ouvrir
+                              </button>
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost gs-dl--danger"
+                                onClick={() => void (async () => {
+                                  const result = await mobileDeleteDownload({
+                                    uri: file.uri, name: file.name,
+                                  });
+                                  if (result.error) showToast('error', result.error);
+                                  else {
+                                    setSharedFiles(prev => prev.filter(f => f.uri !== file.uri));
+                                    showToast('success', `Supprimé : ${file.name}`);
+                                  }
+                                })()}
+                              >
+                                <IconTrash className="gs-icon gs-icon--sm" />
+                                Supprimer
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
               </div>

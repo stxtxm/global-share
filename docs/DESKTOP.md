@@ -103,7 +103,11 @@ recommandé pour une diffusion large.
 
 Les fichiers reçus restent accessibles dans l'onglet **Téléchargements** de
 l'application (`Salon | Téléchargements`) et se rouvrent d'un appui, sans
-repasser par un transfert :
+repasser par un transfert. Deux sous-onglets : **Reçus** (l'historique) et
+**Sur l'ordinateur**, qui liste le contenu réel du dossier de réception — y
+compris les fichiers déposés là par une autre application. La liste est relue à
+chaque ouverture de l'onglet et au retour sur la fenêtre ; **Ouvrir le dossier**
+lance le gestionnaire de fichiers du système.
 
 | Contexte | Enregistrement | Bouton **Ouvrir** |
 | --- | --- | --- |
@@ -111,8 +115,8 @@ repasser par un transfert :
 | Web / mobile (PWA) | blob dans IndexedDB, 40 fichiers et 128 Mo au total | onglet du navigateur pour images, PDF, vidéos, sons et textes ; sinon téléchargement |
 
 Le pont Electron est [`desktop/preload.js`](../desktop/preload.js) : il expose
-`window.globalshareDesktop` avec `saveDownload`, `openDownload` et
-`revealDownload`. Le processus principal n'accepte d'ouvrir un chemin que s'il
+`window.globalshareDesktop` avec `saveDownload`, `openDownload`,
+`revealDownload`, `listDownloads` et `openDownloadFolder`. Le processus principal n'accepte d'ouvrir un chemin que s'il
 se trouve dans son dossier de téléchargements, et le nom envoyé par la page est
 assaini avant écriture. Sans ce pont (site, mobile), l'application retombe sur
 `Blob` + `URL.createObjectURL`.
@@ -210,8 +214,9 @@ reste disponible.
 Pendant un transfert, la croix ne quitte plus l'application : elle masque la
 fenêtre et affiche une notification cliquable qui rouvre l'app. Le compteur de
 transferts est aussi affiché dans le tooltip du tray. Sur KDE et XFCE, le tray
-SNI natif fonctionne ; sur GNOME nu (sans extension AppIndicator), utilisez le
-dock ou le raccourci.
+SNI natif fonctionne. Sur GNOME, l'extension AppIndicator (installée avec le
+paquet) est activée automatiquement au premier lancement ; après une reconnexion,
+l'icône apparaît dans le tray. Sans elle, utilisez le dock ou le raccourci.
 
 ## Limites connues
 

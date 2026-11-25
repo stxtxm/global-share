@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.53] - 2026-11-25
+
+### Added
+- **Onglet « Sur l’ordinateur ».** La page Téléchargements du bureau propose deux listes : **Reçus** (l’historique) et **Sur l’ordinateur**, qui affiche le contenu réel du dossier de réception (`~/Téléchargements/GlobalShare` par défaut, ou le dossier choisi). La liste est relue à chaque ouverture et au retour sur la fenêtre, avec **Ouvrir**, **Afficher dans le dossier** et **Ouvrir le dossier**.
+
+### Changed
+- **GNOME : l’extension AppIndicator est activée automatiquement** au premier lancement quand elle est installée mais désactivée, pour que l’icône du tray apparaisse sans commande manuelle.
+- `nativeVersion` desktop passe à **8** : le preload expose la lecture du dossier de réception, un bundle web seul ne suffit pas.
+
 ## [1.0.52] - 2026-11-24
 
 ### Added

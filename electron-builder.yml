@@ -78,8 +78,8 @@ linux:
 
 # GNOME n'affiche pas les icônes de notification sans l'extension AppIndicator.
 # Recommandée (et non imposée) : les utilisateurs KDE/XFCE n'en ont pas besoin.
-# apt et dnf installent les recommandations par défaut ; l'extension reste à
-# activer une fois avec `gnome-extensions enable` (voir docs/DESKTOP.md).
+# apt et dnf installent les recommandations par défaut ; l'app l'active ensuite
+# elle-même dans les réglages GNOME (voir ensureGnomeTray dans desktop/main.js).
 deb:
   recommends:
     - libayatana-appindicator3-1

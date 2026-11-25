@@ -7,6 +7,9 @@ import test from 'node:test';
 const DEFAULT = '/home/timo/Téléchargements/GlobalShare';
 let folder = DEFAULT;
 const calls: string[] = [];
+const desktopFiles = [
+  { path: `${DEFAULT}/photo.jpg`, name: 'photo.jpg', size: 2048, modified: 1_700_000_000_000 },
+];
 
 (globalThis as { window?: unknown }).window = {
   addEventListener: () => {},
@@ -26,6 +29,11 @@ const calls: string[] = [];
       calls.push('reset');
       folder = DEFAULT;
       return { path: folder, custom: false };
+    },
+    listDownloads: async () => ({ folder, files: desktopFiles }),
+    openDownloadFolder: async () => {
+      calls.push('openFolder');
+      return '';
     },
   },
 };
@@ -48,4 +56,14 @@ test('le dossier de réception desktop se lit, se choisit et se réinitialise', 
     folder: { path: DEFAULT, custom: false },
   });
   assert.deepEqual(calls, ['choose', 'reset']);
+});
+
+test('les fichiers du dossier de réception se listent et le dossier s ouvre', async () => {
+  assert.equal(receive.isDesktopHost(), true);
+  const listed = await receive.listReceiveFolderFiles();
+  assert.equal(listed.folder, folder);
+  assert.deepEqual(listed.files, desktopFiles);
+  assert.equal(listed.error, undefined);
+  assert.equal(await receive.openReceiveFolder(), '');
+  assert.ok(calls.includes('openFolder'));
 });

@@ -10,7 +10,7 @@ const path = require('node:path');
 
 const { checkForUpdates, initAutoUpdater, sendUpdateState } = require('./updater');
 const webUpdates = require('./web-updates');
-const { detectTrayHost } = require('./linux-tray');
+const { detectTrayHost, ensureGnomeTrayExtension } = require('./linux-tray');
 
 // Identifiant Windows (raccourcis, notifications) : doit rester identique à
 // `appId` dans electron-builder.yml.
@@ -120,6 +120,24 @@ function showGnomeTrayHelp() {
     buttons: ['OK'],
     noLink: true,
   }).catch(() => { /* boîte impossible : aucune action requise */ });
+}
+
+// Une seule fois : si l'extension AppIndicator est installée mais pas activée,
+// on l'active dans les réglages GNOME. Le choix de l'utilisateur est respecté
+// ensuite (on ne la réactive pas s'il la désactive).
+async function ensureGnomeTray() {
+  if (loadPrefs().gnomeTrayExtension === 'done') return;
+  try {
+    const result = await ensureGnomeTrayExtension();
+    if (result === 'enabled' || result === 'already') {
+      savePrefs({ ...loadPrefs(), gnomeTrayExtension: 'done' });
+    }
+    if (result === 'enabled') {
+      console.info('[GlobalShare] extension AppIndicator activée : reconnectez-vous pour afficher l’icône.');
+    }
+  } catch (error) {
+    console.warn('[GlobalShare] activation de l’extension AppIndicator impossible :', String(error));
+  }
 }
 
 async function initTray() {
@@ -383,6 +401,52 @@ function registerDownloadHandlers() {
       return { path: target };
     } catch (error) {
       return { error: `Enregistrement impossible : ${String(error?.message || error)}` };
+    }
+  });
+
+  // Contenu du dossier de réception : l'onglet « Sur l'ordinateur » montre les
+  // fichiers réellement présents sur le disque, y compris ceux déposés là par
+  // une autre application. Le dossier n'existe pas encore au premier lancement.
+  ipcMain.handle('globalshare:list-downloads', async () => {
+    const folder = downloadsDir();
+    try {
+      const entries = await fs.promises.readdir(folder, { withFileTypes: true });
+      const files = [];
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const filePath = path.join(folder, entry.name);
+        try {
+          const stat = await fs.promises.stat(filePath);
+          files.push({
+            path: filePath,
+            name: entry.name,
+            size: stat.size,
+            modified: stat.mtimeMs,
+          });
+        } catch {
+          // Fichier retiré entre la lecture du dossier et son stat.
+        }
+      }
+      files.sort((a, b) => b.modified - a.modified);
+      return { folder, files };
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { folder, files: [] };
+      return {
+        folder,
+        files: [],
+        error: `Lecture du dossier de réception impossible : ${String(error?.message || error)}`,
+      };
+    }
+  });
+
+  // Ouvre le dossier de réception dans le gestionnaire de fichiers du système.
+  ipcMain.handle('globalshare:open-download-folder', async () => {
+    const folder = downloadsDir();
+    try {
+      await fs.promises.mkdir(folder, { recursive: true });
+      return await shell.openPath(folder);
+    } catch (error) {
+      return `Ouverture du dossier impossible : ${String(error?.message || error)}`;
     }
   });
 
@@ -681,6 +745,7 @@ function buildMenu() {
 async function start() {
   app.setAppUserModelId(APP_ID);
   registerDownloadHandlers();
+  await ensureGnomeTray();
   await initTray();
   const registered = globalShortcut.register(RESTORE_SHORTCUT, showMainWindow);
   if (!registered) {

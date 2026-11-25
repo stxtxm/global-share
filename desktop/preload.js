@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('globalshareDesktop', {
   getDownloadFolder: () => ipcRenderer.invoke('globalshare:get-download-folder'),
   chooseDownloadFolder: () => ipcRenderer.invoke('globalshare:choose-download-folder'),
   resetDownloadFolder: () => ipcRenderer.invoke('globalshare:reset-download-folder'),
+  listDownloads: () => ipcRenderer.invoke('globalshare:list-downloads'),
+  openDownloadFolder: () => ipcRenderer.invoke('globalshare:open-download-folder'),
 
   // Nombre de transferts actifs : l'arrière-plan (anti-veille système) est
   // maintenu tant que des fichiers circulent, fenêtre fermée ou pas.

@@ -2099,6 +2099,206 @@
 }
 
 
+/* --- Téléchargements : sous-onglets, résumé et cartes de fichiers -------- */
+.gs-downloads {
+  gap: 14px;
+}
+
+
+/* Sélecteur segmenté « Reçus / Sur le téléphone ». */
+.gs-segment {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  border: 1px solid var(--gs-border);
+  background: rgba(var(--gs-bg-rgb), 0.55);
+}
+
+
+.gs-segment-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--gs-dim);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+
+/* Une seule liste disponible (bureau) : la pastille reste compacte. */
+.gs-segment-btn:only-child {
+  flex: 0 1 auto;
+}
+
+
+.gs-segment-btn.is-active {
+  color: var(--gs-text);
+  border-color: rgba(167, 139, 250, 0.45);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(34, 211, 238, 0.12));
+  box-shadow: 0 10px 24px -18px rgba(139, 92, 246, 0.9);
+}
+
+
+.gs-segment-btn:active {
+  transform: scale(0.98);
+}
+
+
+.gs-segment-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--gs-surface-strong);
+  color: var(--gs-text);
+  font-size: 0.66rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* En-tête de liste : nombre et poids total à gauche, actions à droite. */
+.gs-dl-head {
+  align-items: flex-end;
+}
+
+
+.gs-dl-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+
+.gs-dl-summary strong {
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+
+.gs-dl-summary span {
+  overflow: hidden;
+  font-size: 0.72rem;
+  color: var(--gs-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+.gs-dl-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+
+.gs-dl-head-actions .gs-dl {
+  min-height: 36px;
+  border-radius: 999px;
+}
+
+
+.gs-device {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+
+/* Carte de fichier : hiérarchie nom / métadonnées / actions. */
+.gs-file--card {
+  align-items: flex-start;
+  padding: 14px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+
+.gs-file--card:active {
+  border-color: var(--gs-border-strong);
+}
+
+
+.gs-file-icon--audio {
+  color: var(--gs-accent-2);
+  background: rgba(34, 211, 238, 0.12);
+}
+
+
+.gs-file-icon--image {
+  color: var(--gs-success);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+
+.gs-file-icon--video {
+  color: var(--gs-accent);
+  background: rgba(167, 139, 250, 0.14);
+}
+
+
+.gs-file-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+
+.gs-file-top .gs-file-name {
+  flex: 1;
+  min-width: 0;
+}
+
+
+.gs-file-top .gs-pill {
+  flex-shrink: 0;
+}
+
+
+.gs-dl--danger {
+  color: var(--gs-danger);
+  border-color: rgba(251, 113, 133, 0.32);
+  background: rgba(251, 113, 133, 0.1);
+}
+
+
+.gs-dl--danger:active {
+  background: rgba(251, 113, 133, 0.2);
+}
+
+
+/* Pixel 9a et écrans étroits : libellés compacts, en-tête qui se replie. */
+@media (max-width: 380px) {
+  .gs-segment-btn {
+    gap: 5px;
+    padding: 0 6px;
+    font-size: 0.74rem;
+  }
+
+  .gs-dl-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+}
+
+
 /* --- Grands écrans ------------------------------------------------------- */
 @media (min-width: 640px) {
   .gs-overlay {
