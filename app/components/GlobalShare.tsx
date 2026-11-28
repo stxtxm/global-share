@@ -47,6 +47,7 @@ import type { SharedFile } from '../lib/mobile-bridge';
 import { saveBlobToSharedStorage } from '../lib/mobile-files';
 import { mobileOpenDownload } from '../lib/mobile-bridge';
 import {
+  deleteReceiveFolderFiles,
   isDesktopHost,
   listReceiveFolderFiles,
   openReceiveFolder,
@@ -253,6 +254,16 @@ const getSocketUrl = (): string => {
     return window.location.origin;
   }
   return process.env.NEXT_PUBLIC_SOCKET_URL || '';
+};
+
+// Battement de présence natif : même serveur que la socket, route HTTP
+// indépendante du WebSocket (voir /presence dans le Worker).
+const getPresenceUrl = (): string => {
+  try {
+    return new URL('/presence', getSocketUrl()).toString();
+  } catch {
+    return '';
+  }
 };
 
 // Identité de session de l'onglet : conservée dans sessionStorage, elle survit
@@ -516,6 +527,12 @@ export default function GlobalShare() {
   // Fichiers réellement présents dans le dossier de réception du bureau.
   const [desktopFiles, setDesktopFiles] = useState<ReceiveFolderFile[]>([]);
   const [desktopFolder, setDesktopFolder] = useState('');
+  // Sélection multiple des listes de fichiers (desktop) : Ctrl/Cmd+clic,
+  // Maj+clic pour une plage, cases à cocher pour le clavier et le tactile.
+  // Les clés sont les identifiants de l'historique, les chemins du dossier de
+  // réception, ou les URI Android selon la liste affichée.
+  const [selectedFileKeys, setSelectedFileKeys] = useState<Set<string>>(() => new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
   // Sous-onglet de la page Téléchargements : l'historique des fichiers reçus
   // ou les fichiers réellement présents dans le dossier de réception.
   const [downloadsTab, setDownloadsTab] = useState<'received' | 'device'>('received');
@@ -591,6 +608,81 @@ export default function GlobalShare() {
   // Pairs dont le chemin direct est un chemin local (candidats « host » des
   // deux côtés) : même réseau, on augmente blocs et pipeline pour eux.
   const lanPeersRef = useRef<Set<string>>(new Set());
+
+  // Cible du battement de présence natif pour un salon donné : l'identité
+  // stable et l'URL du serveur sont capturées au moment du join.
+  const presenceTargetFor = useCallback((room: string, name: string) => {
+    const presenceUrl = getPresenceUrl();
+    const sessionId = mySessionIdRef.current || getSessionId();
+    if (!presenceUrl || !sessionId || !room.trim()) return undefined;
+    return { presenceUrl, roomId: room.trim(), sessionId, name: name.trim() || 'Appareil' };
+  }, []);
+
+  // ---- Sélection multiple des listes de fichiers (bureau et historique) ----
+  const clearFileSelection = useCallback(() => {
+    setSelectedFileKeys(new Set());
+    selectionAnchorRef.current = null;
+  }, []);
+
+  // Ctrl/Cmd+clic : ajoute ou retire un fichier ; Maj+clic : sélectionne la
+  // plage depuis le dernier fichier cliqué ; clic simple : sélection unique.
+  const toggleFileSelection = useCallback((
+    key: string,
+    index: number,
+    keys: string[],
+    event: React.MouseEvent | React.ChangeEvent,
+  ) => {
+    const { ctrlKey, metaKey, shiftKey } = event as React.MouseEvent;
+    const additive = ctrlKey || metaKey;
+    setSelectedFileKeys(prev => {
+      const next = new Set(prev);
+      if (shiftKey && selectionAnchorRef.current) {
+        const anchor = keys.indexOf(selectionAnchorRef.current);
+        if (anchor >= 0) {
+          const start = Math.min(anchor, index);
+          const end = Math.max(anchor, index);
+          for (let i = start; i <= end; i += 1) next.add(keys[i]);
+          return next;
+        }
+      }
+      if (additive) {
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        selectionAnchorRef.current = key;
+        return next;
+      }
+      if (next.size === 1 && next.has(key)) {
+        selectionAnchorRef.current = null;
+        return new Set();
+      }
+      selectionAnchorRef.current = key;
+      return new Set([key]);
+    });
+  }, []);
+
+  // Changer de liste abandonne la sélection : les clés d'un onglet ne veulent
+  // rien dire dans l'autre (identifiants d'historique vs chemins du disque).
+  useEffect(() => {
+    clearFileSelection();
+  }, [tab, downloadsTab, clearFileSelection]);
+
+  // Un fichier supprimé hors de l'app (ou par le pair) ne doit pas rester
+  // sélectionné : on retire les clés qui ne correspondent plus à une ligne.
+  useEffect(() => {
+    setSelectedFileKeys(prev => {
+      if (prev.size === 0) return prev;
+      const valid = new Set<string>();
+      downloads.forEach(file => valid.add(file.id));
+      desktopFiles.forEach(file => valid.add(file.path));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach(key => {
+        if (valid.has(key)) next.add(key);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [downloads, desktopFiles]);
 
   const [renderTime, setRenderTime] = useState(0);
 
@@ -794,16 +886,19 @@ export default function GlobalShare() {
   // appelait keepAlive(false) sur `disconnected`, ce qui éteignait le service
   // (et le wake lock) au moment exact du besoin.
   useEffect(() => {
-    if (step === 'room') mobileKeepAlive(true);
-  }, [step]);
+    if (step !== 'room') return;
+    const target = presenceTargetFor(roomId, myName);
+    if (target) mobileKeepAlive(true, target);
+  }, [step, roomId, myName, presenceTargetFor]);
 
   // Le tick natif (toutes les 10 s, tant que le wake lock est tenu) remplace
   // les timers JS bridés par Chromium après 5 min d'écran éteint. Il relance
   // la boucle d'envoi et la reprise sans dépendre du WebView.
   useEffect(() => {
     if (step !== 'room') return;
+    const target = presenceTargetFor(roomId, myName);
     const off = window.globalshareMobile?.onServiceTick?.(() => {
-      mobileKeepAlive(true);
+      mobileKeepAlive(true, target);
       const socket = socketRef.current;
       if (socket && !socket.connected) socket.connect();
       managerRef.current?.resumeInterrupted();
@@ -811,17 +906,18 @@ export default function GlobalShare() {
       sendLoopRef.current?.();
     });
     return () => { if (typeof off === 'function') off(); };
-  }, [step, kickSendLoop]);
+  }, [step, roomId, myName, presenceTargetFor, kickSendLoop]);
 
   // Retour au premier plan : le listener vit pour toute la session salon (et
   // non dans l'effet hasActiveTransfers, qui se démontait dès que les transferts
   // passaient en `interrupted` — le retour au premier plan ne relançait rien).
   useEffect(() => {
     if (step !== 'room') return;
+    const target = presenceTargetFor(roomId, myName);
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       void keepScreenAwake();
-      mobileKeepAlive(true);
+      mobileKeepAlive(true, target);
       const socket = socketRef.current;
       if (socket && !socket.connected) socket.connect();
       managerRef.current?.resumeInterrupted();
@@ -829,7 +925,7 @@ export default function GlobalShare() {
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [step, kickSendLoop]);
+  }, [step, roomId, myName, presenceTargetFor, kickSendLoop]);
 
   // Rechargement de l'historique conservé (IndexedDB) au démarrage.
   useEffect(() => {
@@ -1373,8 +1469,9 @@ export default function GlobalShare() {
       // installation côté natif, au premier salon rejoint.
       mobileRequestBatteryExemption();
       // Réassérer le maintien natif : le service peut avoir été relancé par le
-      // système pendant la veille (START_STICKY) avec un état périmé.
-      mobileKeepAlive(true);
+      // système pendant la veille (START_STICKY) avec un état périmé. Le
+      // battement HTTP garde l'appareil en ligne même socket coupée.
+      mobileKeepAlive(true, presenceTargetFor(effectiveRoomId, effectiveName));
       // Retour en ligne : les transferts interrompus repartent d'eux-mêmes, le
       // temps que le pair se réenregistre dans le salon.
       setTimeout(() => managerRef.current?.resumeInterrupted(), 600);
@@ -1383,8 +1480,9 @@ export default function GlobalShare() {
       console.log('Disconnected:', reason);
       setConnectionStatus('disconnected');
       // Ne PAS couper le service ici : la coupure réseau est justement le
-      // moment où le wake lock doit rester pour permettre la reconnexion.
-      mobileKeepAlive(true);
+      // moment où le wake lock doit rester pour permettre la reconnexion, et
+      // où le battement de présence doit continuer.
+      mobileKeepAlive(true, presenceTargetFor(effectiveRoomId, effectiveName));
       // Le canal direct est caduc : il sera renégocié avec les mêmes
       // identités. Le transfert, lui, est conservé et reprendra au retour.
       Object.keys(peersRef.current).forEach(destroyPeer);
@@ -1393,7 +1491,7 @@ export default function GlobalShare() {
     });
     socket.on('connect_error', () => {
       setConnectionStatus('disconnected');
-      mobileKeepAlive(true);
+      mobileKeepAlive(true, presenceTargetFor(effectiveRoomId, effectiveName));
       if (!connectErrorShownRef.current) {
         connectErrorShownRef.current = true;
         setConnectErrorMessage('Impossible de se connecter au serveur.');
@@ -1429,6 +1527,9 @@ export default function GlobalShare() {
       setActivePeerId(prev => (prev && !next[prev] ? null : prev));
     });
     socket.on('user-joined', ({ id, name }) => {
+      // Le battement natif peut annoncer une arrivée avant que la socket de
+      // l'appareil ait fini de rejoindre : ne jamais s'ajouter soi-même.
+      if (id === (mySessionIdRef.current || socket.id)) return;
       // Le pair est déjà joignable par le relais : le marquer « connecté »
       // tout de suite. « connecting » ne doit durer que le temps de la
       // négociation directe, pas rester bloqué si elle échoue.
@@ -1437,6 +1538,7 @@ export default function GlobalShare() {
       setTimeout(() => managerRef.current?.reannounceFor(id), 600);
     });
     socket.on('user-left', (id) => {
+      if (id === (mySessionIdRef.current || socket.id)) return;
       setPeers(prev => { const next = { ...prev }; delete next[id]; return next; });
       setActivePeerId(prev => (prev === id ? null : prev));
       destroyPeer(id);
@@ -1454,7 +1556,7 @@ export default function GlobalShare() {
     socket.on('offer', onSignal);
     socket.on('answer', onSignal);
     socket.on('ice-candidate', onSignal);
-  }, [roomId, myName, ensureP2P, destroyPeer]);
+  }, [roomId, myName, presenceTargetFor, ensureP2P, destroyPeer]);
 
   // Onglet tué par le système puis restauré : on rejoint le dernier salon tout
   // seul, sinon le pair d'en face attendrait un code que personne ne retape.
@@ -1814,6 +1916,82 @@ export default function GlobalShare() {
     setDownloads([]);
     await clearStoredDownloads();
   }, [appSettings.confirmDelete, appSettings.language]);
+
+  // « Retirer la sélection » ne touche qu'à l'historique, comme le bouton
+  // unitaire : les fichiers enregistrés restent sur l'appareil.
+  const removeSelectedDownloads = useCallback(async () => {
+    const selected = downloads.filter(file => selectedFileKeys.has(file.id));
+    if (selected.length === 0) return;
+    if (appSettings.confirmDelete && !window.confirm(
+      translateSetting(appSettings.language, 'confirmRemoveSelected', { count: selected.length })
+    )) {
+      return;
+    }
+    const ids = new Set(selected.map(file => file.id));
+    ids.forEach(id => downloadBlobRef.current.delete(id));
+    setDownloads(prev => prev.filter(file => !ids.has(file.id)));
+    clearFileSelection();
+    await Promise.all([...ids].map(id => deleteStoredDownload(id)));
+    showToast('info', `${ids.size} fichier${ids.size > 1 ? 's' : ''} retiré${ids.size > 1 ? 's' : ''} de la liste.`);
+  }, [
+    downloads,
+    selectedFileKeys,
+    appSettings.confirmDelete,
+    appSettings.language,
+    clearFileSelection,
+    showToast,
+  ]);
+
+  const deleteDesktopFile = useCallback(async (file: ReceiveFolderFile) => {
+    if (!window.confirm(translateSetting(
+      appSettings.language, 'confirmDeleteDeviceFile', { name: file.name }
+    ))) {
+      return;
+    }
+    const result = await deleteReceiveFolderFiles([file.path]);
+    if (result.error) {
+      showToast('error', result.error);
+      return;
+    }
+    setDesktopFiles(prev => prev.filter(item => item.path !== file.path));
+    setSelectedFileKeys(prev => {
+      if (!prev.has(file.path)) return prev;
+      const next = new Set(prev);
+      next.delete(file.path);
+      return next;
+    });
+    showToast('success', `Supprimé : ${file.name}`);
+  }, [appSettings.language, showToast]);
+
+  // Suppression physique depuis l'onglet « Sur l'ordinateur » : c'est le seul
+  // endroit, avec le bouton unitaire ci-dessus, où des fichiers du disque sont
+  // effacés. La liste « Reçus » ne fait que retirer des entrées d'historique.
+  const deleteSelectedDesktopFiles = useCallback(async () => {
+    const paths = desktopFiles
+      .filter(file => selectedFileKeys.has(file.path))
+      .map(file => file.path);
+    if (paths.length === 0) return;
+    if (!window.confirm(translateSetting(
+      appSettings.language, 'confirmDeleteSelected', { count: paths.length }
+    ))) {
+      return;
+    }
+    const result = await deleteReceiveFolderFiles(paths);
+    clearFileSelection();
+    await refreshDesktopFiles();
+    if (result.error) showToast('warning', result.error);
+    else {
+      const done = result.deleted || paths.length;
+      showToast('success', `${done} fichier${done > 1 ? 's' : ''} supprimé${done > 1 ? 's' : ''}.`);
+    }
+  }, [
+    desktopFiles,
+    selectedFileKeys,
+    appSettings.language,
+    clearFileSelection,
+    refreshDesktopFiles,
+    showToast,
+  ]);
 
   // ---- Enregistrement des fichiers reçus ----
   // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
@@ -2280,6 +2458,13 @@ export default function GlobalShare() {
     if (files.length) enqueueFiles(files, activePeerId);
   };
 
+  // Clés de sélection des deux listes : identifiants d'historique d'un côté,
+  // chemins absolus du dossier de réception de l'autre.
+  const receivedKeys = downloads.map(file => file.id);
+  const desktopKeys = desktopFiles.map(file => file.path);
+  const selectedDownloadCount = downloads.filter(file => selectedFileKeys.has(file.id)).length;
+  const selectedDesktopCount = desktopFiles.filter(file => selectedFileKeys.has(file.path)).length;
+
   return (
     <div className="gs-app" onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDragOver={onDragOver} onDrop={onDrop}>
       <div className="gs-glow" aria-hidden="true" />
@@ -2456,6 +2641,28 @@ export default function GlobalShare() {
                     </button>
                   )}
                 </div>
+                {selectedDownloadCount > 0 && (
+                  <div className="gs-bulkbar" role="region" aria-label="Sélection de fichiers reçus">
+                    <span className="gs-bulkbar-count">
+                      {selectedDownloadCount} fichier{selectedDownloadCount > 1 ? 's' : ''} sélectionné{selectedDownloadCount > 1 ? 's' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost gs-dl--danger"
+                      onClick={() => void removeSelectedDownloads()}
+                    >
+                      <IconTrash className="gs-icon gs-icon--sm" />
+                      Retirer la sélection
+                    </button>
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost"
+                      onClick={clearFileSelection}
+                    >
+                      Désélectionner
+                    </button>
+                  </div>
+                )}
                 {downloads.length === 0 ? (
                   <div className="gs-empty">
                     <span className="gs-empty-icon" aria-hidden="true"><IconDownload /></span>
@@ -2469,12 +2676,28 @@ export default function GlobalShare() {
                   <div className="gs-list">
                     {downloads.map((f, i) => {
                       const kind = viewerKind(f.mime, f.name);
+                      const selected = selectedFileKeys.has(f.id);
                       return (
                         <article
                           key={f.id}
-                          className="gs-file gs-file--card"
+                          className={`gs-file gs-file--card gs-file--selectable${selected ? ' is-selected' : ''}`}
                           style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                          onClick={event => {
+                            if ((event.target as HTMLElement).closest('button, a, input')) return;
+                            toggleFileSelection(f.id, i, receivedKeys, event);
+                          }}
                         >
+                          <input
+                            type="checkbox"
+                            className="gs-select"
+                            checked={selected}
+                            readOnly
+                            aria-label={`Sélectionner ${f.name}`}
+                            onClick={event => {
+                              event.stopPropagation();
+                              toggleFileSelection(f.id, i, receivedKeys, event);
+                            }}
+                          />
                           {appSettings.showFileIcons && (
                             <span
                               className={`gs-file-icon${kind === 'audio' || kind === 'image' || kind === 'video' ? ` gs-file-icon--${kind}` : ''}`}
@@ -2588,6 +2811,28 @@ export default function GlobalShare() {
                     </button>
                   </div>
                 </div>
+                {selectedDesktopCount > 0 && (
+                  <div className="gs-bulkbar" role="region" aria-label="Sélection de fichiers sur l'ordinateur">
+                    <span className="gs-bulkbar-count">
+                      {selectedDesktopCount} fichier{selectedDesktopCount > 1 ? 's' : ''} sélectionné{selectedDesktopCount > 1 ? 's' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost gs-dl--danger"
+                      onClick={() => void deleteSelectedDesktopFiles()}
+                    >
+                      <IconTrash className="gs-icon gs-icon--sm" />
+                      Supprimer la sélection
+                    </button>
+                    <button
+                      type="button"
+                      className="gs-dl gs-dl--ghost"
+                      onClick={clearFileSelection}
+                    >
+                      Désélectionner
+                    </button>
+                  </div>
+                )}
                 {desktopFiles.length === 0 ? (
                   <div className="gs-empty">
                     <span className="gs-empty-icon" aria-hidden="true"><IconFolder /></span>
@@ -2601,12 +2846,28 @@ export default function GlobalShare() {
                   <div className="gs-list">
                     {desktopFiles.map((file, i) => {
                       const kind = viewerKind(mimeFromName(file.name), file.name);
+                      const selected = selectedFileKeys.has(file.path);
                       return (
                         <article
                           key={file.path}
-                          className="gs-file gs-file--card"
+                          className={`gs-file gs-file--card gs-file--selectable${selected ? ' is-selected' : ''}`}
                           style={{ animationDelay: `${Math.min(i, 5) * 45}ms` }}
+                          onClick={event => {
+                            if ((event.target as HTMLElement).closest('button, a, input')) return;
+                            toggleFileSelection(file.path, i, desktopKeys, event);
+                          }}
                         >
+                          <input
+                            type="checkbox"
+                            className="gs-select"
+                            checked={selected}
+                            readOnly
+                            aria-label={`Sélectionner ${file.name}`}
+                            onClick={event => {
+                              event.stopPropagation();
+                              toggleFileSelection(file.path, i, desktopKeys, event);
+                            }}
+                          />
                           <span
                             className={`gs-file-icon${kind === 'audio' || kind === 'image' || kind === 'video' ? ` gs-file-icon--${kind}` : ''}`}
                             aria-hidden="true"
@@ -2644,6 +2905,14 @@ export default function GlobalShare() {
                               >
                                 <IconFolder className="gs-icon gs-icon--sm" />
                                 Afficher dans le dossier
+                              </button>
+                              <button
+                                type="button"
+                                className="gs-dl gs-dl--ghost gs-dl--danger"
+                                onClick={() => void deleteDesktopFile(file)}
+                              >
+                                <IconTrash className="gs-icon gs-icon--sm" />
+                                Supprimer
                               </button>
                             </div>
                           </div>

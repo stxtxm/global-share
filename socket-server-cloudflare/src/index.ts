@@ -16,6 +16,13 @@ interface PendingBinary {
   remaining: number;
 }
 
+interface Presence {
+  roomId: string;
+  name: string;
+  lastSeen: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface Client {
   id: string;
   ws: WebSocket;
@@ -45,6 +52,12 @@ const MAX_NAME_LENGTH = 64;
 // instants. On laisse ce délai avant d'annoncer son départ au salon : revenir
 // dans ce laps de temps n'interrompt donc aucun transfert.
 const REJOIN_GRACE_MS = 30_000;
+// Battement de présence envoyé par le service Android en HTTP, hors WebView :
+// le WebView est suspendu en arrière-plan, la socket meurt, mais le service
+// continue de prouver que l'appareil est joignable. Le délai tolère six
+// battements manqués (toutes les 20 s) avant d'annoncer le départ, y compris
+// quand Doze retarde le service.
+const PRESENCE_TIMEOUT_MS = 120_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{6,64}$/;
 
 // The GitHub Pages origin and local development origins. Add any custom
@@ -160,6 +173,26 @@ export default {
       );
     }
 
+    if (url.pathname === '/presence') {
+      if (request.method !== 'POST') {
+        return new Response('Method not allowed.', { status: 405 });
+      }
+      if (!isAllowedOrigin(request.headers.get('Origin'))) {
+        return new Response('Origin not allowed.', { status: 403 });
+      }
+      // Le battement vient du service Android (hors WebView) : le Durable
+      // Object garde l'appareil « en ligne » même quand sa socket est morte.
+      const body = await request.text();
+      const id = env.ROOMS.idFromName('global');
+      return env.ROOMS.get(id).fetch(
+        new Request('https://do.internal/presence', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+        })
+      );
+    }
+
     if (url.pathname === '/turn') {
       return handleTurn(env, request.headers.get('Origin'));
     }
@@ -223,6 +256,8 @@ export class GlobalRoom {
   private rooms = new Map<string, Set<string>>();
   /** Départ différé : salon quitté et minuteur d'annonce, par identité. */
   private pendingLeaves = new Map<string, { roomId: string; timer: ReturnType<typeof setTimeout> }>();
+  /** Identités maintenues en ligne par le battement natif Android. */
+  private presence = new Map<string, Presence>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   async fetch(request: Request): Promise<Response> {
@@ -231,7 +266,27 @@ export class GlobalRoom {
       // Instantané des salons, demandé par le Worker (https://do.internal/rooms).
       const url = new URL(request.url);
       if (url.hostname === 'do.internal' && url.pathname === '/rooms') {
-        const rooms = [...this.rooms.entries()]
+        const counts = new Map<string, Set<string>>();
+        const add = (roomId: string, peerId: string) => {
+          let users = counts.get(roomId);
+          if (!users) {
+            users = new Set();
+            counts.set(roomId, users);
+          }
+          users.add(peerId);
+        };
+        for (const [roomId, ids] of this.rooms) {
+          for (const id of ids) {
+            const peer = this.sockets.get(id);
+            add(roomId, peer ? this.peerIdOf(peer) : id);
+          }
+        }
+        // Un appareil maintenu par le battement natif compte aussi, même sans
+        // socket : le salon ne doit pas paraître vide dans la liste d'accueil.
+        for (const [sessionId, entry] of this.presence) {
+          if (!this.bySession.has(sessionId)) add(entry.roomId, sessionId);
+        }
+        const rooms = [...counts.entries()]
           .filter(([, users]) => users.size > 0)
           .map(([room, users]) => ({ roomId: room, users: users.size }))
           .sort((a, b) => b.users - a.users || a.roomId.localeCompare(b.roomId))
@@ -239,6 +294,9 @@ export class GlobalRoom {
         return new Response(JSON.stringify({ rooms }), {
           headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
         });
+      }
+      if (url.hostname === 'do.internal' && url.pathname === '/presence') {
+        return this.handlePresence(request);
       }
       return new Response('Expected a WebSocket upgrade.', { status: 400 });
     }
@@ -430,6 +488,144 @@ export class GlobalRoom {
     }
   }
 
+  /**
+   * Battement HTTP du service Android : il prouve que l'appareil est joignable
+   * même quand le WebView est suspendu et que sa socket est morte. Sans lui,
+   * le salon affichait le téléphone hors ligne au bout de 30 s.
+   */
+  private async handlePresence(request: Request): Promise<Response> {
+    let payload: {
+      roomId?: unknown; sessionId?: unknown; name?: unknown; action?: unknown;
+    };
+    try {
+      payload = await request.json();
+    } catch {
+      return new Response(JSON.stringify({ error: 'invalid json' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    }
+
+    const roomId = typeof payload.roomId === 'string'
+      ? payload.roomId.trim().slice(0, MAX_ROOM_LENGTH)
+      : '';
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
+    if (!roomId || !SESSION_ID_PATTERN.test(sessionId)) {
+      return new Response(JSON.stringify({ error: 'invalid presence' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    }
+
+    if (payload.action === 'leave') {
+      this.dropPresence(sessionId, roomId);
+    } else {
+      const name = (typeof payload.name === 'string'
+        ? payload.name.trim().slice(0, MAX_NAME_LENGTH)
+        : '') || 'Appareil';
+      this.touchPresence(sessionId, roomId, name);
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+    });
+  }
+
+  /** Met à jour la présence ; annonce l'arrivée seulement si elle était absente. */
+  private touchPresence(sessionId: string, roomId: string, name: string): void {
+    const existing = this.presence.get(sessionId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      if (existing.roomId === roomId) {
+        existing.name = name;
+        existing.lastSeen = Date.now();
+        existing.timer = setTimeout(
+          () => this.expirePresence(sessionId),
+          PRESENCE_TIMEOUT_MS
+        );
+        return;
+      }
+      // Changement de salon : l'ancien doit apprendre le départ, le nouveau
+      // l'arrivée (sauf si une socket y est déjà).
+      this.presence.delete(sessionId);
+      this.broadcastEvent(existing.roomId, 'user-left', sessionId);
+    }
+
+    const live = this.bySession.get(sessionId);
+    const alreadyVisible = live?.room === roomId;
+    // Une socket en cours de départ ne doit pas annoncer un départ : le
+    // battement prouve que l'appareil est toujours là.
+    const pending = this.pendingLeaves.get(sessionId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingLeaves.delete(sessionId);
+    }
+
+    this.presence.set(sessionId, {
+      roomId,
+      name,
+      lastSeen: Date.now(),
+      timer: setTimeout(() => this.expirePresence(sessionId), PRESENCE_TIMEOUT_MS),
+    });
+
+    if (!alreadyVisible) {
+      this.broadcastEvent(roomId, 'user-joined', { id: sessionId, name });
+    }
+  }
+
+  /** La socket revient : on garde la présence sans rediffuser une arrivée. */
+  private refreshPresence(sessionId: string, roomId: string, name: string): void {
+    const existing = this.presence.get(sessionId);
+    if (!existing) return;
+    clearTimeout(existing.timer);
+    if (existing.roomId !== roomId) {
+      this.broadcastEvent(existing.roomId, 'user-left', sessionId);
+    }
+    existing.roomId = roomId;
+    existing.name = name;
+    existing.lastSeen = Date.now();
+    existing.timer = setTimeout(() => this.expirePresence(sessionId), PRESENCE_TIMEOUT_MS);
+  }
+
+  private refreshPresenceTimer(sessionId: string): void {
+    const existing = this.presence.get(sessionId);
+    if (!existing) return;
+    clearTimeout(existing.timer);
+    existing.lastSeen = Date.now();
+    existing.timer = setTimeout(() => this.expirePresence(sessionId), PRESENCE_TIMEOUT_MS);
+  }
+
+  /** Battement interrompu : l'appareil a vraiment quitté le salon. */
+  private expirePresence(sessionId: string): void {
+    const entry = this.presence.get(sessionId);
+    if (!entry) return;
+    this.presence.delete(sessionId);
+    if (this.bySession.has(sessionId)) return;
+    this.broadcastEvent(entry.roomId, 'user-left', sessionId);
+  }
+
+  /** Sortie volontaire (bouton Quitter) : départ immédiat, sans attendre. */
+  private dropPresence(sessionId: string, roomId?: string): void {
+    const entry = this.presence.get(sessionId);
+    if (!entry) return;
+    if (roomId && entry.roomId !== roomId) return;
+    clearTimeout(entry.timer);
+    this.presence.delete(sessionId);
+    if (this.bySession.has(sessionId)) return;
+    this.broadcastEvent(entry.roomId, 'user-left', sessionId);
+  }
+
+  /** Appareils présents uniquement grâce au battement natif (sans socket). */
+  private presenceOthers(roomId: string, excludeId?: string): { id: string; name: string }[] {
+    const others: { id: string; name: string }[] = [];
+    for (const [sessionId, entry] of this.presence) {
+      if (entry.roomId !== roomId || sessionId === excludeId) continue;
+      if (this.bySession.has(sessionId)) continue;
+      others.push({ id: sessionId, name: entry.name });
+    }
+    return others;
+  }
+
   private handleJoinRoom(client: Client, payload: unknown): void {
     if (!payload || typeof payload !== 'object') return;
     const { roomId, name, sessionId } = payload as {
@@ -450,6 +646,7 @@ export class GlobalRoom {
     // Identité stable entre deux connexions : un téléphone verrouillé perd sa
     // socket mais garde son identité, donc les transferts retrouvent le bon
     // pair au retour au lieu d'être annulés.
+    let presenceAlreadyHere = false;
     if (typeof sessionId === 'string' && SESSION_ID_PATTERN.test(sessionId)) {
       const previous = this.bySession.get(sessionId);
       if (previous && previous !== client) {
@@ -471,6 +668,11 @@ export class GlobalRoom {
       }
       client.peerId = sessionId;
       this.bySession.set(sessionId, client);
+      // Le battement natif a maintenu la présence pendant la coupure : on la
+      // conserve (et on annule son expiration) sans rediffuser une arrivée.
+      // S'il a déjà changé de salon, le nouveau doit au contraire la voir.
+      presenceAlreadyHere = this.presence.get(sessionId)?.roomId === cleanRoom;
+      this.refreshPresence(sessionId, cleanRoom, cleanName);
       // Revenu avant l'expiration du délai : le salon d'origine n'a jamais vu
       // le départ. Revenu dans un autre salon : l'ancien doit enfin l'apprendre.
       const pendingLeave = this.pendingLeaves.get(sessionId);
@@ -503,14 +705,25 @@ export class GlobalRoom {
           name: peer?.name ?? 'Appareil',
         };
       });
+    // Appareils maintenus en ligne par le service Android, sans socket : ils
+    // doivent apparaître dans la liste du nouveau venu.
+    for (const extra of this.presenceOthers(cleanRoom, client.peerId)) {
+      if (!others.some((peer) => peer.id === extra.id)) others.push(extra);
+    }
 
     this.sendEvent(client, 'room-users', others);
-    this.broadcastEvent(
-      cleanRoom,
-      'user-joined',
-      { id: this.peerIdOf(client), name: cleanName },
-      client.id
-    );
+    // Une présence déjà connue dans ce salon (battement natif) ne doit pas
+    // produire une seconde arrivée quand la socket revient. En revanche, une
+    // présence encore attachée à l'ancien salon vient de changer : le nouveau
+    // doit apprendre l'arrivée.
+    if (!presenceAlreadyHere) {
+      this.broadcastEvent(
+        cleanRoom,
+        'user-joined',
+        { id: this.peerIdOf(client), name: cleanName },
+        client.id
+      );
+    }
   }
 
   private handleSignal(client: Client, eventName: string, payload: unknown): void {
@@ -689,7 +902,15 @@ export class GlobalRoom {
 
     if (peerId) {
       if (this.bySession.get(peerId) === client) this.bySession.delete(peerId);
-      if (roomId) this.scheduleLeave(roomId, peerId);
+      if (roomId) {
+        if (this.presence.has(peerId)) {
+          // Le service Android continue de battre : ne pas annoncer le départ,
+          // seulement repousser l'échéance de présence.
+          this.refreshPresenceTimer(peerId);
+        } else {
+          this.scheduleLeave(roomId, peerId);
+        }
+      }
     } else if (roomId) {
       // Sans identité stable, pas de grâce de reconnexion possible : le départ
       // est annoncé immédiatement (sinon le salon garde un fantôme à jamais).

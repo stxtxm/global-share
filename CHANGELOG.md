@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.59] - 2026-11-28
+
+### Fixed
+- **Le téléphone ne réapparaît plus hors ligne quand l'APK est en arrière-plan.** Android suspend la socket du WebView dès qu'on ouvre une autre application ; les battements de la page s'arrêtent et le Worker annonçait le départ au bout de la grâce de reconnexion. Le service avant-plan émet maintenant son propre battement HTTP (`POST /presence`) avec l'identité stable du salon, indépendamment de la page. Le Worker garde l'appareil en ligne tant que ce battement arrive, tolère six battements manqués (2 min, y compris sous Doze), et le service envoie un départ explicite à la fermeture, à la sortie du salon et à la fin de la tâche.
+- **Le battement natif ne duplique plus l'arrivée d'un appareil déjà présent.** Une socket qui rejoint un salon déjà maintenu par la présence ne rediffuse pas `user-joined`, et la page ignore désormais une arrivée ou un départ à sa propre identité (le battement pouvait précéder la fin du join).
+
+### Added
+- **Sélection multiple dans les listes de fichiers du bureau.** `Ctrl`/`Cmd`+clic ajoute ou retire un fichier, `Maj`+clic sélectionne une plage, et une case à cocher rend la sélection accessible au clavier et au tactile. Une barre apparaît avec le nombre de fichiers sélectionnés.
+- **Actions groupées respectueuses du disque.** Dans **Reçus**, « Retirer la sélection » ne vide que l'historique, comme le bouton unitaire. Dans **Sur l'ordinateur**, « Supprimer la sélection » efface réellement les fichiers du dossier de réception, avec confirmation ; chaque fichier de cette liste gagne aussi un bouton **Supprimer** unitaire. Le processus principal vérifie que chaque chemin reste un fichier direct du dossier de réception et refuse les dossiers et liens symboliques.
+
+### Changed
+- `nativeVersion` passe à **13** sur Android et sur le bureau : le service Android et le pont Electron de suppression vivent hors du bundle web, l'APK et le paquet desktop complets sont nécessaires.
+
 ## [1.0.58] - 2026-11-28
 
 ### Fixed

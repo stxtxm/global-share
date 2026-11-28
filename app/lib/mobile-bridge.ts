@@ -18,7 +18,13 @@ interface GlobalShareNativePlugin {
   startTransfer(options: { count: number; progress: number }): Promise<unknown>;
   updateTransferProgress(options: { count: number; progress: number }): Promise<unknown>;
   stopTransfer(): Promise<unknown>;
-  keepAlive(options: { enabled: boolean }): Promise<unknown>;
+  keepAlive(options: {
+    enabled: boolean;
+    presenceUrl?: string;
+    roomId?: string;
+    sessionId?: string;
+    name?: string;
+  }): Promise<unknown>;
   requestBatteryExemption(): Promise<unknown>;
   saveDownload(options: {
     name: string; mime: string; bytes: string; uri?: string; append?: boolean;
@@ -201,6 +207,7 @@ export function mobileUpdateTransfer(count: number, progress: number): void {
 }
 
 export function mobileStopTransfer(): void {
+  presenceTarget = undefined;
   invoke(nativePlugin()?.stopTransfer());
 }
 
@@ -209,13 +216,33 @@ export function mobileFinishTransfer(): void {
   invoke(nativePlugin()?.updateTransferProgress({ count: 0, progress: 0 }));
 }
 
+export interface MobilePresenceTarget {
+  /** URL HTTP du battement (Worker /presence, ou serveur compatible). */
+  presenceUrl: string;
+  roomId: string;
+  sessionId: string;
+  name: string;
+}
+
+/** Cible conservée : les réappels (tick, retour au premier plan) n'ont pas
+ *  toujours le salon sous la main et doivent réutiliser la même identité. */
+let presenceTarget: MobilePresenceTarget | undefined;
+
 /**
  * Session salon connectée : maintient le service avant-plan (wake locks) pour
  * que la socket survive à l'arrière-plan et à la veille, même sans transfert.
+ * Le battement de présence est émis par le service natif, hors WebView : il
+ * continue même quand Android suspend la socket de la page.
  */
-export function mobileKeepAlive(enabled: boolean): void {
-  invoke(nativePlugin()?.keepAlive({ enabled }));
+export function mobileKeepAlive(enabled: boolean, target?: MobilePresenceTarget): void {
+  const plugin = nativePlugin();
+  if (!plugin) return;
+  if (target) presenceTarget = target;
+  const payload = target ?? presenceTarget;
+  if (!enabled) presenceTarget = undefined;
+  invoke(plugin.keepAlive({ enabled, ...(payload ?? {}) }));
 }
+
 
 /** État natif (wake locks, service) pour le diagnostic dans les réglages. */
 export function mobileServiceState(): Promise<unknown> | undefined {

@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('globalshareDesktop', {
   chooseDownloadFolder: () => ipcRenderer.invoke('globalshare:choose-download-folder'),
   resetDownloadFolder: () => ipcRenderer.invoke('globalshare:reset-download-folder'),
   listDownloads: () => ipcRenderer.invoke('globalshare:list-downloads'),
+  // Suppression physique depuis la liste « Sur l'ordinateur ». Le main vérifie
+  // que chaque chemin reste dans le dossier de réception.
+  deleteDownloads: (paths) => ipcRenderer.invoke('globalshare:delete-downloads', paths),
   openDownloadFolder: () => ipcRenderer.invoke('globalshare:open-download-folder'),
 
   // Nombre de transferts actifs : l'arrière-plan (anti-veille système) est

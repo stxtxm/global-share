@@ -528,6 +528,41 @@ function registerDownloadHandlers() {
     }
   });
 
+  // Suppression de fichiers depuis l'onglet « Sur l'ordinateur ». La page ne
+  // peut pas effacer un chemin arbitraire : chaque cible doit être un fichier
+  // direct du dossier de réception courant. Les dossiers et les liens
+  // symboliques sont refusés pour ne jamais suivre un chemin hors du dossier.
+  ipcMain.handle('globalshare:delete-downloads', async (_event, paths) => {
+    const folder = path.resolve(downloadsDir());
+    const targets = Array.isArray(paths) ? paths.slice(0, 500) : [];
+    if (targets.length === 0) return { deleted: 0 };
+    let deleted = 0;
+    const errors = [];
+    for (const value of targets) {
+      const target = path.resolve(String(value ?? ''));
+      if (path.dirname(target) !== folder) {
+        errors.push(`${path.basename(target)} : hors du dossier de réception`);
+        continue;
+      }
+      try {
+        const stat = await fs.promises.lstat(target);
+        if (!stat.isFile()) {
+          errors.push(`${path.basename(target)} : ce n'est pas un fichier`);
+          continue;
+        }
+        await fs.promises.unlink(target);
+        deleted += 1;
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          deleted += 1;
+          continue;
+        }
+        errors.push(`${path.basename(target)} : ${String(error?.message || error)}`);
+      }
+    }
+    return errors.length > 0 ? { deleted, errors } : { deleted };
+  });
+
   // Ouvre le dossier de réception dans le gestionnaire de fichiers du système.
   ipcMain.handle('globalshare:open-download-folder', () => openReceiveFolder());
 

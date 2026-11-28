@@ -7,6 +7,7 @@ import test from 'node:test';
 const DEFAULT = '/home/timo/Téléchargements/GlobalShare';
 let folder = DEFAULT;
 const calls: string[] = [];
+const deletedPaths: string[][] = [];
 const desktopFiles = [
   { path: `${DEFAULT}/photo.jpg`, name: 'photo.jpg', size: 2048, modified: 1_700_000_000_000 },
 ];
@@ -31,6 +32,11 @@ const desktopFiles = [
       return { path: folder, custom: false };
     },
     listDownloads: async () => ({ folder, files: desktopFiles }),
+    deleteDownloads: async (paths: string[]) => {
+      calls.push('delete');
+      deletedPaths.push(paths);
+      return { deleted: paths.length };
+    },
     openDownloadFolder: async () => {
       calls.push('openFolder');
       return '';
@@ -66,4 +72,12 @@ test('les fichiers du dossier de réception se listent et le dossier s ouvre', a
   assert.equal(listed.error, undefined);
   assert.equal(await receive.openReceiveFolder(), '');
   assert.ok(calls.includes('openFolder'));
+});
+
+test('la suppression physique passe les chemins au processus principal', async () => {
+  const paths = [`${DEFAULT}/photo.jpg`, `${DEFAULT}/video.mp4`];
+  const result = await receive.deleteReceiveFolderFiles(paths);
+  assert.deepEqual(result, { deleted: 2, error: undefined });
+  assert.deepEqual(deletedPaths.at(-1), paths);
+  assert.ok(calls.includes('delete'));
 });

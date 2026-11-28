@@ -16,6 +16,13 @@ import android.os.Looper;
 import android.os.PowerManager;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONObject;
 
 /**
  * Maintient la session quand l'app part en arrière-plan ou que l'écran se
@@ -26,6 +33,9 @@ import androidx.core.content.ContextCompat;
  *   doit rester actif, transfert en cours ou pas (sinon l'appareil s'endort,
  *   la socket tombe et les pairs nous voient partir). Réaffirmé : l'app est
  *   revenue au premier plan ou a quitté le salon → l'UI envoie keepAlive=false.
+ *   En plus des wake locks, un battement HTTP (/presence) part du service :
+ *   Android suspend la socket du WebView en arrière-plan, mais le service,
+ *   lui, continue de prouver au Worker que l'appareil est joignable.
  * - Les transferts : compteur affiché dans la notification (envoi et réception
  *   passent par le même compteur web).
  *
@@ -56,6 +66,26 @@ public final class TransferForegroundService extends Service {
      * recréation de l'activité, lève ce drapeau.
      */
     private static volatile boolean detached;
+    /** Le service tourne réellement (diagnostic : les drapeaux peuvent mentir). */
+    private static volatile boolean running;
+
+    /**
+     * Battement de présence HTTP, indépendant du WebView : en arrière-plan,
+     * Android suspend la socket du WebView mais laisse le service émettre des
+     * requêtes. Le Worker garde alors l'appareil en ligne dans le salon.
+     */
+    private static volatile String presenceUrl;
+    private static volatile String presenceRoom;
+    private static volatile String presenceSession;
+    private static volatile String presenceName;
+    private static volatile long lastPresenceAt;
+    private static final long PRESENCE_EVERY_MS = 20_000;
+    private static final ExecutorService presenceExecutor =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread thread = new Thread(r, "globalshare-presence");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     /** Le plugin relaie ce tick vers le WebView pour battre le throttling JS. */
     public interface TickListener { void onTick(); }
@@ -75,6 +105,9 @@ public final class TransferForegroundService extends Service {
                 // Un lock perdu (ROM agressive, service recréé) est repris ici.
                 acquireLocks();
                 showNotification();
+                // Preuve de vie hors WebView : le Worker ne nous déclare pas
+                // hors ligne quand seule la socket du WebView est suspendue.
+                requestPresence();
                 TickListener listener = tickListener;
                 if (listener != null) listener.onTick();
             } catch (Exception ignored) {
@@ -98,8 +131,88 @@ public final class TransferForegroundService extends Service {
         keepAlive = enabled;
         if (enabled) {
             requestStart(context);
-        } else if (activeTransfers == 0) {
-            stopService(context);
+            requestPresence();
+        } else {
+            // Sortie volontaire : prévenir le salon tout de suite, sans
+            // attendre l'expiration du battement (120 s).
+            requestPresenceLeave();
+            clearPresence();
+            if (activeTransfers == 0) stopService(context);
+        }
+    }
+
+    /** Cible du battement de présence transmise par le WebView. */
+    public static void setPresence(String url, String roomId, String sessionId, String name) {
+        if (url == null || roomId == null || sessionId == null) return;
+        if (!url.startsWith("https://") && !url.startsWith("http://")) return;
+        presenceUrl = url;
+        presenceRoom = roomId;
+        presenceSession = sessionId;
+        presenceName = name == null ? "Appareil" : name;
+        lastPresenceAt = 0;
+    }
+
+    private static void clearPresence() {
+        presenceUrl = null;
+        presenceRoom = null;
+        presenceSession = null;
+        presenceName = null;
+        lastPresenceAt = 0;
+    }
+
+    /** Envoie un battement si la session est active et le délai écoulé. */
+    private static void requestPresence() {
+        if (!sessionActive()) return;
+        final String url = presenceUrl;
+        final String room = presenceRoom;
+        final String session = presenceSession;
+        if (url == null || room == null || session == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastPresenceAt < PRESENCE_EVERY_MS) return;
+        lastPresenceAt = now;
+        final String name = presenceName;
+        presenceExecutor.execute(() -> postPresence(url, room, session, name, false));
+    }
+
+    /** Départ explicite : le Worker retire l'appareil du salon immédiatement. */
+    private static void requestPresenceLeave() {
+        final String url = presenceUrl;
+        final String room = presenceRoom;
+        final String session = presenceSession;
+        if (url == null || room == null || session == null) return;
+        final String name = presenceName;
+        presenceExecutor.execute(() -> postPresence(url, room, session, name, true));
+    }
+
+    private static void postPresence(
+            String url, String roomId, String sessionId, String name, boolean leave) {
+        HttpURLConnection connection = null;
+        try {
+            JSONObject body = new JSONObject();
+            body.put("roomId", roomId);
+            body.put("sessionId", sessionId);
+            body.put("name", name == null ? "Appareil" : name);
+            if (leave) body.put("action", "leave");
+
+            connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(5_000);
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("User-Agent", "GlobalShare-Android");
+            byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(payload.length);
+            try (OutputStream out = connection.getOutputStream()) {
+                out.write(payload);
+            }
+            // 404 sur un serveur plus ancien : ignoré, la socket reste la
+            // source de présence de secours.
+            connection.getResponseCode();
+        } catch (Exception ignored) {
+            // Réseau coupé : le prochain tick réessaiera.
+        } finally {
+            if (connection != null) connection.disconnect();
         }
     }
 
@@ -144,6 +257,8 @@ public final class TransferForegroundService extends Service {
         keepAlive = false;
         // L'interface est vivante : elle pourra redemander le service.
         detached = false;
+        requestPresenceLeave();
+        clearPresence();
         stopService(context);
     }
 
@@ -156,6 +271,8 @@ public final class TransferForegroundService extends Service {
      * reprend depuis IndexedDB à la réouverture de l'app.
      */
     public static void detach(Context context) {
+        requestPresenceLeave();
+        clearPresence();
         keepAlive = false;
         activeTransfers = 0;
         progress = 0;
@@ -169,7 +286,7 @@ public final class TransferForegroundService extends Service {
     }
 
     public static boolean isRunning() {
-        return !detached && (keepAlive || activeTransfers > 0);
+        return running && !detached && (keepAlive || activeTransfers > 0);
     }
 
     public static boolean isBatteryOptimized(android.content.Context context) {
@@ -208,6 +325,7 @@ public final class TransferForegroundService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        running = true;
         try {
             createChannel();
         } catch (Exception ignored) {
@@ -230,6 +348,8 @@ public final class TransferForegroundService extends Service {
             return START_NOT_STICKY;
         }
         if (ACTION_STOP.equals(intent.getAction())) {
+            requestPresenceLeave();
+            clearPresence();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -267,6 +387,8 @@ public final class TransferForegroundService extends Service {
 
     /** Arrêt complet : état statique, notification, verrous et service. */
     private void shutdown() {
+        requestPresenceLeave();
+        clearPresence();
         activeTransfers = 0;
         progress = 0;
         keepAlive = false;
@@ -387,6 +509,14 @@ public final class TransferForegroundService extends Service {
 
     @Override
     public void onDestroy() {
+        running = false;
+        // Filet de sécurité : si le service s'arrête sans passer par stop(),
+        // detach() ou shutdown(), le salon doit apprendre le départ tout de
+        // suite au lieu d'attendre l'expiration du battement.
+        if (presenceSession != null) {
+            requestPresenceLeave();
+            clearPresence();
+        }
         watchdog.removeCallbacks(watchdogTick);
         releaseLocks();
         super.onDestroy();

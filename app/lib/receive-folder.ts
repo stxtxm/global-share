@@ -32,6 +32,9 @@ interface DesktopReceiveFolderBridge {
   listDownloads?: () => Promise<{
     folder?: string; files?: ReceiveFolderFile[]; error?: string;
   }>;
+  deleteDownloads?: (paths: string[]) => Promise<{
+    deleted?: number; error?: string; errors?: string[];
+  }>;
   openDownloadFolder?: () => Promise<string>;
 }
 
@@ -68,6 +71,29 @@ export async function listReceiveFolderFiles(): Promise<{
     };
   } catch (error) {
     return { files: [], error: String(error) };
+  }
+}
+
+/**
+ * Supprime physiquement des fichiers du dossier de réception du bureau.
+ * L'onglet « Sur l'ordinateur » est le seul endroit où cette suppression est
+ * proposée : l'historique des fichiers reçus, lui, ne touche jamais au disque.
+ */
+export async function deleteReceiveFolderFiles(paths: string[]): Promise<{
+  deleted: number; error?: string;
+}> {
+  const desktop = desktopBridge();
+  if (typeof desktop?.deleteDownloads !== 'function') {
+    return { deleted: 0, error: 'Suppression indisponible : mettez l’application à jour.' };
+  }
+  try {
+    const result = await desktop.deleteDownloads(paths);
+    return {
+      deleted: result?.deleted ?? 0,
+      error: result?.error || result?.errors?.[0],
+    };
+  } catch (error) {
+    return { deleted: 0, error: String(error) };
   }
 }
 

@@ -180,13 +180,24 @@ public class GlobalShareNativePlugin extends Plugin {
     /**
      * Session salon ouverte : maintient le service avant-plan (wake locks +
      * notification) même sans transfert, pour que la socket survive à
-     * l'arrière-plan et à la veille. Appelé avec false quand l'app quitte le
-     * salon ou se déconnecte.
+     * l'arrière-plan et à la veille. Le service émet aussi le battement de
+     * présence HTTP (/presence) avec l'identité stable du salon. Appelé avec
+     * false quand l'app quitte le salon ou se ferme.
      */
     @PluginMethod
     public void keepAlive(PluginCall call) {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", Boolean.FALSE));
         if (enabled) {
+            // Le battement de présence part du service natif : en arrière-plan,
+            // la socket du WebView peut être suspendue sans que le salon nous
+            // déclare hors ligne.
+            String presenceUrl = call.getString("presenceUrl", null);
+            String roomId = call.getString("roomId", null);
+            String sessionId = call.getString("sessionId", null);
+            String name = call.getString("name", null);
+            if (presenceUrl != null && roomId != null && sessionId != null) {
+                TransferForegroundService.setPresence(presenceUrl, roomId, sessionId, name);
+            }
             // Android 13+ : la notification du service doit être autorisée
             // AVANT le premier startForeground, sinon le démarrage échoue.
             try {
