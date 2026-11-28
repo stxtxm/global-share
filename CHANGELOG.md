@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.57] - 2026-11-28
+
+### Fixed
+- **Le salon ne garde plus de pairs fantômes après une coupure.** Quand l'application perd la connexion puis la retrouve, la liste des pairs est remplacée par celle du salon : un appareil parti pendant la coupure disparaît de la liste, et ses transferts ne restent plus en attente d'un pair absent.
+- **Un appareil qui change de salon ne reste plus affiché dans l'ancien.** Si l'appareil revient dans un autre salon pendant le délai de reconnexion, le départ est annoncé à l'ancien salon au lieu d'être annulé.
+- **La liste des salons ouverts se rafraîchit au retour sur l'application.** Le rafraîchissement toutes les 10 secondes est suspendu en arrière-plan ; un retour à l'écran met la liste à jour tout de suite.
+
+### Changed
+- **Les notes de version restent visibles pendant le téléchargement** d'une mise à jour, pour pouvoir relire ce qu'on installe sans attendre la fin.
+- **Icône du tray (bureau) : glyphe monochrome sur fond transparent**, dans le style des icônes symboliques GNOME. La tuile colorée ressemblait à une icône d'application au milieu des autres indicateurs. La flèche d'envoi pendant un transfert garde le même poids.
+
+Ces changements vivent dans le bundle web et dans les ressources desktop : `nativeVersion` reste inchangé.
+
 ## [1.0.56] - 2026-11-28
 
 ### Fixed
