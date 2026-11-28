@@ -35,14 +35,17 @@ Quatre mécanismes se complètent :
    de l'activité (`attach()`). Le service n'est jamais relancé par le système
    (`START_NOT_STICKY`) : un service sans WebView ne pouvait rien faire et
    laissait sa notification affichée indéfiniment.
-3. **Tick natif → WebView** (watchdog du service, toutes les 10 s) : c'est le
-   point essentiel pour tenir « des heures en veille ». Chromium bride les
-   timers JS d'une page masquée à 1/s puis 1/min après 5 minutes (même avec un
-   wake lock CPU). Le watchdog natif, lui, continue de tourner : il réacquiert
-   les verrous si besoin, rafraîchit la notification et émet `serviceTick`. Le
-   WebView y réagit en reconnectant la socket, en relançant les transferts
-   interrompus et en appelant directement la boucle d'envoi — sans dépendre des
-   `setTimeout` bridés.
+3. **Tick natif → WebView** (watchdog du service : toutes les 10 s au repos,
+   toutes les 2 s pendant un transfert) : c'est le point essentiel pour tenir
+   « des heures en veille ». Chromium bride les timers JS d'une page masquée à
+   1/s puis 1/min après 5 minutes (même avec un wake lock CPU). Le watchdog
+   natif, lui, continue de tourner : il réacquiert les verrous si besoin,
+   rafraîchit la notification et émet `serviceTick`. Le WebView y réagit en
+   reconnectant la socket, en relançant les transferts interrompus et en
+   appelant directement la boucle d'envoi — sans dépendre des `setTimeout`
+   bridés. Chaque ACK relance d'ailleurs la boucle par un appel direct (et non
+   plus un `setTimeout(0)`) : le débit ne s'effondre plus quand l'écran est
+   éteint.
 4. **Reprise IndexedDB** (`app/lib/resume-store.ts`) : si Android tue quand même
    le processus (pression mémoire, Doze), si l'app est balayée ou fermée pendant
    un transfert, les chunks déjà reçus et les envois en cours sont conservés et
@@ -217,14 +220,19 @@ via `listDownloads()` dans l'onglet Téléchargements.
   fichiers (pas seulement le FLAC). « Fichiers » ouvre directement le dossier
   `Téléchargements/GlobalShare` dans l'app du système ; « Écouter » affiche un
   choisir d'application.
-- Les listes restent synchronisées : « Fichiers reçus » → « Retirer » ou « Tout
-  effacer » supprime aussi les fichiers sur le disque et rafraîchit « Sur
-  cet appareil » ; « Sur cet appareil » → « Supprimer » ou « Effacer tout »
-  supprime les fichiers reçus demandés ; l'autre liste est rafraîchie dès le
-  retour dans l'onglet Téléchargements.
-- **Retirer** supprime aussi le fichier du stockage partagé via
-  `deleteDownload()` (URI MediaStore, ou recherche par nom pour les anciennes
-  entrées) : l'historique et le fichier sur le téléphone restent cohérents.
+- **« Tout supprimer » ne vide que l'historique.** Les fichiers déjà enregistrés
+  dans `Téléchargements/GlobalShare` restent sur le téléphone : vider la liste
+  des fichiers reçus est un rangement d'affichage, pas une suppression. Ils
+  continuent d'apparaître dans « Sur le téléphone », d'où on peut les ouvrir ou
+  les effacer explicitement.
+- **Retirer** (une seule ligne) ne retire que l'entrée de l'historique : le
+  fichier reste dans `Téléchargements/GlobalShare` et dans « Sur le téléphone ».
+  La suppression réelle est réservée à cet onglet (`deleteDownload()`, URI
+  MediaStore ou recherche par nom pour les anciennes entrées).
+- Les listes restent synchronisées : « Sur le téléphone » → « Supprimer » ou
+  « Effacer tout » supprime les fichiers du disque et rafraîchit « Fichiers
+  reçus » ; l'autre liste est rafraîchie dès le retour dans l'onglet
+  Téléchargements.
 - Une section **« Sur cet appareil »** dans l'onglet Téléchargements liste les
   fichiers réellement présents dans `Téléchargements/GlobalShare`, lus via
   `listDownloads()` (MediaStore, ou le dossier public sur Android ≤ 9). C'est la
@@ -261,6 +269,13 @@ avant-plan (arrêt à la fermeture de l'app, et transfert en cours préservé) s
 natives. Un bundle web ne les contient pas : l'APK complet doit être installé.
 (La v1.0.48, qui portait une première version de ce correctif avec
 `nativeVersion` 8, n'a jamais été publiée.)
+
+Depuis la **v1.0.58**, `nativeVersion` passe à **12** : le tick natif du
+service descend à 2 s pendant un transfert, pour que le WebView traite les
+chunks et les ACK même écran éteint. Le paquet desktop passe à **11**
+(`backgroundThrottling: false` dans le processus principal). Un bundle web
+seul ne peut pas modifier ces réveils : l'APK et le paquet complets sont
+nécessaires.
 
 Depuis la **v1.0.41**, `nativeVersion` passe à **7** : la coquille Electron a
 changé (tray Linux/GNOME, repli minimisé) et le compteur est commun au bureau et

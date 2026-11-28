@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.58] - 2026-11-28
+
+### Fixed
+- **Les transferts continuent quand l'application n'est plus à l'écran.** La boucle d'envoi n'attend plus un `setTimeout` — bridé à environ un réveil par minute par Chromium quand l'écran du téléphone est éteint ou la fenêtre du bureau masquée. Chaque accusé de réception la relance par un appel direct, et un ACK arrivé pendant une passe est rejoué juste après : le débit ne s'effondre plus et la barre ne reste plus à 0 %.
+- **Un pair joignable n'affiche plus « Connexion… » indéfiniment.** Le relais est utilisable dès l'arrivée dans le salon : le pair est marqué connecté tout de suite, et une négociation directe qui échoue retombe proprement sur « Relais » au lieu de laisser la liste et l'envoi bloqués sur un état qui n'arrive jamais.
+- **Le serveur ne coupe plus une socket pour un seul pong manqué.** Un gros chunk en cours de traitement, un GC ou un changement de réseau peut retarder la réponse de quelques secondes : le Worker laisse désormais un intervalle complet de grâce (50 s) avant de fermer, au lieu de 25 s. C'était la cause des déconnexions dites « serveur » en plein transfert.
+- **La fenêtre de bureau ne ralentit plus en arrière-plan.** Electron bride par défaut les minuteurs d'une fenêtre masquée ou minimisée (`backgroundThrottling`) : la reconnexion, les ACK et la boucle d'envoi s'arrêtaient alors que la socket restait ouverte. Le renderer tourne maintenant à plein régime fenêtre cachée.
+- **« Tout supprimer » et « Retirer » ne suppriment plus les fichiers.** L'historique des fichiers reçus n'est qu'une vue : ces actions vident la liste et les blobs conservés, sans toucher aux fichiers de `Téléchargements/GlobalShare` (Android) ni du dossier de réception (bureau). La suppression physique reste dans « Sur le téléphone » / « Sur l'ordinateur », avec une confirmation qui l'annonce clairement.
+
+### Changed
+- **Barre de progression et cartes de transfert apaisées.** Le balayage lumineux toutes les 0,9 s, le halo qui traversait la carte, les badges qui sautaient et le reflet qui courait derrière la barre sont supprimés. Place à un dégradé fixe, une transition douce et un reflet statique d'un pixel, lisibles sans clignotement ; les états pause, file et interruption gardent leur couleur.
+- `nativeVersion` Android passe à **12** et `nativeVersion` desktop à **11** : le tick natif à 2 s et le réglage Electron vivent hors du bundle web, l'APK et le paquet desktop complets sont nécessaires.
+
 ## [1.0.57] - 2026-11-28
 
 ### Fixed

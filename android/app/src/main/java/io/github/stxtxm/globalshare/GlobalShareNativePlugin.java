@@ -88,8 +88,9 @@ public class GlobalShareNativePlugin extends Plugin {
             scheduled = true;
             mainHandler.postDelayed(periodicCheck, FIRST_CHECK_DELAY_MS);
         }
-        // Le service émet un tick toutes les 10 s : on le relaie vers le JS,
-        // dont les timers sont bridés quand l'écran est éteint (veille).
+        // Le service émet un tick toutes les 10 s au repos (2 s pendant un
+        // transfert) : on le relaie vers le JS, dont les timers sont bridés
+        // quand l'écran est éteint (veille).
         // Le service peut survivre à l'interface (transfert en cours après
         // fermeture de l'app) : un tick envoyé à un bridge détruit ne doit pas
         // lever d'exception sur le thread principal.

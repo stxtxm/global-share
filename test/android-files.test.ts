@@ -30,8 +30,8 @@ test('le manifeste rend les gestionnaires visibles sur Android 11+', () => {
 });
 
 test('la surface native a changé : nativeVersion est incrémenté', () => {
-  // v1.0.52 : choix du dossier de réception (sélecteur SAF + écriture).
-  assert.equal(pkg.nativeVersion, 11);
+  // v1.0.58 : tick natif à 2 s pendant un transfert (service avant-plan).
+  assert.equal(pkg.nativeVersion, 12);
 });
 
 test('deleteDownload supprime le fichier MediaStore ou le fichier legacy', () => {

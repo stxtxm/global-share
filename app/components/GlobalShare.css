@@ -1434,19 +1434,50 @@
   height: 6px;
   border-radius: 999px;
   background: var(--gs-surface-strong);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035);
   overflow: hidden;
   position: relative;
 }
 
 .gs-bar-fill {
+  position: relative;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--gs-accent), var(--gs-accent-2));
-  transition: width 0.22s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.15s ease;
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.28);
+  transition: width 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/* Reflet fixe d'un pixel : donne du relief sans le moindre clignotement. */
+.gs-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 1px 1px auto;
+  height: 1px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+}
+
+.gs-bar-fill--queued {
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.7), rgba(167, 139, 250, 0.95));
+  box-shadow: 0 0 8px rgba(167, 139, 250, 0.22);
+}
+
+.gs-bar-fill--paused {
+  background: linear-gradient(90deg, #d97706, #fbbf24);
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.2);
+}
+
+.gs-bar-fill--interrupted {
+  background: linear-gradient(90deg, #e11d48, #fb7185);
+  box-shadow: 0 0 8px rgba(251, 113, 133, 0.2);
+}
+
+.gs-bar-fill--completed,
 .gs-bar-fill.is-done {
   background: linear-gradient(90deg, var(--gs-success), var(--gs-accent-2));
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.3);
 }
 
 
@@ -1569,30 +1600,6 @@
   background: rgba(167, 139, 250, 0.26);
 }
 
-
-/* Animation de la barre de progression : une lueur qui double rien,
-   juste un feedback visuel subtil sur les transferts en cours. */
-.gs-bar-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
-  transform: translateX(105%);
-  animation: gs-bar-bandeau 0.55s ease-in-out infinite;
-}
-
-@keyframes gs-bar-bandeau {
-  to { transform: translateX(-25%); }
-}
-
-.gs-bar-fill.is-done::after {
-  display: none;
-}
-
-.gs-bar-fill.is-done {
-  background: linear-gradient(90deg, var(--gs-success), var(--gs-accent-2));
-}
 
 /* --- Onglets Salon / Téléchargements ------------------------------------- */
 .gs-tabs {
@@ -2904,10 +2911,8 @@ html.gs-theme--light .gs-overlay {
 .gs-queue-badge{
   flex:none;min-width:52px;height:38px;padding:0 10px;display:grid;place-items:center;border-radius:12px;
   background:linear-gradient(135deg,var(--gs-accent),var(--gs-accent-2));color:#0a0b10;font-weight:800;font-size:.9rem;
-  font-variant-numeric:tabular-nums;box-shadow:0 10px 22px -12px rgba(167,139,250,.9);
-  animation:gs-badge-pulse 2.2s ease-in-out infinite;
+  font-variant-numeric:tabular-nums;box-shadow:0 8px 18px -12px rgba(167,139,250,.7);
 }
-@keyframes gs-badge-pulse{0%,100%{transform:scale(1);filter:brightness(1)}50%{transform:scale(1.04);filter:brightness(1.12)}}
 .gs-queue-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 .gs-queue-text strong{font-size:.92rem;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gs-queue-text span{font-size:.74rem;color:var(--gs-dim);font-variant-numeric:tabular-nums}
@@ -2921,29 +2926,14 @@ html.gs-theme--light .gs-overlay {
 }
 @keyframes gs-transfer-in{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}
 .gs-transfer--transferring{
-  border-color:rgba(34,211,238,.34);
-  box-shadow:0 0 0 1px rgba(34,211,238,.08),0 18px 34px -30px rgba(34,211,238,.55);
+  border-color:rgba(34,211,238,.24);
+  background:linear-gradient(135deg,rgba(34,211,238,.05),transparent 60%),var(--gs-surface);
+  box-shadow:0 14px 30px -30px rgba(34,211,238,.5);
 }
-.gs-transfer--transferring::before{
-  content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;
-  background:linear-gradient(110deg,transparent 32%,rgba(34,211,238,.075) 50%,transparent 68%);
-  background-size:220% 100%;animation:gs-flow 2.8s linear infinite;
-}
-@keyframes gs-flow{from{background-position:180% 0}to{background-position:-40% 0}}
 .gs-transfer--queued{
-  border-style:dashed;border-color:rgba(167,139,250,.36);
-  background:linear-gradient(135deg,rgba(167,139,250,.08),transparent 55%),var(--gs-surface);
-  position:relative;
+  border-style:dashed;border-color:rgba(167,139,250,.32);
+  background:linear-gradient(135deg,rgba(167,139,250,.06),transparent 55%),var(--gs-surface);
 }
-.gs-transfer--queued::after{
-  content:'';position:absolute;inset:-1px;border-radius:inherit;pointer-events:none;
-  border:1px dashed rgba(167,139,250,.45);
-  background:linear-gradient(90deg,transparent,rgba(167,139,250,.16),transparent);
-  background-size:200% 100%;animation:gs-march 3s linear infinite;
-  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;padding:1px;
-}
-@keyframes gs-march{from{background-position:200% 0}to{background-position:-100% 0}}
 .gs-transfer--paused{border-color:rgba(251,191,36,.32)}
 .gs-transfer--interrupted{border-color:rgba(251,113,133,.4);animation:gs-transfer-in .42s cubic-bezier(.22,.61,.36,1) both,gs-shake .45s ease}
 @keyframes gs-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
@@ -2958,10 +2948,8 @@ html.gs-theme--light .gs-overlay {
   background:var(--gs-surface-strong);color:var(--gs-dim);border:1px solid var(--gs-border);
   transition:transform .2s ease,background .2s ease,color .2s ease;
 }
-.gs-transfer--transferring .gs-transfer-badge{color:var(--gs-accent-2);background:rgba(34,211,238,.13);border-color:rgba(34,211,238,.4);animation:gs-badge-spin 2.4s ease-in-out infinite}
-@keyframes gs-badge-spin{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
-.gs-transfer--queued .gs-transfer-badge{color:var(--gs-accent);background:rgba(167,139,250,.13);border-color:rgba(167,139,250,.4);animation:gs-badge-tick 1.8s ease-in-out infinite}
-@keyframes gs-badge-tick{0%,100%{transform:rotate(0)}50%{transform:rotate(18deg)}}
+.gs-transfer--transferring .gs-transfer-badge{color:var(--gs-accent-2);background:rgba(34,211,238,.13);border-color:rgba(34,211,238,.32)}
+.gs-transfer--queued .gs-transfer-badge{color:var(--gs-accent);background:rgba(167,139,250,.13);border-color:rgba(167,139,250,.32)}
 .gs-transfer--paused .gs-transfer-badge{color:var(--gs-warning);background:rgba(251,191,36,.13);border-color:rgba(251,191,36,.4)}
 .gs-transfer--interrupted .gs-transfer-badge{color:var(--gs-danger);background:rgba(251,113,133,.13);border-color:rgba(251,113,133,.4)}
 .gs-transfer--completed .gs-transfer-badge{color:#0a0b10;background:linear-gradient(135deg,var(--gs-success),var(--gs-accent-2));border-color:transparent;animation:gs-pop .5s cubic-bezier(.34,1.56,.64,1)}
@@ -2975,31 +2963,8 @@ html.gs-theme--light .gs-overlay {
 .gs-transfer--paused .gs-transfer-pct{color:var(--gs-warning)}
 .gs-transfer--interrupted .gs-transfer-pct{color:var(--gs-danger)}
 
-.gs-bar{height:8px;overflow:hidden;position:relative}
-.gs-bar-fill{
-  position:relative;height:100%;border-radius:inherit;overflow:hidden;
-  background:linear-gradient(90deg,var(--gs-accent),var(--gs-accent-2),var(--gs-accent));
-  background-size:200% 100%;animation:gs-bar-flow 2.6s linear infinite;
-  transition:width .3s cubic-bezier(.22,.61,.36,1);
-  box-shadow:0 0 14px rgba(139,92,246,.5);
-}
-@keyframes gs-bar-flow{from{background-position:0% 0}to{background-position:200% 0}}
-.gs-bar-fill::after{
-  content:'';position:absolute;inset:0;border-radius:inherit;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.32),transparent);
-  background-size:200% 100%;animation:gs-shine .9s linear infinite;
-}
-@keyframes gs-shine{from{background-position:180% 0}to{background-position:-80% 0}}
-.gs-bar-fill--queued{background:linear-gradient(90deg,var(--gs-accent),var(--gs-accent));animation:gs-bar-queued 1.6s ease-in-out infinite}
-@keyframes gs-bar-queued{0%,100%{opacity:.55}50%{opacity:1}}
-.gs-bar-fill--paused{background:linear-gradient(90deg,#f59e0b,#fbbf24);animation:none}
-.gs-bar-fill--interrupted{background:linear-gradient(90deg,#e11d48,#fb7185);animation:none}
-.gs-bar-fill--completed,.gs-bar-fill.is-done{background:linear-gradient(90deg,var(--gs-success),var(--gs-accent-2));animation:none;box-shadow:0 0 16px rgba(52,211,153,.55)}
-.gs-bar-ghost{position:absolute;left:0;top:0;height:100%;border-radius:inherit;background:rgba(255,255,255,.14);filter:blur(6px);transition:width .5s ease .15s;pointer-events:none}
-
 .gs-sparkline{width:100%;height:28px;color:var(--gs-accent-2);opacity:.9;display:block}
-.gs-sparkline.is-active{animation:gs-spark-glow 1.6s ease-in-out infinite}
-@keyframes gs-spark-glow{0%,100%{opacity:.75}50%{opacity:1}}
+.gs-sparkline.is-active{opacity:1}
 .gs-transfer-details{
   display:flex;flex-direction:column;gap:10px;padding-top:10px;border-top:1px solid var(--gs-border);
   animation:gs-details-in .28s cubic-bezier(.22,.61,.36,1) both;
@@ -3030,11 +2995,10 @@ html.gs-theme--light .gs-overlay {
 .gs-drop-card span{font-size:.82rem;color:var(--gs-dim);line-height:1.5}
 
 .gs-minibar-track--animated .gs-bar{height:6px}
-.gs-minibar{animation:gs-minibar-in .26s cubic-bezier(.22,.61,.36,1),gs-minibar-glow 3s ease-in-out infinite}
-@keyframes gs-minibar-glow{0%,100%{box-shadow:var(--gs-shadow)}50%{box-shadow:0 22px 44px -24px rgba(167,139,250,.45)}}
+.gs-minibar{animation:gs-minibar-in .26s cubic-bezier(.22,.61,.36,1)}
 
 @media (prefers-reduced-motion:reduce){
-  .gs-transfer,.gs-queue,.gs-transfer-details,.gs-drop-card{animation:none}
-  .gs-bar-fill,.gs-bar-fill::after,.gs-transfer--transferring::before,.gs-transfer-badge,.gs-queue-badge,.gs-minibar{animation:none}
+  .gs-transfer,.gs-queue,.gs-transfer-details,.gs-drop-card,.gs-minibar{animation:none}
   .gs-bar-fill{transition:none}
+  .gs-transfer.is-complete::after{animation:none}
 }

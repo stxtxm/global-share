@@ -1,5 +1,6 @@
 // Historique des téléchargements : nommage sûr, déduplication et purge.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   DOWNLOAD_LIMITS,
@@ -11,6 +12,33 @@ import {
   viewerKind,
   type StoredDownload,
 } from '../app/lib/downloads.ts';
+
+const root = new URL('..', import.meta.url).pathname;
+const globalShare = readFileSync(`${root}app/components/GlobalShare.tsx`, 'utf8');
+
+/** Corps d'un callback de GlobalShare, pour vérifier ce qu'il déclenche. */
+function callbackBody(name: string): string {
+  const start = globalShare.indexOf(`const ${name} = useCallback`);
+  assert.ok(start > 0, `${name} introuvable`);
+  const end = globalShare.indexOf('}, [appSettings.confirmDelete', start);
+  assert.ok(end > start, `fin de ${name} introuvable`);
+  return globalShare.slice(start, end);
+}
+
+test('« Tout supprimer » ne vide que l’historique, pas les fichiers reçus', () => {
+  const body = callbackBody('clearDownloadHistory');
+  // Vider la liste ne doit jamais appeler la suppression native ni toucher au
+  // dossier de réception : les fichiers restent sur le téléphone ou le disque.
+  assert.doesNotMatch(body, /mobileDeleteDownload|deleteDownload|deleteStoredDownload/);
+  assert.match(body, /clearStoredDownloads\(\)/);
+});
+
+test('« Retirer » ne supprime que l’entrée, pas le fichier', () => {
+  const body = callbackBody('removeDownload');
+  // Seul l'onglet « Sur le téléphone » efface le fichier du disque.
+  assert.doesNotMatch(body, /mobileDeleteDownload/);
+  assert.match(body, /await deleteStoredDownload\(record\.id\)/);
+});
 
 test('mimeFromName reconnaît le FLAC et les formats audio courants', () => {
   assert.equal(mimeFromName('album.flac'), 'audio/flac');

@@ -90,11 +90,11 @@ const CHUNK_SIZE_LAN = 512 * 1024;
 const P2P_BUFFERED_LIMIT = 4 * 1024 * 1024;
 // Relais : ne pas enfoncer plus d'un mégaoctet dans la socket WebSocket. Le
 // pong de keepalive voyage dans la même socket : derrière 6 Mo de chunks à
-// 250 Ko/s il met 24 s à remonter, alors que le Worker coupe la connexion
-// après `pingTimeout` (20 s) sans pong. Le transfert repartait alors de zéro en
-// boucle — c'est ce qui rendait le relais « lent puis cassé » entre deux
-// réseaux. En gardant la socket presque vide, le pong repasse tout de suite et
-// le débit reste celui du lien.
+// 250 Ko/s il met 24 s à remonter, soit un ping manqué. Le Worker ne tolère
+// qu'un intervalle de grâce avant de fermer, et le transfert repartait alors
+// de zéro en boucle — c'est ce qui rendait le relais « lent puis cassé » entre
+// deux réseaux. En gardant la socket presque vide, le pong repasse tout de
+// suite et le débit reste celui du lien.
 const RELAY_BUFFERED_LIMIT = 1024 * 1024;
 
 /** Octets déjà en attente d'écriture sur la socket de signalisation. */
@@ -227,7 +227,7 @@ function SpeedSparkline({ history, active }: { history: number[]; active: boolea
   );
 }
 
-/** Barre de progression avec dégradé animé et balayage lumineux. */
+/** Barre de progression sobre : un dégradé fixe, aucun balayage clignotant. */
 function TransferBar({ progress, status }: { progress: number; status: string }) {
   return (
     <div className="gs-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
@@ -235,7 +235,6 @@ function TransferBar({ progress, status }: { progress: number; status: string })
         className={`gs-bar-fill gs-bar-fill--${status}${progress >= 100 ? ' is-done' : ''}`}
         style={{ width: `${progress}%` }}
       />
-      <div className="gs-bar-ghost" style={{ width: `${progress}%` }} aria-hidden="true" />
     </div>
   );
 }
@@ -569,7 +568,7 @@ export default function GlobalShare() {
   // centaines de Mo sur un téléphone pour une sélection de gros fichiers.
   const sendHashChainRef = useRef<Promise<unknown>>(Promise.resolve());
   const sendLoopRef = useRef<(() => void) | null>(null);
-  const sendLoopKickRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendLoopKickPendingRef = useRef(false);
   // Valeur courante du réglage « Tentatives », lue à la création du manager :
   // un effet séparé ne suffisait pas après une reconnexion (manager recréé).
   const maxRetriesRef = useRef(DEFAULT_SETTINGS.maxRetries);
@@ -742,13 +741,17 @@ export default function GlobalShare() {
   }, [hasActiveTransfers]);
 
   const kickSendLoop = useCallback(() => {
-    // Ne jamais ignorer un kick : en veille, les signaux d'ACK sont rares et
-    // chacun doit pouvoir relancer la boucle. On réarme simplement le timer.
-    if (sendLoopKickRef.current !== null) clearTimeout(sendLoopKickRef.current);
-    sendLoopKickRef.current = setTimeout(() => {
-      sendLoopKickRef.current = null;
-      sendLoopRef.current?.();
-    }, 0);
+    // Appel direct, sans setTimeout : écran éteint (Android) ou fenêtre
+    // masquée (Electron), Chromium bride les minuteurs à ~1/min. Chaque ACK
+    // reprogrammait pourtant la boucle par un timer de 0 ms : le transfert
+    // avançait par à-coups d'un bloc par minute. Le verrou de sendLoop absorbe
+    // les appels concurrents, et un kick reçu pendant une passe est rejoué à
+    // sa sortie : aucun ACK n'est perdu, même sans minuteur.
+    if (sendLoopRunningRef.current) {
+      sendLoopKickPendingRef.current = true;
+      return;
+    }
+    sendLoopRef.current?.();
   }, []);
 
   // Android : le service avant-plan et le wake lock partiel maintiennent le
@@ -1088,7 +1091,6 @@ export default function GlobalShare() {
           transferTimeoutRef.current = setTimeout(() => sendLoop(), 250);
           return;
         }
-        let anyLan = false;
         for (const sendT of activeSends) {
           const file = fileRefs.current.get(sendT.id);
           if (!file) continue;
@@ -1097,7 +1099,6 @@ export default function GlobalShare() {
             continue;
           }
           const lan = lanPeersRef.current.has(sendT.targetId) && sendT.method === 'p2p';
-          if (lan) anyLan = true;
           const byteTarget = 6 * 1024 * 1024;
           const byBytes = Math.max(4, Math.floor(byteTarget / sendT.chunkSize));
           const rttFactor = sendT.rttMs > 0 ? Math.min(1, 600 / Math.max(600, sendT.rttMs)) : 1;
@@ -1121,16 +1122,24 @@ export default function GlobalShare() {
             sendT.nextSeq++;
           }
         }
-        transferTimeoutRef.current = setTimeout(() => sendLoop(), anyLan ? 0 : 2);
+        // Filet de sécurité seulement : chaque ACK relance la passe
+        // directement, sans attendre ce minuteur (bridé à ~1/min écran
+        // éteint). Une passe par seconde suffit à récupérer d'un ACK perdu.
+        transferTimeoutRef.current = setTimeout(() => sendLoop(), 1_000);
       } finally {
         sendLoopRunningRef.current = false;
+        // Un ACK arrivé pendant cette passe a été mis en attente : on rejoue
+        // la boucle tout de suite, sans dépendre d'un minuteur bridé.
+        if (sendLoopKickPendingRef.current) {
+          sendLoopKickPendingRef.current = false;
+          queueMicrotask(() => sendLoopRef.current?.());
+        }
       }
     };
     void sendLoop();
     return () => {
       if (transferTimeoutRef.current) clearTimeout(transferTimeoutRef.current);
-      if (sendLoopKickRef.current) clearTimeout(sendLoopKickRef.current);
-      sendLoopKickRef.current = null;
+      sendLoopKickPendingRef.current = false;
       sendLoopRef.current = null;
     };
     // Ne dépend volontairement plus de `transfers` : chaque tick de progression
@@ -1212,8 +1221,11 @@ export default function GlobalShare() {
         clearTimeout(timer);
         delete p2pTimersRef.current[peerId];
       }
+      // Le canal direct a échoué mais le relais fonctionne : le pair reste
+      // joignable. Sans ce status, la liste affichait « Connexion… » à vie et
+      // l'envoi attendait un état qui n'arrivait jamais.
       setPeers(prev => (prev[peerId]
-        ? { ...prev, [peerId]: { ...prev[peerId], method: 'relay' } }
+        ? { ...prev, [peerId]: { ...prev[peerId], method: 'relay', status: 'connected' } }
         : prev));
     };
 
@@ -1417,7 +1429,10 @@ export default function GlobalShare() {
       setActivePeerId(prev => (prev && !next[prev] ? null : prev));
     });
     socket.on('user-joined', ({ id, name }) => {
-      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
+      // Le pair est déjà joignable par le relais : le marquer « connecté »
+      // tout de suite. « connecting » ne doit durer que le temps de la
+      // négociation directe, pas rester bloqué si elle échoue.
+      setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connected', method: 'relay' } }));
       void ensureP2P(id, (mySessionIdRef.current || socket.id || '') < id);
       setTimeout(() => managerRef.current?.reannounceFor(id), 600);
     });
@@ -1768,31 +1783,21 @@ export default function GlobalShare() {
   }, [showToast]);
 
   const removeDownload = useCallback(async (record: DownloadRecord) => {
-    // Sur Android, la ligne ne doit disparaître qu'une fois le fichier
-    // réellement supprimé : sinon « Retirer » donne l'illusion d'un ménage
-    // alors que le fichier reste dans Téléchargements/GlobalShare.
     if (appSettings.confirmDelete && !window.confirm(
       translateSetting(appSettings.language, 'confirmRemoveFile', { name: record.name })
     )) {
       return;
     }
-    if (isMobileHost()) {
-      const result = await mobileDeleteDownload({ uri: record.path, name: record.name });
-      if (result.error) {
-        showToast('warning', `${result.error} Le fichier reste dans la liste.`);
-        return;
-      }
-      if (!result.deleted) {
-        showToast('warning', `Suppression impossible : ${record.name} reste dans la liste.`);
-        return;
-      }
-      showToast('success', `Fichier supprimé du dossier de réception : ${record.name}`);
-      void refreshMobileFiles();
-    }
+    // « Retirer » ne touche qu'à l'historique. Le fichier enregistré dans
+    // Téléchargements/GlobalShare reste sur l'appareil : sa suppression est
+    // réservée à l'onglet « Sur le téléphone » (ou au dossier sur disque).
     downloadBlobRef.current.delete(record.id);
     setDownloads(prev => prev.filter(item => item.id !== record.id));
     await deleteStoredDownload(record.id);
-  }, [appSettings.confirmDelete, appSettings.language, showToast, refreshMobileFiles]);
+    if (isMobileHost()) {
+      showToast('info', `Retiré de la liste : ${record.name} reste sur le téléphone.`);
+    }
+  }, [appSettings.confirmDelete, appSettings.language, showToast]);
 
   const clearDownloadHistory = useCallback(async () => {
     if (appSettings.confirmDelete && !window.confirm(
@@ -1800,16 +1805,15 @@ export default function GlobalShare() {
     )) {
       return;
     }
+    // L'historique n'est qu'une vue : vider la liste ne touche jamais aux
+    // fichiers déjà enregistrés sur l'appareil (dossier de réception du
+    // téléphone ou du bureau). Sinon un simple rangement faisait disparaître
+    // des fichiers que l'utilisateur voulait garder ; eux se gèrent depuis
+    // l'onglet « Sur le téléphone » ou le dossier sur disque.
     downloadBlobRef.current.clear();
     setDownloads([]);
     await clearStoredDownloads();
-    if (isMobileHost()) {
-      for (const file of downloads) {
-        await mobileDeleteDownload({ uri: file.path, name: file.name });
-      }
-      await refreshMobileFiles();
-    }
-  }, [appSettings.confirmDelete, appSettings.language, refreshMobileFiles, downloads]);
+  }, [appSettings.confirmDelete, appSettings.language]);
 
   // ---- Enregistrement des fichiers reçus ----
   // Sur le bureau, le processus principal écrit dans ~/Téléchargements/GlobalShare
@@ -2675,7 +2679,11 @@ export default function GlobalShare() {
                         type="button"
                         className="gs-dl gs-dl--ghost gs-dl--danger"
                         onClick={() => void (async () => {
-                          if (!window.confirm(translateSetting(appSettings.language, 'confirmClearHistory'))) return;
+                          // Ici on efface vraiment les fichiers du disque : le
+                          // dialogue doit le dire, pas parler d'historique.
+                          if (!window.confirm(translateSetting(
+                            appSettings.language, 'confirmClearDevice', { count: sharedFiles.length }
+                          ))) return;
                           for (const file of sharedFiles) {
                             await mobileDeleteDownload({ uri: file.uri, name: file.name });
                           }

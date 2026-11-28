@@ -27,6 +27,12 @@ test('les espaces réservés sont remplacés dans les dialogues', () => {
     translate('fr', 'confirmOverwriteFile', { name: 'film.mp4' }),
     '« film.mp4 » a déjà été reçu. Remplacer l’entrée existante ?'
   );
+  // Effacer depuis « Sur le téléphone » supprime les fichiers : le dialogue
+  // ne doit pas annoncer un simple nettoyage d'historique.
+  assert.equal(
+    translate('fr', 'confirmClearDevice', { count: 3 }),
+    'Supprimer définitivement les 3 fichiers de Téléchargements/GlobalShare ?'
+  );
 });
 
 test('chaque couleur d’accent possède un libellé traduit', () => {

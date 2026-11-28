@@ -670,6 +670,11 @@ function createWindow(port) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Fenêtre masquée ou minimisée : Electron bride par défaut les minuteurs
+      // du renderer. La reconnexion, les ACK et la boucle d'envoi s'arrêtaient
+      // alors que la socket, elle, restait ouverte — d'où les coupures
+      // « serveur » et les transferts figés en arrière-plan.
+      backgroundThrottling: false,
       // Seul pont autorisé : enregistrer/ouvrir les fichiers reçus.
       preload: path.join(__dirname, 'preload.js'),
       spellcheck: true,

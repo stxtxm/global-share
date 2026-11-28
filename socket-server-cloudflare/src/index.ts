@@ -24,6 +24,8 @@ interface Client {
   /** Identité stable fournie par le client, conservée d'une socket à l'autre. */
   peerId?: string;
   alive: boolean;
+  /** Pongs manqués d'affilée : une seule absence ne coupe plus la socket. */
+  missedPings: number;
   closed: boolean;
   /** FILE d'événements binaires en cours : les headers arrivent tous avant
       leurs pièces jointes quand le client pipeligne des chunks (24 en vol).
@@ -257,6 +259,7 @@ export class GlobalRoom {
       id,
       ws,
       alive: true,
+      missedPings: 0,
       closed: false,
       pendingBinaries: [],
       binaryQueue: Promise.resolve(),
@@ -280,7 +283,10 @@ export class GlobalRoom {
           sid: id,
           upgrades: [],
           pingInterval: PING_INTERVAL_MS,
-          pingTimeout: 20_000,
+          // Le client attend pingInterval + pingTimeout entre deux pings :
+          // 30 s de marge (55 s au total) pour qu'il ne ferme pas la socket
+          // avant le second pong manqué du Worker (50 s).
+          pingTimeout: 30_000,
           maxPayload: 1_000_000,
         })
     );
@@ -295,14 +301,24 @@ export class GlobalRoom {
       for (const client of this.sockets.values()) {
         if (client.closed) continue;
 
+        // Un pong manqué ne suffit plus à couper : un gros chunk en cours de
+        // hachage, un GC ou un changement de réseau peut retarder de quelques
+        // secondes la réponse. On laisse un intervalle complet de grâce avant
+        // de fermer, sinon un transfert soutenu se faisait déconnecter en
+        // boucle (le client, lui, ne voyait qu'une coupure « serveur »).
         if (!client.alive) {
-          try {
-            client.ws.close(1001, 'ping timeout');
-          } catch {
-            // ignore
+          client.missedPings += 1;
+          if (client.missedPings >= 2) {
+            try {
+              client.ws.close(1001, 'ping timeout');
+            } catch {
+              // ignore
+            }
+            this.handleClose(client);
+            continue;
           }
-          this.handleClose(client);
-          continue;
+        } else {
+          client.missedPings = 0;
         }
 
         client.alive = false;

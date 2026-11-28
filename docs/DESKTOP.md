@@ -123,8 +123,9 @@ assaini avant écriture. Sans ce pont (site, mobile), l'application retombe sur
 
 Un fichier dont l'empreinte SHA-256 diffère apparaît avec la pastille « fichier
 corrompu » mais n'est jamais écrit sur le disque. L'historique survit à la
-fermeture de l'application ; **Tout supprimer** vide la liste et les blobs
-conservés, sans effacer les fichiers déjà enregistrés dans le dossier.
+fermeture de l'application ; **Retirer** et **Tout supprimer** ne touchent
+qu'à la liste et aux blobs conservés, sans effacer les fichiers déjà
+enregistrés dans le dossier.
 
 ## Publier une version
 
@@ -248,6 +249,15 @@ cd desktop/resources/icons
 magick -background none tray.svg -filter Lanczos -resize 32x32 PNG32:tray.png
 magick -background none tray-active.svg -filter Lanczos -resize 32x32 PNG32:tray-active.png
 ```
+
+## Arrière-plan et veille
+
+La fenêtre peut être masquée, minimisée ou couverte : le renderer Electron ne
+bride plus ses minuteurs (`backgroundThrottling: false` dans `createWindow`).
+Sans ce réglage, Chromium ralentissait la reconnexion socket, les ACK et la
+boucle d'envoi dès que la fenêtre n'était plus visible — le serveur finissait
+par fermer la socket et les transferts paraissaient figés. Pendant un
+transfert, `powerSaveBlocker` empêche en plus la suspension de l'application.
 
 ## Limites connues
 

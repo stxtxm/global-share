@@ -46,8 +46,11 @@ test('sur mobile, Ouvrir mène à Fichiers et Écouter affiche un choisir', () =
   assert.ok(component.includes('Écouter'));
 });
 
-test('Retirer supprime aussi le fichier du stockage Android', () => {
-  assert.ok(component.includes('mobileDeleteDownload({ uri: record.path'));
+test('Retirer laisse le fichier sur l’appareil, l’onglet téléphone l’efface', () => {
+  // L'historique n'est qu'une vue : « Retirer » n'appelle plus la suppression
+  // native. Les fichiers du disque se gèrent depuis « Sur le téléphone ».
+  assert.ok(!component.includes('mobileDeleteDownload({ uri: record.path'));
+  assert.ok(component.includes('mobileDeleteDownload({ uri: file.uri'));
 });
 
 test('le libellé « Salon » s’efface sur les écrans étroits', () => {

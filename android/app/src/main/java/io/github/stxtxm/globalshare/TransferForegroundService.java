@@ -80,7 +80,10 @@ public final class TransferForegroundService extends Service {
             } catch (Exception ignored) {
                 // Le service doit survivre à une erreur ponctuelle de notification.
             }
-            watchdog.postDelayed(this, 10_000);
+            // Pendant un transfert, un tick toutes les 2 s : c'est le seul
+            // réveil qui échappe au bridage des minuteurs du WebView. Au
+            // repos, 10 s suffisent pour entretenir la socket et la reprise.
+            watchdog.postDelayed(this, activeTransfers > 0 ? 2_000 : 10_000);
         }
     };
 
