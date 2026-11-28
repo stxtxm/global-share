@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.56] - 2026-11-28
+
+### Fixed
+- **Le relais ne se coupe plus en plein transfert entre deux réseaux.** Le pong de keepalive voyage dans la même socket WebSocket que les chunks : avec plusieurs mégaoctets en file sur un upload lent (4G), il repassait après les données, soit plus de 20 s, et le Worker fermait la connexion pour « ping timeout » — le transfert repartait alors de zéro, en boucle. La boucle d'envoi relais attend maintenant que la socket soit presque vide (1 Mo) avant de pousser un nouveau bloc ; un lien saturé garde son débit, et le keepalive ne se fait plus bloquer.
+- **Les empreintes de la file d'envoi sont calculées une par une.** Sélectionner plusieurs gros fichiers lançait tous les SHA-256 en parallèle, chacun chargeant le fichier entier en mémoire : plusieurs centaines de mégaoctets sur un téléphone au moment de la sélection. Le calcul reste séquentiel, sans changer le résultat.
+
+Ces corrections vivent dans le bundle web : elles arrivent avec la publication Pages (et la mise à jour du bundle des applications desktop), sans changement de `nativeVersion`.
+
 ## [1.0.55] - 2026-11-25
 
 ### Changed

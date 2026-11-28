@@ -88,6 +88,25 @@ const CHUNK_SIZE_LAN = 512 * 1024;
 // Garde-fou : au-delà, le tampon SCTP du canal_data sature (le navigateur
 // peut clore le canal). On ralentit plutôt la boucle d'émission.
 const P2P_BUFFERED_LIMIT = 4 * 1024 * 1024;
+// Relais : ne pas enfoncer plus d'un mégaoctet dans la socket WebSocket. Le
+// pong de keepalive voyage dans la même socket : derrière 6 Mo de chunks à
+// 250 Ko/s il met 24 s à remonter, alors que le Worker coupe la connexion
+// après `pingTimeout` (20 s) sans pong. Le transfert repartait alors de zéro en
+// boucle — c'est ce qui rendait le relais « lent puis cassé » entre deux
+// réseaux. En gardant la socket presque vide, le pong repasse tout de suite et
+// le débit reste celui du lien.
+const RELAY_BUFFERED_LIMIT = 1024 * 1024;
+
+/** Octets déjà en attente d'écriture sur la socket de signalisation. */
+function socketBufferedAmount(socket: Socket | null): number {
+  // `engine.transport` n'est pas typé par socket.io-client ; on lit le nombre
+  // d'octets en file sans dépendre de son type interne.
+  const transport = (socket as unknown as {
+    engine?: { transport?: { writable?: boolean; ws?: { bufferedAmount?: number } } };
+  } | null)?.engine?.transport;
+  return transport?.ws?.bufferedAmount ?? 0;
+}
+
 import './GlobalShare.css';
 
 // Délai au-delà duquel une tentative de connexion directe est abandonnée : le
@@ -545,6 +564,10 @@ export default function GlobalShare() {
   const transferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Empêche deux exécutions simultanées de la boucle d'envoi.
   const sendLoopRunningRef = useRef(false);
+  // Calculs d'empreinte en cours, sérialisés : chaque fichier de la file était
+  // sinon lu d'un bloc en mémoire en même temps que les autres, soit plusieurs
+  // centaines de Mo sur un téléphone pour une sélection de gros fichiers.
+  const sendHashChainRef = useRef<Promise<unknown>>(Promise.resolve());
   const sendLoopRef = useRef<(() => void) | null>(null);
   const sendLoopKickRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Valeur courante du réglage « Tentatives », lue à la création du manager :
@@ -1083,11 +1106,15 @@ export default function GlobalShare() {
             : Math.max(4, Math.min(MAX_IN_FLIGHT_CHUNKS, Math.round(byBytes * rttFactor)));
           if (sendT.pending.size >= maxInFlight) continue;
           if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) continue;
+          // Sur le relais, on attend que la socket se vide : un chunk de plus
+          // dans un tampon déjà plein ne gagne aucun débit, il retarde le pong.
+          if (!lan && socketBufferedAmount(socketRef.current) > RELAY_BUFFERED_LIMIT) continue;
           const burst = lan ? 12 : 3;
           for (let i = 0; i < burst; i++) {
             if (sendT.offset >= file.size) break;
             if (sendT.pending.size >= maxInFlight) break;
             if (lan && (peersRef.current[sendT.targetId]?.bufferedAmount ?? 0) > P2P_BUFFERED_LIMIT) break;
+            if (!lan && socketBufferedAmount(socketRef.current) > RELAY_BUFFERED_LIMIT) break;
             const blob = file.slice(sendT.offset, Math.min(sendT.offset + sendT.chunkSize, file.size));
             const chunk = new Uint8Array(await blob.arrayBuffer());
             if (!manager.sendChunk(sendT.id, sendT.nextSeq, chunk)) break;
@@ -1469,10 +1496,19 @@ export default function GlobalShare() {
     }
     // Empreinte du fichier : le récepteur vérifie qu'il a reconstruit exactement
     // les mêmes octets. Au-delà de la limite on s'en passe, pour ne pas charger
-    // un fichier entier en mémoire sur un téléphone.
+    // un fichier entier en mémoire sur un téléphone. Les empreintes de la file
+    // passent une par une : les lancer ensemble empilait un fichier complet par
+    // entrée en mémoire au moment de la sélection.
     let hash: string | null = null;
     if (file.size <= HASH_MAX_BYTES) {
-      hash = await sha256Hex(await file.arrayBuffer());
+      const previous = sendHashChainRef.current;
+      const task = previous
+        .catch(() => undefined)
+        .then(async () => (file.size <= HASH_MAX_BYTES
+          ? sha256Hex(await file.arrayBuffer())
+          : null));
+      sendHashChainRef.current = task;
+      hash = await task;
     }
     if (!socketRef.current?.connected) {
       showToast('error', 'Connexion au serveur perdue');
