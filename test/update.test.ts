@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   formatUpdateBytes,
   normalizeUpdateState,
+  showsReleaseNotes,
   INITIAL_UPDATE_STATE,
   type UpdateState,
 } from '../app/lib/update.ts';
@@ -74,6 +75,15 @@ test('normalizeUpdateState nettoie les notes de version HTML', () => {
 
   assert.equal(state.releaseNotes, '### Added\n\n- Patch notes');
   assert.equal(normalizeUpdateState({ releaseNotes: null }).releaseNotes, '');
+});
+
+test('les notes restent visibles pendant le téléchargement', () => {
+  assert.equal(showsReleaseNotes('available'), true);
+  assert.equal(showsReleaseNotes('downloading'), true);
+  assert.equal(showsReleaseNotes('downloaded'), true);
+  assert.equal(showsReleaseNotes('installing'), false);
+  assert.equal(showsReleaseNotes('idle'), false);
+  assert.equal(showsReleaseNotes('error'), false);
 });
 
 test('formatUpdateBytes affiche des tailles lisibles', () => {

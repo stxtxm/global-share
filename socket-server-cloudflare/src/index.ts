@@ -219,7 +219,8 @@ export class GlobalRoom {
   /** Identité stable -> socket courante : le routage suit les reconnexions. */
   private bySession = new Map<string, Client>();
   private rooms = new Map<string, Set<string>>();
-  private pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Départ différé : salon quitté et minuteur d'annonce, par identité. */
+  private pendingLeaves = new Map<string, { roomId: string; timer: ReturnType<typeof setTimeout> }>();
   private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   async fetch(request: Request): Promise<Response> {
@@ -437,7 +438,8 @@ export class GlobalRoom {
       const previous = this.bySession.get(sessionId);
       if (previous && previous !== client) {
         // Même identité sur deux sockets (onglet dupliqué) : la plus récente
-        // prend le relais, sans annoncer de départ au salon.
+        // prend le relais, sans annoncer de départ au salon d'arrivée.
+        const previousRoom = previous.room;
         this.leaveRoom(previous, true);
         previous.closed = true;
         try {
@@ -446,14 +448,22 @@ export class GlobalRoom {
           // ignore
         }
         this.sockets.delete(previous.id);
+        // Mais si elle change de salon, l'ancien ne doit pas garder un fantôme.
+        if (previousRoom && previousRoom !== cleanRoom) {
+          this.broadcastEvent(previousRoom, 'user-left', sessionId);
+        }
       }
       client.peerId = sessionId;
       this.bySession.set(sessionId, client);
-      // Revenu avant l'expiration du délai : le salon n'a jamais vu le départ.
+      // Revenu avant l'expiration du délai : le salon d'origine n'a jamais vu
+      // le départ. Revenu dans un autre salon : l'ancien doit enfin l'apprendre.
       const pendingLeave = this.pendingLeaves.get(sessionId);
       if (pendingLeave) {
-        clearTimeout(pendingLeave);
+        clearTimeout(pendingLeave.timer);
         this.pendingLeaves.delete(sessionId);
+        if (pendingLeave.roomId !== cleanRoom) {
+          this.broadcastEvent(pendingLeave.roomId, 'user-left', sessionId);
+        }
       }
     }
 
@@ -697,7 +707,7 @@ export class GlobalRoom {
    */
   private scheduleLeave(roomId: string, peerId: string): void {
     const existing = this.pendingLeaves.get(peerId);
-    if (existing) clearTimeout(existing);
+    if (existing) clearTimeout(existing.timer);
 
     const timer = setTimeout(() => {
       this.pendingLeaves.delete(peerId);
@@ -705,7 +715,7 @@ export class GlobalRoom {
       this.broadcastEvent(roomId, 'user-left', peerId);
     }, REJOIN_GRACE_MS);
 
-    this.pendingLeaves.set(peerId, timer);
+    this.pendingLeaves.set(peerId, { roomId, timer });
   }
 
   /** Socket courante d'une identité stable (ou identifiant de socket brut). */

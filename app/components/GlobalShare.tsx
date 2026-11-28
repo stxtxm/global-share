@@ -1402,7 +1402,19 @@ export default function GlobalShare() {
         // on lui redemande jusqu'où il en est s'il a perdu son état.
         setTimeout(() => managerRef.current?.reannounceFor(u.id), 600);
       });
-      setPeers(prev => ({ ...prev, ...next }));
+      // La liste reçue est celle du salon : elle remplace l'état précédent. Un
+      // pair parti pendant notre coupure ne nous a jamais été annoncé (pas de
+      // user-left) ; sans ce nettoyage il restait affiché et ses transferts
+      // attendaient un pair qui n'existe plus.
+      const departed = new Set<string>(Object.keys(peersRef.current));
+      managerRef.current?.getAll().forEach(t => departed.add(t.targetId));
+      departed.forEach(id => {
+        if (next[id]) return;
+        destroyPeer(id);
+        managerRef.current?.interruptForPeer(id, "L'appareil s'est déconnecté");
+      });
+      setPeers(next);
+      setActivePeerId(prev => (prev && !next[prev] ? null : prev));
     });
     socket.on('user-joined', ({ id, name }) => {
       setPeers(prev => ({ ...prev, [id]: { id, name, status: 'connecting', method: 'relay' } }));
@@ -1463,9 +1475,15 @@ export default function GlobalShare() {
     };
     void refresh();
     const id = setInterval(() => void refresh(), 10_000);
+    // Le minuteur est bridé en arrière-plan : on rafraîchit au retour à l'écran.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [step]);
 

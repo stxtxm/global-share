@@ -58,6 +58,21 @@ const STATUSES: ReadonlySet<string> = new Set<UpdateStatus>([
   'error',
 ]);
 
+/**
+ * États pendant lesquels l'encart montre les notes de version : avant le
+ * téléchargement, pendant qu'il se déroule (on peut lire ce qu'on installe),
+ * puis une fois le paquet prêt.
+ */
+const NOTES_STATUSES: ReadonlySet<UpdateStatus> = new Set<UpdateStatus>([
+  'available',
+  'downloading',
+  'downloaded',
+]);
+
+export function showsReleaseNotes(status: UpdateStatus): boolean {
+  return NOTES_STATUSES.has(status);
+}
+
 export const INITIAL_UPDATE_STATE: UpdateState = {
   status: 'idle',
   currentVersion: '',

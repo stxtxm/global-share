@@ -5,6 +5,7 @@ import {
   formatUpdateBytes,
   INITIAL_UPDATE_STATE,
   normalizeUpdateState,
+  showsReleaseNotes,
   type DesktopUpdateBridge,
   type UpdateState,
   type UpdateStatus,
@@ -281,12 +282,9 @@ export function UpdateBanner({ open, onOpenChange }: BannerProps) {
   const showBar =
     state.status === 'checking' || state.status === 'downloading' || state.status === 'installing';
 
-  // « Patch notes » : affichées avant toute action, pour savoir ce qu'on installe.
-  // Seules les étapes qui proposent de mettre à jour les montrent.
-  const notes =
-    state.status === 'available' || state.status === 'downloaded'
-      ? parseReleaseNotes(state.releaseNotes)
-      : [];
+  // « Patch notes » : affichées avant toute action et conservées pendant le
+  // téléchargement, pour pouvoir lire ce qu'on installe sans attendre la fin.
+  const notes = showsReleaseNotes(state.status) ? parseReleaseNotes(state.releaseNotes) : [];
 
   const close = () => {
     // Fermer une annonce vaut « plus tard » : la version ne sera plus proposée
