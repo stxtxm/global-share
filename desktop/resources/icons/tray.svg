@@ -1,26 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="GlobalShare">
   <!-- Source de l'icône du tray (repos). Régénérer tray.png avec :
        magick -background none tray.svg -filter Lanczos -resize 32x32 PNG32:tray.png
-       Tuile dégradée plutôt que glyphe noir : un trait noir disparaît sur un
-       panneau sombre, une tuile colorée reste lisible partout. -->
-  <defs>
-    <linearGradient id="tile" x1="48" y1="32" x2="464" y2="480" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#8B5CF6"/>
-      <stop offset="0.48" stop-color="#A855F7"/>
-      <stop offset="1" stop-color="#22D3EE"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="256" y1="16" x2="256" y2="304" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.32"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#tile)"/>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#gloss)"/>
-  <rect x="21" y="21" width="470" height="470" rx="111" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="4"/>
-  <g fill="#FFFFFF">
-    <path d="M146 256 L368 138 M146 256 L368 374" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round"/>
-    <circle cx="146" cy="256" r="56"/>
-    <circle cx="368" cy="138" r="56"/>
-    <circle cx="368" cy="374" r="56"/>
+       Glyphe monochrome sur fond transparent, comme les icônes symboliques du
+       panneau GNOME : pas de tuile colorée, qui ressemblait à une icône
+       d'application parmi les indicateurs du shell.
+       Le halo sombre très fin est invisible sur un panneau sombre ; il garde le
+       glyphe lisible sur un panneau clair, que le shell ne recolore pas (les
+       pixmaps SNI ne reçoivent pas le traitement « symbolic »). -->
+  <path d="M144 256 L368 128 M144 256 L368 384" fill="none" stroke="#000000" stroke-opacity="0.55" stroke-width="76" stroke-linecap="round"/>
+  <g fill="#FFFFFF" stroke="#000000" stroke-opacity="0.55" stroke-width="24" paint-order="stroke">
+    <circle cx="144" cy="256" r="56"/>
+    <circle cx="368" cy="128" r="56"/>
+    <circle cx="368" cy="384" r="56"/>
   </g>
+  <path d="M144 256 L368 128 M144 256 L368 384" fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round"/>
 </svg>

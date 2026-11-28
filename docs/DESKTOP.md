@@ -222,11 +222,15 @@ le dock ou le raccourci.
 
 ### Icône et menu du tray
 
-L'icône livrée n'est plus un glyphe noir sur fond transparent — invisible sur un
-panneau GNOME sombre — mais une tuile dégradée violet→cyan avec un glyphe de
-partage blanc, rendue en **32×32 px** (deux fois la taille logique du panneau,
-donc nette en HiDPI). Pendant un transfert, la tuile affiche une flèche
-d'envoi : l'état se lit d'un coup d'œil, sans ouvrir la fenêtre.
+L'icône livrée est un glyphe de partage **monochrome sur fond transparent**,
+comme les icônes symboliques du panneau GNOME : plus de tuile colorée, qui
+ressemblait à une icône d'application au milieu des indicateurs du shell. Elle
+est rendue en **32×32 px** (deux fois la taille logique du panneau, donc nette
+en HiDPI). Un halo sombre très fin, invisible sur un panneau sombre, garde le
+glyphe lisible sur un panneau clair : le shell ne recolore pas les pixmaps SNI,
+contrairement à ses propres icônes symboliques. Pendant un transfert, la flèche
+d'envoi remplace le glyphe de partage, avec le même poids : l'état se lit d'un
+coup d'œil, sans ouvrir la fenêtre.
 
 Le menu du tray reprend l'état en en-tête (« Prêt à recevoir » ou « 2 transferts
 en cours »), puis **Ouvrir GlobalShare (Ctrl+Alt+G)**, **Dossier de réception**

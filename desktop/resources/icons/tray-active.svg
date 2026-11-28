@@ -1,23 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="GlobalShare — transfert en cours">
-  <!-- Variante affichée pendant un transfert : même tuile, glyphe « envoi »
-       plus lisible que le glyphe de partage à 16 px. Régénérer tray-active.png
-       avec la commande décrite dans tray.svg. -->
-  <defs>
-    <linearGradient id="tile" x1="48" y1="32" x2="464" y2="480" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#8B5CF6"/>
-      <stop offset="0.48" stop-color="#A855F7"/>
-      <stop offset="1" stop-color="#22D3EE"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="256" y1="16" x2="256" y2="304" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.32"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#tile)"/>
-  <rect x="16" y="16" width="480" height="480" rx="116" fill="url(#gloss)"/>
-  <rect x="21" y="21" width="470" height="470" rx="111" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="4"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M150 362 L350 162"/>
-    <path d="M232 162 L350 162 L350 280"/>
+  <!-- Variante affichée pendant un transfert : flèche d'envoi monochrome, même
+       poids et même halo que tray.svg pour rester alignée sur les icônes
+       symboliques du panneau. Régénérer tray-active.png avec la commande
+       décrite dans tray.svg. -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M150 362 L350 162 M232 162 L350 162 L350 280" stroke="#000000" stroke-opacity="0.55" stroke-width="96"/>
+    <path d="M150 362 L350 162 M232 162 L350 162 L350 280" stroke="#FFFFFF" stroke-width="64"/>
   </g>
 </svg>
